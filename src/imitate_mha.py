@@ -1,26 +1,35 @@
+from typing import Optional
+
 import lightning.pytorch as L
 import wandb
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
+import torch
 
-from data import GivenDataModule, imitate_mha
+from data import imitate_mha
+from data.lightning import GivenDataModule
 from models import CosAttention
 from models.callbacks import ParameterLoggingCallback
 from models.config import ModelConfig
 from models.lightning import EveryTokenPredictionModule
 
 
-def main(
-    epochs: int = 10,
-    lr: float = 1e-3,
-    batch_size: int = 64,
-    use_wandb: bool = False,
-) -> None:
+USE_WANDB: bool = False
+LOAD_PATH: Optional[str] = "lightning_logs/version_1/checkpoints/epoch=9-step=1250.ckpt"
+
+
+def main() -> None:
+
+    epochs: int = 10
+    lr: float = 1e-3
+    batch_size: int = 64
+
     data_module = GivenDataModule(
         imitate_mha(
             n_samples=10_000,
-            length=7,
-            embed_dim=4,
+            length=100,
+            embed_dim=64,
+            n_heads=4,
             seed=1,
         ),
         val_size=0.2,
@@ -32,41 +41,45 @@ def main(
     )
 
     model_config = ModelConfig(
-        context_length=7,
-        vocab_size=4,
-        output_dim=4,
-        d_hidden=4,
-        n_heads=1,
+        context_length=100,
+        vocab_size=64,
+        output_dim=64,
+        d_hidden=64,
+        n_heads=4,
     )
 
     model = CosAttention(
         model_config,
         use_tanh=False,
-        epsilon=None,
         use_xavier=False,
+        randomize_delta=False,
+        epsilon=None,
     )
 
     lightning_module = EveryTokenPredictionModule(
         model,
         learning_rate=lr,
     )
+    if LOAD_PATH is not None:
+        lightning_module.load_state_dict(torch.load(LOAD_PATH))
 
     wandb_logger = None
-    if use_wandb:
+    if USE_WANDB:
         wandb_logger = WandbLogger(
-            name="imitate_mha",
+            # name="imitate_mha",
             project="cosine_attention",
         )
         wandb_logger.experiment.config.update({
             "n_samples": 10_000,
-            "length": 7,
-            "embed_dim": 4,
+            "length": 100,
+            "embed_dim": 64,
         })
         wandb_logger.experiment.config.update(model_config.to_dict())
         wandb_logger.experiment.config.update({
             "use_tanh": False,
-            "epsilon": None,
             "use_xavier": False,
+            "randomize_delta": False,
+            "epsilon": None,
         })
         wandb_logger.experiment.config.update({
             "learning_rate": lr,
@@ -85,7 +98,7 @@ def main(
 
     trainer.fit(lightning_module, data_module)
 
-    if use_wandb:
+    if USE_WANDB:
         wandb.finish()
 
 

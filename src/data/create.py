@@ -98,6 +98,7 @@ def imitate_mha(
     n_samples: int,
     length: int,
     embed_dim: int,
+    n_heads: int = 1,
     seed: Optional[int] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if seed is not None:
@@ -105,7 +106,7 @@ def imitate_mha(
         np.random.seed(seed)
     mha = nn.MultiheadAttention(
         embed_dim=embed_dim,
-        num_heads=1,
+        num_heads=n_heads,
         bias=False,
         batch_first=True,
     )

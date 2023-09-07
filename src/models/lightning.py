@@ -21,6 +21,7 @@ class LastTokenPredictionModule(L.LightningModule):
         learning_rate: float = 1e-3,
     ) -> None:
         super().__init__()
+        self.save_hyperparameters(ignore=["model"])
         self.learning_rate = learning_rate
         self.model = model
         self.criterion = nn.CrossEntropyLoss()
@@ -37,10 +38,10 @@ class LastTokenPredictionModule(L.LightningModule):
         outputs = self(x)[:, -1, :]
 
         loss = self.criterion(outputs, y)
-        accuracy = self.acc_metric(torch.softmax(outputs, dim=-1), y)
+        accuracy = self.acc_metric(outputs, y)
 
-        self.log('train_loss', loss, prog_bar=True)
-        self.log('train_accuracy', accuracy, prog_bar=True)
+        self.log('train/loss', loss, prog_bar=True)
+        self.log('train/accuracy', accuracy, prog_bar=True)
         return {'loss': loss, 'accuracy': accuracy}
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
@@ -51,8 +52,8 @@ class LastTokenPredictionModule(L.LightningModule):
         loss = self.criterion(outputs, y)
         accuracy = self.acc_metric(torch.softmax(outputs, dim=-1), y)
 
-        self.log('validation_loss', loss)
-        self.log('validation_accuracy', accuracy)
+        self.log('validation/loss', loss)
+        self.log('validation/accuracy', accuracy)
         return {'validation_loss': loss, 'validation_accuracy': accuracy}
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
@@ -75,6 +76,7 @@ class EveryTokenPredictionModule(L.LightningModule):
         loss: type[nn.Module] = nn.MSELoss,
     ) -> None:
         super().__init__()
+        self.save_hyperparameters(ignore=["model"])
         self.learning_rate = learning_rate
         self.model = model
         self.criterion = loss()
@@ -87,7 +89,7 @@ class EveryTokenPredictionModule(L.LightningModule):
         outputs = self(x)
 
         loss = self.criterion(outputs, y)
-        self.log('train_loss', loss, prog_bar=True)
+        self.log('train/loss', loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
@@ -95,7 +97,7 @@ class EveryTokenPredictionModule(L.LightningModule):
         outputs = self(x)
 
         loss = self.criterion(outputs, y)
-        self.log('validation_loss', loss)
+        self.log('validation/loss', loss)
         return loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:

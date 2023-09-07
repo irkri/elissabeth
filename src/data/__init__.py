@@ -1,2 +1,2 @@
 from .create import *
-from .lightning import GivenDataModule
+from . import lightning
