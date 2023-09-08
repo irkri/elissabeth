@@ -1,22 +1,23 @@
 from typing import Optional
+from dataclasses import dataclass
 
 import torch
 from torch import nn
 
-from .config import ModelConfig
-from .transformer import MLP
+from .transformer import MLP, DecoderOnlyTransformerConfig
+
+
+@dataclass
+class CosDecoderOnlyTransformerConfig(DecoderOnlyTransformerConfig):
+    use_tanh: bool = False
+    epsilon: Optional[float] = None
+    use_xavier: bool = False
+    randomize_delta: bool = False
 
 
 class CosAttention(nn.Module):
 
-    def __init__(
-        self,
-        config: ModelConfig,
-        use_tanh: bool = False,
-        use_xavier: bool = False,
-        randomize_delta: bool = False,
-        epsilon: Optional[float] = None,
-    ) -> None:
+    def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
         self.W_Q = nn.Parameter(
             torch.empty((config.n_heads, config.d_hidden))
@@ -31,7 +32,7 @@ class CosAttention(nn.Module):
             torch.ones((config.n_heads, )) / config.n_heads
         )
 
-        if use_xavier:
+        if config.use_xavier:
             nn.init.xavier_uniform_(self.W_Q)
             nn.init.xavier_uniform_(self.W_K)
             nn.init.xavier_uniform_(self.W_V)
@@ -39,11 +40,11 @@ class CosAttention(nn.Module):
             nn.init.normal_(self.W_Q)
             nn.init.normal_(self.W_K)
             nn.init.normal_(self.W_V)
-        if randomize_delta:
+        if config.randomize_delta:
             nn.init.normal_(self.W_O)
 
-        self._use_tanh = use_tanh
-        self._epsilon = epsilon
+        self._use_tanh = config.use_tanh
+        self._epsilon = config.epsilon
 
     def forward(
         self,
@@ -83,27 +84,14 @@ class CosAttention(nn.Module):
 
 class CosBlock(nn.Module):
 
-    def __init__(
-        self,
-        config: ModelConfig,
-        use_tanh: bool = False,
-        epsilon: Optional[float] = None,
-        normalize: bool = True,
-        use_xavier: bool = False,
-        randomize_delta: bool = False,
-    ) -> None:
+    def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self.cos_attn = CosAttention(
-            config,
-            use_tanh=use_tanh,
-            use_xavier=use_xavier,
-            randomize_delta=randomize_delta,
-            epsilon=epsilon,
-        )
-        self._normalize = normalize
-        self.mlp = MLP(config, normalize=self._normalize)
+        self.cos_attn = CosAttention(config)
+        self.mlp = MLP(config)
+        self._normalize = config.normalize
         if self._normalize:
-            self.layer_norm = nn.LayerNorm(config.d_hidden)
+            self.layer_norm_att = nn.LayerNorm(config.d_hidden)
+            self.layer_norm_mlp = nn.LayerNorm(config.d_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, D) -> (B, T, D)
@@ -111,35 +99,24 @@ class CosBlock(nn.Module):
         T: context length
         D: hidden dimension
         """
-        y = self.cos_attn(x, x, x)
+        y = x
         if self._normalize:
-            y = self.layer_norm(y)
-        x = x + y
-        x = self.mlp(x)
+            y = self.layer_norm_att(x)
+        x_att = self.cos_attn(y, y, y)
+        x = x + x_att
+        y = x
+        if self._normalize:
+            y = self.layer_norm_mlp(x)
+        x = x + self.mlp(y)
         return x
 
 
 class CosDecoder(nn.Module):
 
-    def __init__(
-        self,
-        config: ModelConfig,
-        use_tanh: bool = False,
-        epsilon: Optional[float] = None,
-        normalize: bool = True,
-        use_xavier: bool = False,
-        randomize_delta: bool = False,
-    ) -> None:
+    def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
         self._layers = nn.ModuleList([
-            CosBlock(
-                config,
-                use_tanh=use_tanh,
-                epsilon=epsilon,
-                normalize=normalize,
-                use_xavier=use_xavier,
-                randomize_delta=randomize_delta,
-            )
+            CosBlock(config)
             for _ in range(config.n_layers)
         ])
 
@@ -156,26 +133,13 @@ class CosDecoder(nn.Module):
 
 class CosDecoderOnlyTransformer(nn.Module):
 
-    def __init__(
-        self,
-        config: ModelConfig,
-        use_tanh: bool = False,
-        epsilon: Optional[float] = None,
-        normalize: bool = True,
-        use_xavier: bool = False,
-        randomize_delta: bool = False,
-    ) -> None:
+    def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self.embedding = nn.Embedding(config.vocab_size, config.d_embedding)
-        self.encoder = CosDecoder(
-            config,
-            use_tanh=use_tanh,
-            epsilon=epsilon,
-            normalize=normalize,
-            use_xavier=use_xavier,
-            randomize_delta=randomize_delta,
+        self.embedding = nn.Embedding(
+            config.input_vocab_size, config.d_hidden
         )
-        self.unembedding = nn.Linear(config.d_hidden, config.output_dim)
+        self.encoder = CosDecoder(config)
+        self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, V) -> (B, T, O)

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 import numpy as np
@@ -5,9 +7,14 @@ import numpy as np
 from .config import ModelConfig
 
 
+@dataclass
+class DecoderOnlyTransformerConfig(ModelConfig):
+    normalize: bool = True
+
+
 class PositionalEmbedding(nn.Module):
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
 
         self.pos_embedding = nn.Parameter(
@@ -21,7 +28,7 @@ class PositionalEmbedding(nn.Module):
 
 class CausalMultiHeadAttention(nn.Module):
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
         self.d_head = config.d_hidden
 
@@ -64,51 +71,53 @@ class CausalMultiHeadAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    """Two layer feed-forward neural network with a ReLU activation and
-    a skip connection AFTER an optional layer normalization.
-    """
+    """Two layer feed-forward neural network with a ReLU activation."""
 
-    def __init__(self, config: ModelConfig, normalize: bool = True) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self._normalize = normalize
 
         self.seq = nn.Sequential(
-            nn.Linear(config.d_hidden, config.d_hidden),
+            nn.Linear(config.d_hidden, config.ffn_units),
             nn.ReLU(),
-            nn.Linear(config.d_hidden, config.d_hidden)
+            nn.Linear(config.ffn_units, config.d_hidden)
         )
         self.add = nn.ModuleList([nn.Identity(), nn.Identity()])
-        if self._normalize:
-            self.layer_norm = nn.LayerNorm(config.d_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = self.seq(x)
-        if self._normalize:
-            y = self.layer_norm(y)
-        x = x + y
-        return x
+        return self.seq(x)
 
 
 class DecoderLayer(nn.Module):
 
-    def __init__(self, config: ModelConfig, normalize: bool = True) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
+        self._normalize = config.normalize
         self.causal_self_attention = CausalMultiHeadAttention(config)
-        self.ffn = MLP(config, normalize=normalize)
+        self.mlp = MLP(config)
+        if self._normalize:
+            self.layer_norm_att = nn.LayerNorm(config.d_hidden)
+            self.layer_norm_mlp = nn.LayerNorm(config.d_hidden)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x, attn_matrix = self.causal_self_attention(x)
-        x = self.ffn(x)
-        return x, attn_matrix
+        y = x
+        if self._normalize:
+            y = self.layer_norm_att(x)
+        x_att, att_matrix = self.causal_self_attention(y)
+        x = x + x_att
+        y = x
+        if self._normalize:
+            y = self.layer_norm_att(x)
+        x = x + self.mlp(y)
+        return x, att_matrix
 
 
 class Decoder(nn.Module):
 
-    def __init__(self, config: ModelConfig, normalize: bool = True) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
 
         self.enc_layers = nn.ModuleList([
-            DecoderLayer(config, normalize=normalize)
+            DecoderLayer(config)
             for _ in range(config.n_layers)
         ])
 
@@ -119,12 +128,14 @@ class Decoder(nn.Module):
 
 
 class DecoderOnlyTransformer(nn.Module):
-    def __init__(self, config: ModelConfig, normalize: bool = True) -> None:
+    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self.embedding = nn.Embedding(config.vocab_size, config.d_embedding)
+        self.embedding = nn.Embedding(
+            config.input_vocab_size, config.d_hidden
+        )
         self.pos_embedding = PositionalEmbedding(config)
-        self.decoder = Decoder(config, normalize=normalize)
-        self.unembedding = nn.Linear(config.d_hidden, config.output_dim)
+        self.decoder = Decoder(config)
+        self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)

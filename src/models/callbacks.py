@@ -1,11 +1,11 @@
-__all__ = ["ParameterLoggingCallback"]
+__all__ = ["GeneralConfigCallback"]
 
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
 from lightning.pytorch.callbacks import Callback
 import lightning.pytorch as L
 
 
-class ParameterLoggingCallback(Callback):
+class GeneralConfigCallback(Callback):
 
     def __init__(self, max_depth: int = 10) -> None:
         super().__init__()
@@ -19,7 +19,7 @@ class ParameterLoggingCallback(Callback):
         model_summary = summarize(pl_module, max_depth=self._max_depth)
 
         for logger in trainer.loggers:
-            logger.log_metrics({
+            logger.log_hyperparams({
                 "total_parameters": model_summary.total_parameters,
                 "trainable_parameters": model_summary.trainable_parameters,
                 "model_size": model_summary.model_size,
