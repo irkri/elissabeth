@@ -1,7 +1,6 @@
 __all__ = ["GivenDataModule"]
 
 import lightning.pytorch as L
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset, random_split

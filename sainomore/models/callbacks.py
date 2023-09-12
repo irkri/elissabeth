@@ -1,8 +1,8 @@
 __all__ = ["GeneralConfigCallback"]
 
-from lightning.pytorch.utilities.model_summary.model_summary import summarize
-from lightning.pytorch.callbacks import Callback
 import lightning.pytorch as L
+from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.utilities.model_summary.model_summary import summarize
 
 
 class GeneralConfigCallback(Callback):
