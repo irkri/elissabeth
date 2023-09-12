@@ -17,7 +17,7 @@ from models.lightning import EveryTokenPredictionModule
 
 
 USE_WANDB: bool = False
-LOAD_PATH: Optional[str] = None #"lightning_logs/version_0/checkpoints/epoch=49-step=3100.ckpt"
+LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
@@ -81,11 +81,13 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["attention"]
+            tags=["attention"],
+            id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
+            resume="must" if LOAD_PATH is not None else False,
         )
 
         wandb_logger.experiment.config.update(model_config.to_dict())
-        wandb_logger.experiment.config.update(config)
+        wandb_logger.experiment.config.update(config, allow_val_change=True)
 
         wandb_logger.watch(lightning_module, log="all")
 

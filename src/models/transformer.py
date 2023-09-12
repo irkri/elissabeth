@@ -57,6 +57,8 @@ class CausalMultiHeadAttention(nn.Module):
         q = torch.einsum('ihd,bpd->biph', self.W_Q, x)
         v = torch.einsum('ihd,bpd->biph', self.W_V, x)
         attn_scores_pre = torch.einsum('biph,biqh->biqp', k, q)
+        if self.mask.get_device() != x.get_device():
+            self.mask = self.mask.to(x.get_device())  # type: ignore
         attn_scores_masked = (
             attn_scores_pre - 1e10 * (~self.mask).float()
         )

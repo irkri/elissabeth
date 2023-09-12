@@ -15,16 +15,18 @@ from models import (CosDecoderOnlyTransformer, CosDecoderOnlyTransformerConfig,
 from models.callbacks import GeneralConfigCallback
 from models.lightning import LastTokenPredictionModule
 
-USE_WANDB: bool = False
-LOAD_PATH: Optional[str] = None #"lightning_logs/version_0/checkpoints/epoch=49-step=3100.ckpt"
+USE_WANDB: bool = True
+LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "P": 53,
+    "P": 113,
 
     "lr": 1e-3,
-    "batch_size": 32,
-    "epochs": 50,
+    "weight_decay": 1.0,
+    "betas": (0.9, 0.98),
+    "batch_size": 113**2,
+    "epochs": 15_000,
 
     "val_size": 0.3,
 }
@@ -37,8 +39,8 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         output_vocab_size=config["P"],
         n_layers=1,
         n_heads=4,
-        d_hidden=16,
-        ffn_units=64,
+        d_hidden=128,
+        ffn_units=512,
         normalize=True,
     )
     model = DecoderOnlyTransformer(model_config)
@@ -47,6 +49,8 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         model,
         num_classes=config["P"],
         learning_rate=config["lr"],
+        weight_decay=config["weight_decay"],
+        betas=config["betas"],
     )
     return lightning_module, model_config
 
@@ -56,7 +60,7 @@ def train() -> None:
         modular_arithmetic(config["P"]),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=6,
+        num_workers=12,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -72,11 +76,13 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["attention"]
+            tags=["attention"],
+            id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
+            resume="must" if LOAD_PATH is not None else False,
         )
 
         wandb_logger.experiment.config.update(model_config.to_dict())
-        wandb_logger.experiment.config.update(config)
+        wandb_logger.experiment.config.update(config, allow_val_change=True)
 
         wandb_logger.watch(lightning_module, log="all")
 
@@ -88,7 +94,7 @@ def train() -> None:
         callbacks=callbacks,
         logger=wandb_logger,
         default_root_dir=SAVE_PATH,
-        enable_progress_bar=True,
+        enable_progress_bar=False,
     )
 
     trainer.fit(lightning_module, data_module, ckpt_path=LOAD_PATH)
@@ -105,14 +111,18 @@ def plot() -> None:
         lightning_module.load_state_dict(saved_["state_dict"])
 
     weight = lightning_module.get_parameter(
-        "model.decoder.enc_layers.0.causal_self_attention.W_O"
+        "model.decoder.enc_layers.0.causal_self_attention.W_Q"
     ).detach().numpy()
 
     fig, ax = plt.subplots(1, 4, figsize=(20, 5))
     for i in range(4):
         ax[i].matshow(weight[i, :, :], cmap="hot")
-    plt.show()
+
+    # fig, ax = plt.subplots(1, 1, )
+    # ax.matshow(weight, cmap="hot")
+    plt.savefig("mg0inkoc_query_weights.png", bbox_inches="tight")
+    # plt.show()
 
 
 if __name__ == '__main__':
-    plot()
+    train()

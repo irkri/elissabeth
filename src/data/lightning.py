@@ -35,7 +35,7 @@ class GivenDataModule(L.LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
-            self._train_set,
+            self._val_set,
             batch_size=self.batch_size,
             **self._kwargs,
         )

@@ -19,6 +19,7 @@ class LastTokenPredictionModule(L.LightningModule):
         model: torch.nn.Module,
         num_classes: int,
         learning_rate: float = 1e-3,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
@@ -28,6 +29,7 @@ class LastTokenPredictionModule(L.LightningModule):
         self.acc_metric = torchmetrics.classification.MulticlassAccuracy(
             num_classes,
         )
+        self.optim_kwargs = kwargs
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -40,8 +42,20 @@ class LastTokenPredictionModule(L.LightningModule):
         loss = self.criterion(outputs, y)
         accuracy = self.acc_metric(outputs, y)
 
-        self.log('train/loss', loss, prog_bar=True)
-        self.log('train/accuracy', accuracy, prog_bar=True)
+        self.log(
+            'train/loss',
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/accuracy',
+            accuracy,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+        )
         return {'loss': loss, 'accuracy': accuracy}
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
@@ -52,20 +66,34 @@ class LastTokenPredictionModule(L.LightningModule):
         loss = self.criterion(outputs, y)
         accuracy = self.acc_metric(torch.softmax(outputs, dim=-1), y)
 
-        self.log('validation/loss', loss)
-        self.log('validation/accuracy', accuracy)
+        self.log(
+            'validation/loss',
+            loss,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'validation/accuracy',
+            accuracy,
+            on_step=False,
+            on_epoch=True,
+        )
         return {'validation_loss': loss, 'validation_accuracy': accuracy}
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.learning_rate,
+            **self.optim_kwargs,
+        )
         return optimizer
 
 
 class EveryTokenPredictionModule(L.LightningModule):
     """Lightning module that performs a classfication with the given
     model based on data ``(x,y)``, where both ``x`` and ``y`` are
-    sequences of tokens. This module only compares the models output at
-    the last position to the last position in ``y`` with a cross-entropy
+    sequences of tokens. This module compares the models output at every
+    position to the corresponding position in ``y`` with a cross-entropy
     loss function.
     """
 
@@ -74,12 +102,14 @@ class EveryTokenPredictionModule(L.LightningModule):
         model: torch.nn.Module,
         learning_rate: float = 1e-3,
         loss: type[nn.Module] = nn.MSELoss,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
         self.learning_rate = learning_rate
         self.model = model
         self.criterion = loss()
+        self.optim_kwargs = kwargs
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -89,7 +119,13 @@ class EveryTokenPredictionModule(L.LightningModule):
         outputs = self(x)
 
         loss = self.criterion(outputs, y)
-        self.log('train/loss', loss, prog_bar=True)
+        self.log(
+            'train/loss',
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+        )
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
@@ -97,9 +133,18 @@ class EveryTokenPredictionModule(L.LightningModule):
         outputs = self(x)
 
         loss = self.criterion(outputs, y)
-        self.log('validation/loss', loss)
+        self.log(
+            'validation/loss',
+            loss,
+            on_step=False,
+            on_epoch=True,
+        )
         return loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.learning_rate,
+            **self.optim_kwargs,
+        )
         return optimizer
