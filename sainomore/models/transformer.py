@@ -108,7 +108,7 @@ class DecoderLayer(nn.Module):
         x = x + x_att
         y = x
         if self._normalize:
-            y = self.layer_norm_att(x)
+            y = self.layer_norm_mlp(x)
         x = x + self.mlp(y)
         return x, att_matrix
 

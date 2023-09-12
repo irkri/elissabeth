@@ -27,7 +27,7 @@ config = {
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
     "batch_size": 113**2,
-    "epochs": 15_000,
+    "epochs": 5000,
 
     "val_size": 0.3,
 }
@@ -40,8 +40,8 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         output_vocab_size=config["P"],
         n_layers=1,
         n_heads=4,
-        d_hidden=128,
-        ffn_units=512,
+        d_hidden=32,
+        ffn_units=128,
         normalize=True,
     )
     model = DecoderOnlyTransformer(model_config)
@@ -111,18 +111,24 @@ def plot() -> None:
         saved_ = torch.load(LOAD_PATH)
         lightning_module.load_state_dict(saved_["state_dict"])
 
-    weight = lightning_module.get_parameter(
-        "model.decoder.enc_layers.0.causal_self_attention.W_Q"
-    ).detach().numpy()
+    for name in ["K", "V", "Q"]:
+        weight = lightning_module.get_parameter(
+            f"model.decoder.enc_layers.0.causal_self_attention.W_{name}"
+        ).detach().numpy()
 
-    fig, ax = plt.subplots(1, 4, figsize=(20, 5))
-    for i in range(4):
-        ax[i].matshow(weight[i, :, :], cmap="hot")
+        fig, ax = plt.subplots(1, 4, figsize=(20, 5))
+        for i in range(4):
+            ax[i].matshow(weight[i, :, :], cmap="hot")
+        plt.savefig(f"W_{name}.png", bbox_inches="tight")
 
-    # fig, ax = plt.subplots(1, 1, )
-    # ax.matshow(weight, cmap="hot")
-    plt.savefig("mg0inkoc_query_weights.png", bbox_inches="tight")
-    # plt.show()
+    # components = ["embedding", "unembedding"]
+    # fig, ax = plt.subplots(1, len(components))
+    # for i, name in enumerate(components):
+    #     weight = lightning_module.get_parameter(
+    #         f"model.{name}.weight"
+    #     ).detach().numpy()
+    #     ax[i].matshow(weight, cmap="hot")
+    # plt.savefig(f"{'_'.join(components)}.png", bbox_inches="tight")
 
 
 if __name__ == '__main__':
