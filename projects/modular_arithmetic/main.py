@@ -13,7 +13,8 @@ from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.models.callbacks import GeneralConfigCallback
+from sainomore.models.callbacks import (GeneralConfigCallback,
+                                        WeightMatrixCallback)
 from sainomore.models.lightning import LastTokenPredictionModule
 
 USE_WANDB: bool = True
@@ -26,10 +27,10 @@ config = {
     "lr": 1e-3,
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
-    "batch_size": 113**2,
-    "epochs": 5000,
+    "batch_size": 32,
+    "epochs": 20_000,
 
-    "val_size": 0.3,
+    "val_size": 0.7,
 }
 
 
@@ -40,9 +41,10 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         output_vocab_size=config["P"],
         n_layers=1,
         n_heads=4,
-        d_hidden=32,
-        ffn_units=128,
-        normalize=True,
+        d_head=32,
+        d_hidden=128,
+        ffn_units=512,
+        normalize=False,
     )
     model = DecoderOnlyTransformer(model_config)
 
@@ -77,7 +79,7 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["attention"],
+            tags=["attention", "modular_arithmetic"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -87,7 +89,22 @@ def train() -> None:
 
         wandb_logger.watch(lightning_module, log="all")
 
-    callbacks: list[Callback] = [GeneralConfigCallback(max_depth=10)]
+    callbacks: list[Callback] = [
+        GeneralConfigCallback(max_depth=10),
+        WeightMatrixCallback((
+                "model.decoder.enc_layers.0.causal_self_attention.W_Q",
+                "model.decoder.enc_layers.0.causal_self_attention.W_K",
+                "model.decoder.enc_layers.0.causal_self_attention.W_V",
+                "model.decoder.enc_layers.0.causal_self_attention.W_O",
+                "model.decoder.enc_layers.0.mlp.seq.0.weight",
+                "model.decoder.enc_layers.0.mlp.seq.2.weight",
+                "model.embedding.weight",
+                "model.unembedding.weight",
+            ),
+            reduce_axis=[0, 0, 0, 0, None, None, None, None],
+            each_n_epochs=100,
+        ),
+    ]
 
     trainer = L.Trainer(
         max_epochs=config["epochs"],

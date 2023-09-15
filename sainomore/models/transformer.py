@@ -30,7 +30,7 @@ class CausalMultiHeadAttention(nn.Module):
 
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self.d_head = config.d_hidden
+        self.d_head = config.d_head
 
         self.W_K = nn.Parameter(
             torch.randn(config.n_heads, self.d_head, config.d_hidden)
@@ -101,14 +101,10 @@ class DecoderLayer(nn.Module):
             self.layer_norm_mlp = nn.LayerNorm(config.d_hidden)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        y = x
-        if self._normalize:
-            y = self.layer_norm_att(x)
+        y = x if not self._normalize else self.layer_norm_att(x)
         x_att, att_matrix = self.causal_self_attention(y)
         x = x + x_att
-        y = x
-        if self._normalize:
-            y = self.layer_norm_mlp(x)
+        y = x if not self._normalize else self.layer_norm_mlp(x)
         x = x + self.mlp(y)
         return x, att_matrix
 
