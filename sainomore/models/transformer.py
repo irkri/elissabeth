@@ -33,21 +33,23 @@ class CausalMultiHeadAttention(nn.Module):
         self.d_head = config.d_head
 
         self.W_K = nn.Parameter(
-            torch.randn(config.n_heads, self.d_head, config.d_hidden)
-            / np.sqrt(config.d_hidden)
+            torch.empty(config.n_heads, self.d_head, config.d_hidden)
         )
         self.W_Q = nn.Parameter(
-            torch.randn(config.n_heads, self.d_head, config.d_hidden)
-            / np.sqrt(config.d_hidden)
+            torch.empty(config.n_heads, self.d_head, config.d_hidden)
         )
         self.W_V = nn.Parameter(
-            torch.randn(config.n_heads, self.d_head, config.d_hidden)
-            / np.sqrt(config.d_hidden)
+            torch.empty(config.n_heads, self.d_head, config.d_hidden)
         )
         self.W_O = nn.Parameter(
-            torch.randn(config.d_hidden, self.d_head, config.n_heads)
-            / np.sqrt(config.d_hidden)
+            torch.empty(config.d_hidden, self.d_head, config.n_heads)
         )
+
+        torch.nn.init.xavier_uniform_(self.W_Q)
+        torch.nn.init.xavier_uniform_(self.W_K)
+        torch.nn.init.xavier_uniform_(self.W_V)
+        torch.nn.init.xavier_uniform_(self.W_O)
+
         self.mask = torch.tril(
             torch.ones(1, config.context_length, config.context_length)
         ).bool()
@@ -114,14 +116,14 @@ class Decoder(nn.Module):
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
 
-        self.enc_layers = nn.ModuleList([
+        self.layers = nn.ModuleList([
             DecoderLayer(config)
             for _ in range(config.n_layers)
         ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for i in range(len(self.enc_layers)):
-            x, _ = self.enc_layers[i](x)
+        for i in range(len(self.layers)):
+            x, _ = self.layers[i](x)
         return x
 
 

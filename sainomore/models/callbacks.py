@@ -3,7 +3,6 @@ __all__ = ["GeneralConfigCallback"]
 from typing import Optional, Sequence
 
 import lightning.pytorch as L
-import lightning.pytorch as pl
 import numpy as np
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -61,7 +60,7 @@ class WeightMatrixCallback(Callback):
         if self._epoch % self._each_n_epochs != 0:
             return
         for k, wname in enumerate(self._weight_names):
-            param = pl_module.get_parameter(wname).detach().numpy()
+            param = pl_module.get_parameter(wname).detach().cpu().numpy()
             if (self._reduce_axis is not None
                     and self._reduce_axis[k] is not None):
                 param = [np.take(param, i, self._reduce_axis[k])

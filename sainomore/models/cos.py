@@ -4,15 +4,13 @@ from typing import Optional
 import torch
 from torch import nn
 
-from .transformer import MLP, DecoderOnlyTransformerConfig
+from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEmbedding
 
 
 @dataclass
 class CosDecoderOnlyTransformerConfig(DecoderOnlyTransformerConfig):
     use_tanh: bool = False
     epsilon: Optional[float] = None
-    use_xavier: bool = False
-    randomize_delta: bool = False
 
 
 class CosAttention(nn.Module):
@@ -20,28 +18,22 @@ class CosAttention(nn.Module):
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
         self.W_Q = nn.Parameter(
-            torch.empty((config.n_heads, config.d_hidden))
+            torch.empty((config.n_heads, config.d_hidden, 1))
         )
         self.W_K = nn.Parameter(
-            torch.empty((config.n_heads, config.d_hidden))
+            torch.empty((config.n_heads, config.d_hidden, 1))
         )
         self.W_V = nn.Parameter(
-            torch.empty((config.n_heads, config.d_hidden, config.d_hidden))
+            torch.empty((config.n_heads, config.d_hidden, config.d_head))
         )
         self.W_O = nn.Parameter(
-            torch.ones((config.n_heads, )) / config.n_heads
+            torch.empty((config.d_hidden, config.d_head, config.n_heads))
         )
 
-        if config.use_xavier:
-            nn.init.xavier_uniform_(self.W_Q)
-            nn.init.xavier_uniform_(self.W_K)
-            nn.init.xavier_uniform_(self.W_V)
-        else:
-            nn.init.normal_(self.W_Q)
-            nn.init.normal_(self.W_K)
-            nn.init.normal_(self.W_V)
-        if config.randomize_delta:
-            nn.init.normal_(self.W_O)
+        torch.nn.init.xavier_uniform_(self.W_Q)
+        torch.nn.init.xavier_uniform_(self.W_K)
+        torch.nn.init.xavier_uniform_(self.W_V)
+        torch.nn.init.xavier_uniform_(self.W_O)
 
         self._use_tanh = config.use_tanh
         self._epsilon = config.epsilon
@@ -56,29 +48,29 @@ class CosAttention(nn.Module):
             key = query
         if value is None:
             value = query
-        q = torch.einsum('bti,pi->btp', query, self.W_Q)
-        k = torch.einsum('bti,pi->btp', key, self.W_K)
-        V = torch.einsum('bti,pio->btpo', value, self.W_V)
+        q = torch.einsum('btd,idh->btih', query, self.W_Q)
+        k = torch.einsum('btd,idh->btih', key, self.W_K)
+        V = torch.einsum('btd,idh->btih', value, self.W_V)
 
         if self._use_tanh:
             q = torch.tanh(q) * torch.pi / 4
             k = torch.tanh(k) * torch.pi / 4
 
-        cos_KV = torch.cumsum(torch.cos(k).unsqueeze(-1) * V, dim=-3)
-        sin_KV = torch.cumsum(torch.sin(k).unsqueeze(-1) * V, dim=-3)
-        cos_Q = torch.cos(q).unsqueeze(-1)
-        sin_Q = torch.sin(q).unsqueeze(-1)
+        cos_KV = torch.cumsum(torch.cos(k) * V, dim=1)
+        sin_KV = torch.cumsum(torch.sin(k) * V, dim=1)
+        cos_Q = torch.cos(q)
+        sin_Q = torch.sin(q)
 
         heads = cos_Q * cos_KV + sin_Q * sin_KV
 
         if self._epsilon is not None:
-            cos_K = torch.cumsum(torch.cos(k).unsqueeze(-1), dim=-3)
-            sin_K = torch.cumsum(torch.sin(k).unsqueeze(-1), dim=-3)
+            cos_K = torch.cumsum(torch.cos(k), dim=1)
+            sin_K = torch.cumsum(torch.sin(k), dim=1)
             heads_denom = cos_Q * cos_K + sin_Q * sin_K
             heads_denom += self._epsilon
             heads = heads / heads_denom
 
-        result = torch.einsum('btpo,p->bto', heads, self.W_O)
+        result = torch.einsum('dhi,btih->btd', self.W_O, heads)
         return result
 
 
@@ -115,7 +107,7 @@ class CosDecoder(nn.Module):
 
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self._layers = nn.ModuleList([
+        self.layers = nn.ModuleList([
             CosBlock(config)
             for _ in range(config.n_layers)
         ])
@@ -126,8 +118,8 @@ class CosDecoder(nn.Module):
         T: context length
         D: hidden dimension
         """
-        for i in range(len(self._layers)):
-            x = self._layers[i](x)
+        for i in range(len(self.layers)):
+            x = self.layers[i](x)
         return x
 
 
@@ -135,10 +127,9 @@ class CosDecoderOnlyTransformer(nn.Module):
 
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
-        self.embedding = nn.Embedding(
-            config.input_vocab_size, config.d_hidden
-        )
-        self.encoder = CosDecoder(config)
+        self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
+        self.pos_embedding = PositionalEmbedding(config)
+        self.decoder = CosDecoder(config)
         self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -149,6 +140,7 @@ class CosDecoderOnlyTransformer(nn.Module):
         O: output dimension
         """
         x = self.embedding(x)
-        x = self.encoder(x)
+        x = self.pos_embedding(x)
+        x = self.decoder(x)
         logits = self.unembedding(x)
         return logits

@@ -27,26 +27,40 @@ config = {
     "lr": 1e-3,
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
-    "batch_size": 32,
-    "epochs": 20_000,
+    "epochs": 10_000,
 
+    "batch_size": 113**2,
     "val_size": 0.7,
 }
 
 
 def build_model() -> tuple[L.LightningModule, ModelConfig]:
-    model_config = DecoderOnlyTransformerConfig(
+    # model_config = DecoderOnlyTransformerConfig(
+    #     context_length=3,
+    #     input_vocab_size=config["P"]+1,
+    #     output_vocab_size=config["P"],
+    #     n_layers=1,
+    #     n_heads=4,
+    #     d_head=32,
+    #     d_hidden=128,
+    #     ffn_units=512,
+    #     normalize=False,
+    # )
+    # model = DecoderOnlyTransformer(model_config)
+    model_config = CosDecoderOnlyTransformerConfig(
         context_length=3,
         input_vocab_size=config["P"]+1,
         output_vocab_size=config["P"],
         n_layers=1,
-        n_heads=4,
+        n_heads=1,
         d_head=32,
-        d_hidden=128,
-        ffn_units=512,
+        d_hidden=32,
+        ffn_units=32,
         normalize=False,
+        epsilon=None,
+        use_tanh=False,
     )
-    model = DecoderOnlyTransformer(model_config)
+    model = CosDecoderOnlyTransformer(model_config)
 
     lightning_module = LastTokenPredictionModule(
         model,
@@ -63,7 +77,7 @@ def train() -> None:
         modular_arithmetic(config["P"]),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=12,
+        num_workers=6,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -79,7 +93,7 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["attention", "modular_arithmetic"],
+            tags=["cos-attention", "modular arithmetic"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -92,17 +106,17 @@ def train() -> None:
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         WeightMatrixCallback((
-                "model.decoder.enc_layers.0.causal_self_attention.W_Q",
-                "model.decoder.enc_layers.0.causal_self_attention.W_K",
-                "model.decoder.enc_layers.0.causal_self_attention.W_V",
-                "model.decoder.enc_layers.0.causal_self_attention.W_O",
-                "model.decoder.enc_layers.0.mlp.seq.0.weight",
-                "model.decoder.enc_layers.0.mlp.seq.2.weight",
+                "model.decoder.layers.0.cos_attn.W_Q",
+                "model.decoder.layers.0.cos_attn.W_K",
+                "model.decoder.layers.0.cos_attn.W_V",
+                "model.decoder.layers.0.cos_attn.W_O",
+                "model.decoder.layers.0.mlp.seq.0.weight",
+                "model.decoder.layers.0.mlp.seq.2.weight",
                 "model.embedding.weight",
                 "model.unembedding.weight",
             ),
-            reduce_axis=[0, 0, 0, 0, None, None, None, None],
-            each_n_epochs=100,
+            reduce_axis=[0, 0, 0, 2, None, None, None, None],
+            each_n_epochs=1000,
         ),
     ]
 
