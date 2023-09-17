@@ -142,4 +142,4 @@ class DecoderOnlyTransformer(nn.Module):
         x = self.pos_embedding(x)
         x = self.decoder(x)
         logits = self.unembedding(x)
-        return logits
+        return torch.swapaxes(logits, 1, 2)

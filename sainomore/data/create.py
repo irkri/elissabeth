@@ -34,7 +34,7 @@ def _gridworld_automaton(
     start_at: int = 0,
     n_steps: int = 10,
     S: int = 3,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Generates a random example run of a automaton having two possible
     actions and a given number of states.
 
@@ -50,12 +50,13 @@ def _gridworld_automaton(
         list[int]: The list of sequential states reached with the
             randomly generated actions.
     """
-    commands = np.random.choice([-1, 0, 1], size=n_steps)
-    states = np.zeros((n_steps+1, ))
+    commands = torch.randint(0, 3, size=(n_steps, )) - 1
+    states = torch.zeros((n_steps+1, ))
     states[0] = start_at
     for i, command in enumerate(commands):
-        states[i+1] = np.clip(states[i]+command, 0, S-1)
-    return commands, states
+        states[i+1] = torch.clip(states[i]+command, 0, S-1)
+    commands += 1
+    return commands, states[1:]
 
 
 def gridworld(
@@ -63,7 +64,7 @@ def gridworld(
     n_steps: int = 10,
     S: int = 4,
     cache_path: Optional[str] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Generates a datasset of example runs for an automaton with a
     given set of states and two possible actions.
     Reference::
@@ -74,12 +75,12 @@ def gridworld(
         file_commands = os.path.join(cache_path, "commands.npy")
         file_states = os.path.join(cache_path, "states.npy")
         if os.path.isfile(file_commands) and os.path.isfile(file_states):
-            COMMANDS = np.load(file_commands)
-            STATES = np.load(file_states)
+            COMMANDS = torch.Tensor(np.load(file_commands)).type(torch.long)
+            STATES = torch.Tensor(np.load(file_states)).type(torch.long)
             return COMMANDS, STATES
 
-    COMMANDS = np.zeros((n_samples, n_steps))
-    STATES = np.zeros((n_samples, n_steps+1))
+    COMMANDS = torch.zeros((n_samples, n_steps), dtype=torch.long)
+    STATES = torch.zeros((n_samples, n_steps), dtype=torch.long)
     for i in range(n_samples):
         commands, states = _gridworld_automaton(n_steps=n_steps, S=S)
         COMMANDS[i] = commands
@@ -88,8 +89,8 @@ def gridworld(
     if cache_path is not None:
         if not os.path.isdir(cache_path):
             os.mkdir(cache_path)
-        np.save(os.path.join(cache_path, "commands.npy"), COMMANDS)
-        np.save(os.path.join(cache_path, "states.npy"), STATES)
+        np.save(os.path.join(cache_path, "commands.npy"), COMMANDS.numpy())
+        np.save(os.path.join(cache_path, "states.npy"), STATES.numpy())
 
     return COMMANDS, STATES
 

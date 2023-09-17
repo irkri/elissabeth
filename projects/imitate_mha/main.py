@@ -13,7 +13,7 @@ from sainomore.models import (CosAttention, CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig, ModelConfig)
 from sainomore.models.callbacks import GeneralConfigCallback
-from sainomore.models.lightning import EveryTokenPredictionModule
+from sainomore.models.lightning import TokenPredictionModule
 
 USE_WANDB: bool = False
 LOAD_PATH: Optional[str] = None
@@ -46,7 +46,7 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     )
     model = CosAttention(model_config)
 
-    lightning_module = EveryTokenPredictionModule(
+    lightning_module = TokenPredictionModule(
         model,
         learning_rate=config["lr"],
     )

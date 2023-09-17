@@ -7,7 +7,7 @@ from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 
-from sainomore.data import modular_arithmetic
+from sainomore.data import gridworld
 from sainomore.data.lightning import GivenDataModule
 from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
@@ -22,15 +22,17 @@ LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "P": 113,
+    "n_samples": 1_000,
+    "n_steps": 10,
+    "S": 4,
 
     "lr": 1e-3,
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
-    "epochs": 10_000,
+    "epochs": 100,
 
-    "batch_size": 113**2,
-    "val_size": 0.7,
+    "batch_size": 16,
+    "val_size": 0.2,
 }
 
 
@@ -48,14 +50,14 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     # )
     # model = DecoderOnlyTransformer(model_config)
     model_config = CosDecoderOnlyTransformerConfig(
-        context_length=3,
-        input_vocab_size=config["P"]+1,
-        output_vocab_size=config["P"],
+        context_length=config["n_steps"],
+        input_vocab_size=config["S"],
+        output_vocab_size=config["S"],
         n_layers=1,
         n_heads=1,
         d_head=32,
         d_hidden=32,
-        ffn_units=32,
+        ffn_units=128,
         normalize=False,
         epsilon=None,
         use_tanh=False,
@@ -64,17 +66,24 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
 
     lightning_module = TokenPredictionModule(
         model,
-        num_classes=config["P"],
+        num_classes=config["S"],
         learning_rate=config["lr"],
         weight_decay=config["weight_decay"],
         betas=config["betas"],
+        loss=torch.nn.CrossEntropyLoss,
+        only_last=False,
     )
     return lightning_module, model_config
 
 
 def train() -> None:
     data_module = GivenDataModule(
-        modular_arithmetic(config["P"]),
+        gridworld(
+            n_samples=config["n_samples"],
+            n_steps=config["n_steps"],
+            S=config["S"],
+            cache_path="./data/",
+        ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
         num_workers=6,
@@ -93,7 +102,7 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["cos-attention", "modular arithmetic"],
+            tags=["cos-attention", "gridworld"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -116,7 +125,7 @@ def train() -> None:
                 "model.unembedding.weight",
             ),
             reduce_axis=[0, 0, 0, 2, None, None, None, None],
-            each_n_epochs=1000,
+            each_n_epochs=50,
         ),
     ]
 

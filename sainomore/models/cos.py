@@ -133,7 +133,7 @@ class CosDecoderOnlyTransformer(nn.Module):
         self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, T, V) -> (B, T, O)
+        """(B, T, V) -> (B, O, T)
         B: batch size
         T: context length
         V: vocabulary size
@@ -143,4 +143,4 @@ class CosDecoderOnlyTransformer(nn.Module):
         x = self.pos_embedding(x)
         x = self.decoder(x)
         logits = self.unembedding(x)
-        return logits
+        return torch.swapaxes(logits, 1, 2)
