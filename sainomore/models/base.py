@@ -3,6 +3,10 @@ __all__ = ["ModelConfig"]
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from torch import nn
+
+from ..hooks import HookCollection
+
 
 @dataclass
 class ModelConfig:
@@ -29,3 +33,14 @@ class ModelConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class HookedModule(nn.Module):
+
+    hooks: HookCollection
+
+    def release_all_hooks(self) -> None:
+        self.hooks.release_all()
+
+    def attach_all_hooks(self) -> None:
+        self.hooks.attach_all()

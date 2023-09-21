@@ -1,5 +1,6 @@
-__all__ = ["GeneralConfigCallback"]
+__all__ = ["GeneralConfigCallback", "WeightMatrixCallback"]
 
+import os
 from typing import Optional, Sequence
 
 import lightning.pytorch as L
@@ -37,12 +38,14 @@ class WeightMatrixCallback(Callback):
         weight_names: Sequence[str],
         reduce_axis: Optional[Sequence[int | None]] = None,
         each_n_epochs: int = 1,
+        save_path: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._weight_names = list(weight_names)
         self._reduce_axis = reduce_axis
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
+        self._save_path = save_path
 
     def on_train_start(
         self,
@@ -70,3 +73,8 @@ class WeightMatrixCallback(Callback):
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     logger.log_image(wname, param)
+            if self._save_path is not None:
+                np.save(
+                    os.path.join(self._save_path, wname+".npy"),
+                    np.array(param),
+                )

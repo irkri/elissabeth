@@ -4,7 +4,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from .config import ModelConfig
+from .base import ModelConfig, HookedModule
+from ..hooks import HookCollection
 
 
 @dataclass
@@ -14,7 +15,7 @@ class DecoderOnlyTransformerConfig(ModelConfig):
 
 class PositionalEmbedding(nn.Module):
 
-    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
+    def __init__(self, config: ModelConfig) -> None:
         super().__init__()
 
         self.pos_embedding = nn.Parameter(
@@ -26,7 +27,7 @@ class PositionalEmbedding(nn.Module):
         return x + self.pos_embedding
 
 
-class CausalMultiHeadAttention(nn.Module):
+class CausalMultiHeadAttention(HookedModule):
 
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__()
@@ -54,21 +55,29 @@ class CausalMultiHeadAttention(nn.Module):
             torch.ones(1, config.context_length, config.context_length)
         ).bool()
 
+        self.hooks = HookCollection("Q", "K", "V", "A_pre", "A", "heads")
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        k = torch.einsum('ihd,bpd->biph', self.W_K, x)
-        q = torch.einsum('ihd,bpd->biph', self.W_Q, x)
-        v = torch.einsum('ihd,bpd->biph', self.W_V, x)
-        attn_scores_pre = torch.einsum('biph,biqh->biqp', k, q)
+        Q = self.hooks("Q", torch.einsum('ihd,bpd->biph', self.W_Q, x))
+        K = self.hooks("K", torch.einsum('ihd,bpd->biph', self.W_K, x))
+        V = self.hooks("V", torch.einsum('ihd,bpd->biph', self.W_V, x))
+        attn_scores_pre = self.hooks(
+            "A_pre",
+            torch.einsum('biph,biqh->biqp', K, Q),
+        )
         if self.mask.get_device() != x.get_device():
             self.mask = self.mask.to(x.get_device())  # type: ignore
         attn_scores_masked = (
             attn_scores_pre - 1e10 * (~self.mask).float()
         )
-        attn_matrix = nn.functional.softmax(
+        attn_matrix = self.hooks("A", nn.functional.softmax(
             attn_scores_masked / np.sqrt(self.d_head),
             dim=-1,
+        ))
+        z = self.hooks(
+            "heads",
+            torch.einsum('biph,biqp->biqh', V, attn_matrix),
         )
-        z = torch.einsum('biph,biqp->biqh', v, attn_matrix)
         out = torch.einsum('dhi,biqh->bqd', self.W_O, z)
 
         return out, attn_matrix

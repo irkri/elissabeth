@@ -12,25 +12,28 @@ from sainomore.data.lightning import GivenDataModule
 from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.models.callbacks import (GeneralConfigCallback,
+                              DecoderOnlyTransformerConfig,
+                              ELISSABETH, ELISSABETHConfig,
+                              ModelConfig)
+from sainomore.callbacks import (GeneralConfigCallback,
                                         WeightMatrixCallback)
-from sainomore.models.lightning import TokenPredictionModule
+from sainomore.lightning import TokenPredictionModule
 
-USE_WANDB: bool = True
+USE_WANDB: bool = False
+PROGRESS_BAR: bool = True
 LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "P": 113,
+    "P": 53,
 
     "lr": 1e-3,
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
-    "epochs": 10_000,
+    "epochs": 50,
 
-    "batch_size": 113**2,
-    "val_size": 0.7,
+    "batch_size": 16,
+    "val_size": 0.3,
 }
 
 
@@ -47,20 +50,30 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     #     normalize=False,
     # )
     # model = DecoderOnlyTransformer(model_config)
-    model_config = CosDecoderOnlyTransformerConfig(
+    # model_config = CosDecoderOnlyTransformerConfig(
+    #     context_length=3,
+    #     input_vocab_size=config["P"]+1,
+    #     output_vocab_size=config["P"],
+    #     n_layers=1,
+    #     n_heads=1,
+    #     d_head=32,
+    #     d_hidden=32,
+    #     ffn_units=32,
+    #     normalize=False,
+    #     epsilon=None,
+    #     use_tanh=False,
+    # )
+    # model = CosDecoderOnlyTransformer(model_config)
+    model_config = ELISSABETHConfig(
         context_length=3,
         input_vocab_size=config["P"]+1,
         output_vocab_size=config["P"],
-        n_layers=1,
+        n_layers=5,
         n_heads=1,
         d_head=32,
         d_hidden=32,
-        ffn_units=32,
-        normalize=False,
-        epsilon=None,
-        use_tanh=False,
     )
-    model = CosDecoderOnlyTransformer(model_config)
+    model = ELISSABETH(model_config)
 
     lightning_module = TokenPredictionModule(
         model,
@@ -72,12 +85,40 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     return lightning_module, model_config
 
 
+def testcase() -> None:
+    lightning_module, model_config = build_model()
+    model: torch.nn.Module = lightning_module.model
+
+    x, y = modular_arithmetic(config["P"])
+
+    model.liss.hooks.save_backward(True)
+    model.liss.attach_all_hooks()
+
+    y_hat: torch.Tensor = model(x[0:1])
+
+    loss = torch.nn.CrossEntropyLoss()
+    loss_ = loss(y_hat, y[0:1])
+    loss_.backward()
+
+    print(f"{x[0:1]=}")
+    print(f"{y_hat=}")
+    print(f"{model.liss.hooks=}")
+    print(f"{model.liss.hooks.names=}")
+    print(f"{model.liss.hooks.get('Q')=}")
+    print(f"{model.liss.hooks.get('Q').fwd=}")
+    print(f"{model.liss.hooks.get('K').fwd=}")
+    print(f"{model.liss.hooks.get('V').fwd=}")
+    for i in range(model_config.n_layers):
+        # print(f"{model.liss.hooks.get(f'iss.{i}').fwd=}")
+        print(f"{i}, {torch.norm(model.liss.hooks.get(f'iss.{i}').bwd, dim=2)=}")
+
+
 def train() -> None:
     data_module = GivenDataModule(
         modular_arithmetic(config["P"]),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=6,
+        num_workers=3,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -106,17 +147,22 @@ def train() -> None:
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         WeightMatrixCallback((
-                "model.decoder.layers.0.cos_attn.W_Q",
-                "model.decoder.layers.0.cos_attn.W_K",
-                "model.decoder.layers.0.cos_attn.W_V",
-                "model.decoder.layers.0.cos_attn.W_O",
-                "model.decoder.layers.0.mlp.seq.0.weight",
-                "model.decoder.layers.0.mlp.seq.2.weight",
+                # "model.decoder.layers.0.cos_attn.W_Q",
+                # "model.decoder.layers.0.cos_attn.W_K",
+                # "model.decoder.layers.0.cos_attn.W_V",
+                # "model.decoder.layers.0.cos_attn.W_O",
+                # "model.decoder.layers.0.mlp.seq.0.weight",
+                # "model.decoder.layers.0.mlp.seq.2.weight",
+                "model.liss.W_Q",
+                "model.liss.W_K",
+                "model.liss.W_V",
+                "model.liss.W_O",
                 "model.embedding.weight",
                 "model.unembedding.weight",
             ),
-            reduce_axis=[0, 0, 0, 2, None, None, None, None],
-            each_n_epochs=1000,
+            reduce_axis=[0, 0, 0, None, None, None],
+            each_n_epochs=25,
+            save_path="./test/",
         ),
     ]
 
@@ -126,7 +172,7 @@ def train() -> None:
         callbacks=callbacks,
         logger=wandb_logger,
         default_root_dir=SAVE_PATH,
-        enable_progress_bar=False,
+        enable_progress_bar=PROGRESS_BAR,
     )
 
     trainer.fit(lightning_module, data_module, ckpt_path=LOAD_PATH)
@@ -163,4 +209,4 @@ def plot() -> None:
 
 
 if __name__ == '__main__':
-    train()
+    testcase()

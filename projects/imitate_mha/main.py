@@ -12,8 +12,8 @@ from sainomore.data.lightning import GivenDataModule
 from sainomore.models import (CosAttention, CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.models.callbacks import GeneralConfigCallback
-from sainomore.models.lightning import TokenPredictionModule
+from sainomore.callbacks import GeneralConfigCallback
+from sainomore.lightning import TokenPredictionModule
 
 USE_WANDB: bool = False
 LOAD_PATH: Optional[str] = None

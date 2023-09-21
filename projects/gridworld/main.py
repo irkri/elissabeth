@@ -13,9 +13,9 @@ from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.models.callbacks import (GeneralConfigCallback,
+from sainomore.callbacks import (GeneralConfigCallback,
                                         WeightMatrixCallback)
-from sainomore.models.lightning import TokenPredictionModule
+from sainomore.lightning import TokenPredictionModule
 
 USE_WANDB: bool = True
 LOAD_PATH: Optional[str] = None
