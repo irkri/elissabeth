@@ -68,7 +68,7 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         context_length=3,
         input_vocab_size=config["P"]+1,
         output_vocab_size=config["P"],
-        n_layers=5,
+        n_layers=2,
         n_heads=1,
         d_head=32,
         d_hidden=32,
@@ -89,10 +89,12 @@ def testcase() -> None:
     lightning_module, model_config = build_model()
     model: torch.nn.Module = lightning_module.model
 
+    print(lightning_module.get_submodule("model.liss"))
+    return
+
     x, y = modular_arithmetic(config["P"])
 
-    model.liss.hooks.save_backward(True)
-    model.liss.attach_all_hooks()
+    model.liss.attach_all_hooks(backward=True)
 
     y_hat: torch.Tensor = model(x[0:1])
 
@@ -162,7 +164,7 @@ def train() -> None:
             ),
             reduce_axis=[0, 0, 0, None, None, None],
             each_n_epochs=25,
-            save_path="./test/",
+            # save_path="./test/",
         ),
     ]
 

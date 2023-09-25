@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
+import warnings
 
 import torch
 from torch import nn
@@ -18,6 +19,13 @@ class LISS(HookedModule):
 
     def __init__(self, config: ELISSABETHConfig) -> None:
         super().__init__()
+        if config.context_length < config.n_layers:
+            warnings.warn(
+                f"Number of layers ({config.n_layers}) "
+                f"exceeds context length ({config.context_length}), "
+                "which probably leads to unsuccessful training",
+                RuntimeWarning,
+            )
         self.W_Q = nn.Parameter(
             torch.empty((config.n_layers, config.d_hidden, 1))
         )
@@ -46,20 +54,23 @@ class LISS(HookedModule):
         k = self.hooks("K", torch.einsum('btd,ldh->btlh', x, self.W_K))
         V = self.hooks("V", torch.einsum('btd,ldh->btlh', x, self.W_V))
 
-        result = self.hooks("iss.0", torch.roll(
+        result = self.hooks("iss.0",
             torch.cumsum(torch.exp(-k[:, :, 0, :]) * V[:, :, 0, :], dim=1),
-        1, 1))
+        )
 
         for l in range(1, self.n_layers):
-            result = self.hooks(f"iss.{l}", torch.roll(torch.cumsum(
+            result = nn.functional.pad(
+                torch.roll(result, 1, 1)[:, 1:, :],
+                (0, 0, 1, 0),
+            )
+            result = self.hooks(f"iss.{l}", torch.cumsum(
                 torch.exp(q[:, :, l-1, :] - k[:, :, l, :])
                     * V[:, :, l, :]
                     * result,
-                dim=1,
-            ), 1, 1))
+                dim=1)
+            )
 
-        result = self.hooks(
-            "iss",
+        result = self.hooks("iss",
             torch.exp(q[:, :, self.n_layers-1, :]) * result,
         )
         result = torch.einsum("bth,hd->btd", result, self.W_O)

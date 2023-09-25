@@ -42,5 +42,9 @@ class HookedModule(nn.Module):
     def release_all_hooks(self) -> None:
         self.hooks.release_all()
 
-    def attach_all_hooks(self) -> None:
-        self.hooks.attach_all()
+    def attach_all_hooks(
+        self, *,
+        forward: bool = True,
+        backward: bool = False,
+    ) -> None:
+        self.hooks.attach_all(forward=forward, backward=backward)

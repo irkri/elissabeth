@@ -7,53 +7,56 @@ from torch import nn
 
 class Hook(nn.Module):
 
-    def __init__(self, backward: bool = False) -> None:
+    def __init__(self, forward: bool = True, backward: bool = False) -> None:
         super().__init__()
-        self._handle = None
-        self._handle_backward = None
+        self._handle_fwd = None
+        self._handle_bwd = None
+        self._forward = forward
         self._backward = backward
-        self._cache: Optional[torch.Tensor] = None
-        self._cache_backward: Optional[torch.Tensor] = None
+        self._cache_fwd: Optional[torch.Tensor] = None
+        self._cache_bwd: Optional[torch.Tensor] = None
 
-    def save_backward(self, backward: bool) -> None:
+    def reset(self, forward: bool = True, backward: bool = False) -> None:
+        self._forward = forward
         self._backward = backward
+        self._cache_fwd = None
+        self._cache_bwd = None
 
-    def hook(
+    def hook_fwd(
         self,
         module: nn.Module,
         input: tuple[torch.Tensor, ...],
         output: Any,
     ) -> None:
-        self._cache = input[0].detach()
+        self._cache_fwd = input[0].detach()
 
-    def hook_backward(
+    def hook_bwd(
         self,
         module: nn.Module,
         input: tuple[torch.Tensor, ...] | torch.Tensor,
         output: tuple[torch.Tensor, ...] | torch.Tensor,
     ) -> None:
-        self._cache_backward = input[0].detach()
+        self._cache_bwd = input[0].detach()
 
     @property
     def fwd(self) -> Optional[torch.Tensor]:
-        return self._cache
+        return self._cache_fwd
 
     @property
     def bwd(self) -> Optional[torch.Tensor]:
-        return self._cache_backward
+        return self._cache_bwd
 
-    def remove(self) -> None:
-        if self._handle is not None:
-            self._handle.remove()
-        if self._handle_backward is not None:
-            self._handle_backward.remove()
+    def release(self) -> None:
+        if self._handle_fwd is not None:
+            self._handle_fwd.remove()
+        if self._handle_bwd is not None:
+            self._handle_bwd.remove()
 
     def attach(self) -> None:
-        self._handle = self.register_forward_hook(self.hook)
+        if self._forward:
+            self._handle_fwd = self.register_forward_hook(self.hook_fwd)
         if self._backward:
-            self._handle_backward = self.register_full_backward_hook(
-                self.hook_backward
-            )
+            self._handle_bwd = self.register_full_backward_hook(self.hook_bwd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x
@@ -70,11 +73,6 @@ class HookCollection(nn.Module):
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(self._hooks.keys())
-
-    def save_backward(self, backward: bool) -> None:
-        self._backward = backward
-        for name in self._hooks:
-            self._hooks[name].save_backward(self._backward)
 
     def add_hooks(self, names: str | Sequence[str]) -> None:
         if isinstance(names, str):
@@ -99,8 +97,13 @@ class HookCollection(nn.Module):
 
     def release_all(self) -> None:
         for name in self._hooks:
-            self._hooks[name].remove()
+            self._hooks[name].release()
 
-    def attach_all(self) -> None:
+    def attach_all(
+        self, *,
+        forward: bool = True,
+        backward: bool = False,
+    ) -> None:
         for name in self._hooks:
+            self._hooks[name].reset(forward=forward, backward=backward)
             self._hooks[name].attach()
