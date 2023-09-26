@@ -1,13 +1,16 @@
-__all__ = ["GeneralConfigCallback", "WeightMatrixCallback"]
+__all__ = ["GeneralConfigCallback", "WeightHistory", "HookHistory"]
 
 import os
-from typing import Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import lightning.pytorch as L
 import numpy as np
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
+from torch.utils.data import DataLoader
+
+from .models.base import HookedModule
 
 
 class GeneralConfigCallback(Callback):
@@ -31,7 +34,7 @@ class GeneralConfigCallback(Callback):
             })
 
 
-class WeightMatrixCallback(Callback):
+class WeightHistory(Callback):
 
     def __init__(
         self,
@@ -62,6 +65,10 @@ class WeightMatrixCallback(Callback):
         self._epoch += 1
         if self._epoch % self._each_n_epochs != 0:
             return
+        path = None
+        if self._save_path is not None:
+            path = os.path.join(self._save_path, f"epoch{self._epoch:05}")
+            os.makedirs(path, exist_ok=True)
         for k, wname in enumerate(self._weight_names):
             param = pl_module.get_parameter(wname).detach().cpu().numpy()
             if (self._reduce_axis is not None
@@ -72,9 +79,126 @@ class WeightMatrixCallback(Callback):
                 param = [param]
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
-                    logger.log_image(wname, param)
-            if self._save_path is not None:
-                np.save(
-                    os.path.join(self._save_path, wname+".npy"),
-                    np.array(param),
+                    logger.log_image("weights/"+wname, param)
+            if path is not None:
+                np.save(os.path.join(path, wname+".npy"), np.array(param))
+
+
+class HookHistory(Callback):
+
+    def __init__(
+        self,
+        model_name: str,
+        data: DataLoader,
+        hook_names: Optional[Sequence[str]] = None,
+        forward: bool = True,
+        backward: bool = False,
+        each_n_epochs: int = 1,
+        transform: Optional[Callable[[np.ndarray], Any]] = None,
+        save_path: Optional[str] = None,
+    ) -> None:
+        super().__init__()
+        self._model_name = model_name
+        self._data = data
+        self._given_hook_names = hook_names
+        self._forward = forward
+        self._backward = backward
+        self._each_n_epochs = each_n_epochs
+        self._epoch = -1
+        self._transform = transform if transform is not None else lambda x: x
+        self._save_path = save_path
+
+    def on_train_start(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch = -1
+        model = pl_module.get_submodule("model." + self._model_name)
+        if not isinstance(model, HookedModule):
+            raise RuntimeError(f"Module {model} is not a HookedModule")
+        self._hooks = model.hooks
+        self._hook_names = list(
+            self._hooks.names if self._given_hook_names is None
+            else tuple(self._given_hook_names)
+        )
+
+    def on_train_epoch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch += 1
+        if self._epoch % self._each_n_epochs != 0:
+            return
+
+        self._hooks.attach_all(forward=self._forward, backward=self._backward)
+        data_fwd: list[list] = []
+        data_bwd: list[list] = []
+        columns = ["sample.x", "sample.y"] + self._hook_names
+
+        for bid, batch in enumerate(self._data):
+            if self._forward:
+                data_fwd.append(
+                    [batch[0].detach().numpy(), batch[1].detach().numpy()]
                 )
+            if self._backward:
+                data_bwd.append(
+                    [batch[0].detach().numpy(), batch[1].detach().numpy()]
+                )
+            metrics = pl_module.validation_step(batch, bid)
+            if self._backward:
+                metrics["loss"].backward()  # type: ignore
+            for hook_name in self._hook_names:
+                if self._forward:
+                    data_fwd[-1].append(self._transform(
+                        self._hooks.get(hook_name).fwd.numpy()  # type: ignore
+                    ))
+                if self._backward:
+                    data_bwd[-1].append(self._transform(
+                        self._hooks.get(hook_name).bwd.numpy()  # type: ignore
+                    ))
+
+        for logger in trainer.loggers:
+            if isinstance(logger, WandbLogger):
+                if self._forward:
+                    logger.log_table(
+                        "hooks/fwd",
+                        columns=columns,
+                        data=data_fwd,
+                        step=self._epoch,
+                    )
+                if self._backward:
+                    logger.log_table(
+                        "hooks/bwd",
+                        columns=columns,
+                        data=data_bwd,
+                        step=self._epoch,
+                    )
+
+        if self._save_path is not None:
+            for s in range(len(data_fwd)):
+                path = os.path.join(
+                    self._save_path,
+                    f"epoch{self._epoch:05}",
+                    f"sample{s:03}",
+                )
+                os.makedirs(path, exist_ok=True)
+                for i in range(len(data_fwd[s])):
+                    np.save(
+                        os.path.join(path, columns[i]+"_fwd.npy"),
+                        data_fwd[s][i],
+                    )
+            for s in range(len(data_bwd)):
+                path = os.path.join(
+                    self._save_path,
+                    f"epoch{self._epoch:05}",
+                    f"sample{s:03}",
+                )
+                os.makedirs(path, exist_ok=True)
+                for i in range(len(data_bwd[s])):
+                    np.save(
+                        os.path.join(path, columns[i]+"_bwd.npy"),
+                        data_bwd[s][i],
+                    )
+        self._hooks.release_all()

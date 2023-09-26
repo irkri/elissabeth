@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from .base import ModelConfig, HookedModule
 from ..hooks import HookCollection
+from .base import HookedModule, ModelConfig
 
 
 @dataclass

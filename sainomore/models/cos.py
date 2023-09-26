@@ -4,9 +4,9 @@ from typing import Optional
 import torch
 from torch import nn
 
-from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEmbedding
-from .base import HookedModule
 from ..hooks import HookCollection
+from .base import HookedModule
+from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEmbedding
 
 
 @dataclass

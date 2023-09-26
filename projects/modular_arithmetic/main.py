@@ -1,26 +1,28 @@
+import os
 from typing import Optional
 
 import lightning.pytorch as L
+import numpy as np
 import torch
 import wandb
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
+from torch.utils.data import DataLoader, TensorDataset
 
+from sainomore.callbacks import (GeneralConfigCallback, HookHistory,
+                                 WeightHistory)
 from sainomore.data import modular_arithmetic
 from sainomore.data.lightning import GivenDataModule
-from sainomore.models import (CosDecoderOnlyTransformer,
+from sainomore.lightning import TokenPredictionModule
+from sainomore.models import (ELISSABETH, CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig,
-                              ELISSABETH, ELISSABETHConfig,
+                              DecoderOnlyTransformerConfig, ELISSABETHConfig,
                               ModelConfig)
-from sainomore.callbacks import (GeneralConfigCallback,
-                                        WeightMatrixCallback)
-from sainomore.lightning import TokenPredictionModule
 
-USE_WANDB: bool = False
-PROGRESS_BAR: bool = True
+USE_WANDB: bool = True
+PROGRESS_BAR: bool = False
 LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
@@ -30,7 +32,7 @@ config = {
     "lr": 1e-3,
     "weight_decay": 1.0,
     "betas": (0.9, 0.98),
-    "epochs": 50,
+    "epochs": 51,
 
     "batch_size": 16,
     "val_size": 0.3,
@@ -89,7 +91,12 @@ def testcase() -> None:
     lightning_module, model_config = build_model()
     model: torch.nn.Module = lightning_module.model
 
-    print(lightning_module.get_submodule("model.liss"))
+    x, y = modular_arithmetic(config["P"])
+
+    data = DataLoader(TensorDataset(x[:2], y[:2]))
+    for d in data:
+        print(d)
+
     return
 
     x, y = modular_arithmetic(config["P"])
@@ -115,9 +122,14 @@ def testcase() -> None:
         print(f"{i}, {torch.norm(model.liss.hooks.get(f'iss.{i}').bwd, dim=2)=}")
 
 
+def hook_transform(x: np.ndarray) -> np.ndarray:
+    return x[0, -1, :]
+
+
 def train() -> None:
+    x, y = modular_arithmetic(config["P"])
     data_module = GivenDataModule(
-        modular_arithmetic(config["P"]),
+        (x, y),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
         num_workers=3,
@@ -146,9 +158,9 @@ def train() -> None:
 
         wandb_logger.watch(lightning_module, log="all")
 
-    callbacks: list[Callback] = [
+    callbacks = [
         GeneralConfigCallback(max_depth=10),
-        WeightMatrixCallback((
+        WeightHistory((
                 # "model.decoder.layers.0.cos_attn.W_Q",
                 # "model.decoder.layers.0.cos_attn.W_K",
                 # "model.decoder.layers.0.cos_attn.W_V",
@@ -164,7 +176,16 @@ def train() -> None:
             ),
             reduce_axis=[0, 0, 0, None, None, None],
             each_n_epochs=25,
-            # save_path="./test/",
+            save_path=os.path.join(os.path.dirname(__file__), "test"),
+        ),
+        HookHistory(
+            "liss",
+            DataLoader(TensorDataset(x[:2], y[:2])),
+            ["iss"],
+            each_n_epochs=25,
+            save_path=os.path.join(os.path.dirname(__file__), "test"),
+            transform=hook_transform,
+            backward=True,
         ),
     ]
 
@@ -211,4 +232,4 @@ def plot() -> None:
 
 
 if __name__ == '__main__':
-    testcase()
+    train()

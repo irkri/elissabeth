@@ -1,13 +1,13 @@
-from dataclasses import dataclass
-from typing import Optional
 import warnings
+from dataclasses import dataclass
 
 import torch
 from torch import nn
 
-from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEmbedding
-from .base import ModelConfig, HookedModule
 from ..hooks import HookCollection
+from .base import HookedModule, ModelConfig
+from .transformer import PositionalEmbedding
+
 
 @dataclass
 class ELISSABETHConfig(ModelConfig):
