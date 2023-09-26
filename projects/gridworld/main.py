@@ -7,32 +7,32 @@ from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 
+from sainomore.callbacks import GeneralConfigCallback, WeightHistory
 from sainomore.data import gridworld
 from sainomore.data.lightning import GivenDataModule
-from sainomore.models import (CosDecoderOnlyTransformer,
+from sainomore.lightning import TokenPredictionModule
+from sainomore.models import (ELISSABETH, CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.callbacks import (GeneralConfigCallback,
-                                        WeightMatrixCallback)
-from sainomore.lightning import TokenPredictionModule
+                              DecoderOnlyTransformerConfig, ELISSABETHConfig,
+                              ModelConfig)
 
-USE_WANDB: bool = True
+USE_WANDB: bool = False
+PROGRESS_BAR: bool = True
 LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 1_000,
-    "n_steps": 10,
-    "S": 4,
+    "n_samples": 5_000,
+    "n_steps": 100,
+    "S": 9,
 
-    "lr": 1e-3,
-    "weight_decay": 1.0,
-    "betas": (0.9, 0.98),
-    "epochs": 100,
+    "lr": 5e-4,
+    "weight_decay": 1e-4,
+    "epochs": 1000,
 
-    "batch_size": 16,
-    "val_size": 0.2,
+    "batch_size": 32,
+    "val_size": 0.3,
 }
 
 
@@ -49,27 +49,37 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     #     normalize=False,
     # )
     # model = DecoderOnlyTransformer(model_config)
-    model_config = CosDecoderOnlyTransformerConfig(
+    # model_config = CosDecoderOnlyTransformerConfig(
+    #     context_length=config["n_steps"],
+    #     input_vocab_size=config["S"],
+    #     output_vocab_size=config["S"],
+    #     n_layers=1,
+    #     n_heads=1,
+    #     d_head=32,
+    #     d_hidden=32,
+    #     ffn_units=128,
+    #     normalize=False,
+    #     epsilon=None,
+    #     use_tanh=False,
+    # )
+    # model = CosDecoderOnlyTransformer(model_config)
+    model_config = ELISSABETHConfig(
         context_length=config["n_steps"],
         input_vocab_size=config["S"],
         output_vocab_size=config["S"],
-        n_layers=1,
-        n_heads=1,
-        d_head=32,
-        d_hidden=32,
-        ffn_units=128,
-        normalize=False,
-        epsilon=None,
-        use_tanh=False,
+        n_layers=2,
+        iss_length=2,
+        d_head=128,
+        d_hidden=64,
+        separate_qk=True,
     )
-    model = CosDecoderOnlyTransformer(model_config)
+    model = ELISSABETH(model_config)
 
     lightning_module = TokenPredictionModule(
         model,
         num_classes=config["S"],
         learning_rate=config["lr"],
         weight_decay=config["weight_decay"],
-        betas=config["betas"],
         loss=torch.nn.CrossEntropyLoss,
         only_last=False,
     )
@@ -86,7 +96,7 @@ def train() -> None:
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=6,
+        num_workers=3,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -114,17 +124,21 @@ def train() -> None:
 
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        WeightMatrixCallback((
-                "model.decoder.layers.0.cos_attn.W_Q",
-                "model.decoder.layers.0.cos_attn.W_K",
-                "model.decoder.layers.0.cos_attn.W_V",
-                "model.decoder.layers.0.cos_attn.W_O",
-                "model.decoder.layers.0.mlp.seq.0.weight",
-                "model.decoder.layers.0.mlp.seq.2.weight",
+        WeightHistory((
+                # "model.decoder.layers.0.cos_attn.W_Q",
+                # "model.decoder.layers.0.cos_attn.W_K",
+                # "model.decoder.layers.0.cos_attn.W_V",
+                # "model.decoder.layers.0.cos_attn.W_O",
+                # "model.decoder.layers.0.mlp.seq.0.weight",
+                # "model.decoder.layers.0.mlp.seq.2.weight",
+                "model.layers.0.W_Q",
+                "model.layers.0.W_K",
+                "model.layers.0.W_V",
+                "model.layers.0.W_O",
                 "model.embedding.weight",
                 "model.unembedding.weight",
             ),
-            reduce_axis=[0, 0, 0, 2, None, None, None, None],
+            reduce_axis=[0, 0, 0, None, None, None],
             each_n_epochs=50,
         ),
     ]
@@ -135,7 +149,7 @@ def train() -> None:
         callbacks=callbacks,
         logger=wandb_logger,
         default_root_dir=SAVE_PATH,
-        enable_progress_bar=False,
+        enable_progress_bar=PROGRESS_BAR,
     )
 
     trainer.fit(lightning_module, data_module, ckpt_path=LOAD_PATH)
