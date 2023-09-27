@@ -16,6 +16,8 @@ class ElissabethConfig(ModelConfig):
     positional_encoding: bool = False
     normalize_layers: bool = True
     normalize_iss: bool = False
+    share_qk: bool = False
+    share_v: bool = False
 
     separate_qk: bool = True
     iss_length: int = 2
@@ -33,22 +35,29 @@ class LISS(HookedModule):
                 "which probably leads to unsuccessful training",
                 RuntimeWarning,
             )
+        self.share_qk = config.share_qk
+        self.share_v = config.share_v
+
         self.W_Q = nn.Parameter(
             torch.empty((
-                config.iss_length,
+                config.iss_length if not self.share_qk else 1,
                 config.d_hidden,
                 config.d_head if config.separate_qk else 1,
             ))
         )
         self.W_K = nn.Parameter(
             torch.empty((
-                config.iss_length,
+                config.iss_length if not self.share_qk else 1,
                 config.d_hidden,
                 config.d_head if config.separate_qk else 1,
             ))
         )
         self.W_V = nn.Parameter(
-            torch.empty((config.iss_length, config.d_hidden, config.d_head))
+            torch.empty((
+                config.iss_length if not self.share_v else 1,
+                config.d_hidden,
+                config.d_head,
+            ))
         )
         self.W_O = nn.Parameter(
             torch.empty((config.d_head, config.d_hidden))
@@ -87,8 +96,9 @@ class LISS(HookedModule):
             if self.normalize:
                 result = self.layernorms[l-1](result)
             result = self.hooks(f"iss.{l}", torch.cumsum(
-                torch.exp(q[:, :, l-1, :] - k[:, :, l, :])
-                    * V[:, :, l, :]
+                torch.exp(q[:, :, (0 if self.share_qk else l-1), :]
+                          - k[:, :, (0 if self.share_qk else l), :])
+                    * V[:, :, (0 if self.share_v else l), :]
                     * result,
                 dim=1)
             )
@@ -96,7 +106,8 @@ class LISS(HookedModule):
         if self.normalize:
             result = self.layernorms[self.length-1](result)
         result = self.hooks("iss",
-            torch.exp(q[:, :, self.length-1, :]) * result,
+            torch.exp(q[:, :, (0 if self.share_qk else self.length-1), :])
+            * result,
         )
         result = torch.einsum("bth,hd->btd", result, self.W_O)
 
