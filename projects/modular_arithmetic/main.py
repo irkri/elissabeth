@@ -15,11 +15,11 @@ from sainomore.callbacks import (GeneralConfigCallback, HookHistory,
 from sainomore.data import modular_arithmetic
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
-from sainomore.models import (ELISSABETH, CosDecoderOnlyTransformer,
+from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, ELISSABETHConfig,
-                              ModelConfig)
+                              DecoderOnlyTransformerConfig, Elissabeth,
+                              ElissabethConfig, ModelConfig)
 
 USE_WANDB: bool = True
 PROGRESS_BAR: bool = False
@@ -66,7 +66,7 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     #     use_tanh=False,
     # )
     # model = CosDecoderOnlyTransformer(model_config)
-    model_config = ELISSABETHConfig(
+    model_config = ElissabethConfig(
         context_length=3,
         input_vocab_size=config["P"]+1,
         output_vocab_size=config["P"],
@@ -75,7 +75,7 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         d_head=32,
         d_hidden=32,
     )
-    model = ELISSABETH(model_config)
+    model = Elissabeth(model_config)
 
     lightning_module = TokenPredictionModule(
         model,

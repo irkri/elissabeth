@@ -7,6 +7,8 @@ import torch
 import torchmetrics.classification
 from torch import nn
 
+from sainomore.models.base import SAINoMoreModule
+
 
 class TokenPredictionModule(L.LightningModule):
     """Lightning module that performs a classfication with the given
@@ -16,7 +18,7 @@ class TokenPredictionModule(L.LightningModule):
 
     def __init__(
         self,
-        model: torch.nn.Module,
+        model: SAINoMoreModule,
         num_classes: Optional[int] = None,
         learning_rate: float = 1e-3,
         only_last: bool = True,

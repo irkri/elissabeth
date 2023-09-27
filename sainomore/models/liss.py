@@ -1,3 +1,5 @@
+__all__ = ["LISS", "Elissabeth", "ElissabethConfig"]
+
 import warnings
 from dataclasses import dataclass
 
@@ -5,22 +7,24 @@ import torch
 from torch import nn
 
 from ..hooks import HookCollection
-from .base import HookedModule, ModelConfig
+from .base import HookedModule, ModelConfig, SAINoMoreModule
 from .transformer import PositionalEmbedding
 
 
 @dataclass
-class ELISSABETHConfig(ModelConfig):
+class ElissabethConfig(ModelConfig):
     positional_encoding: bool = False
+    normalize_layers: bool = True
+    normalize_iss: bool = False
 
     separate_qk: bool = True
-    iss_length: int = 1
+    iss_length: int = 2
 
 
 class LISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
-    def __init__(self, config: ELISSABETHConfig) -> None:
+    def __init__(self, config: ElissabethConfig) -> None:
         super().__init__()
         if config.context_length < config.iss_length:
             warnings.warn(
@@ -50,6 +54,12 @@ class LISS(HookedModule):
             torch.empty((config.d_head, config.d_hidden))
         )
 
+        self.normalize = config.normalize_iss
+        if self.normalize:
+            self.layernorms = nn.ModuleList([
+                nn.LayerNorm(config.d_head) for _ in range(config.iss_length)
+            ])
+
         torch.nn.init.xavier_uniform_(self.W_Q)
         torch.nn.init.xavier_uniform_(self.W_K)
         torch.nn.init.xavier_uniform_(self.W_V)
@@ -74,6 +84,8 @@ class LISS(HookedModule):
                 torch.roll(result, 1, 1)[:, 1:, :],
                 (0, 0, 1, 0),
             )
+            if self.normalize:
+                result = self.layernorms[l-1](result)
             result = self.hooks(f"iss.{l}", torch.cumsum(
                 torch.exp(q[:, :, l-1, :] - k[:, :, l, :])
                     * V[:, :, l, :]
@@ -81,6 +93,8 @@ class LISS(HookedModule):
                 dim=1)
             )
 
+        if self.normalize:
+            result = self.layernorms[self.length-1](result)
         result = self.hooks("iss",
             torch.exp(q[:, :, self.length-1, :]) * result,
         )
@@ -89,19 +103,33 @@ class LISS(HookedModule):
         return result
 
 
-class ELISSABETH(nn.Module):
+class Elissabeth(SAINoMoreModule):
     """Extended Learnable Iterated Sums Signature Architecture"""
 
-    def __init__(self, config: ELISSABETHConfig) -> None:
+    def __init__(self, config: ElissabethConfig) -> None:
         super().__init__()
         self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
         self.positional_encoding = config.positional_encoding
+        if not self.positional_encoding and config.iss_length == 1:
+            warnings.warn(
+                "No positional encoding and ISS length 1. "
+                "Elissabeth will be permutation invariant.",
+                RuntimeWarning,
+            )
         if self.positional_encoding:
             self.pos_embedding = PositionalEmbedding(config)
         self.layers = nn.ModuleList([
             LISS(config) for _ in range(config.n_layers)
         ])
-        self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
+        self.normalize = config.normalize_layers
+        if config.normalize_layers:
+            self.layernorms = nn.ModuleList([
+                nn.LayerNorm(config.d_hidden) for _ in range(config.n_layers+1)
+            ])
+        self.unembedding = nn.Linear(
+            config.d_hidden, config.output_vocab_size,
+            bias=config.bias,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, V) -> (B, O, T)
@@ -113,7 +141,13 @@ class ELISSABETH(nn.Module):
         x = self.embedding(x)
         if self.positional_encoding:
             x = self.pos_embedding(x)
+
         for i in range(len(self.layers)):
-            x = self.layers[i](x)
+            if self.normalize:
+                x = self.layernorms[i](x)
+            x = x + self.layers[i](x)
+
+        if self.normalize:
+            x = self.layernorms[len(self.layers)](x)
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)

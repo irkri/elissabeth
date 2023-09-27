@@ -1,11 +1,11 @@
-__all__ = ["ModelConfig"]
+__all__ = ["ModelConfig", "HookedModule", "SAINoMoreModule"]
 
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from torch import nn
 
-from ..hooks import HookCollection
+from ..hooks import HookCollection, Hook
 
 
 @dataclass
@@ -21,7 +21,7 @@ class ModelConfig:
     d_head: int = None  # type: ignore
     ffn_units: int = None  # type: ignore
 
-    bias: bool = True
+    bias: bool = False
 
     def __post_init__(self) -> None:
         if self.output_vocab_size is None:
@@ -48,3 +48,42 @@ class HookedModule(nn.Module):
         backward: bool = False,
     ) -> None:
         self.hooks.attach_all(forward=forward, backward=backward)
+
+
+class SAINoMoreModule(nn.Module):
+
+    def attach_all_hooks(
+        self, *,
+        forward: bool = True,
+        backward: bool = False,
+    ) -> None:
+        for things in self.children():
+            if isinstance(things, nn.ModuleList):
+                for thing in things:
+                    if isinstance(thing, (HookedModule, SAINoMoreModule)):
+                        thing.attach_all_hooks(
+                            forward=forward,
+                            backward=backward,
+                        )
+            elif isinstance(things, (HookedModule, SAINoMoreModule)):
+                things.attach_all_hooks(
+                    forward=forward,
+                    backward=backward,
+                )
+
+    def release_all_hooks(self) -> None:
+        for things in self.children():
+            if isinstance(things, nn.ModuleList):
+                for thing in things:
+                    if isinstance(thing, (HookedModule, SAINoMoreModule)):
+                        thing.release_all_hooks()
+            elif isinstance(things, (HookedModule, SAINoMoreModule)):
+                things.release_all_hooks()
+
+    def get_hook(self, module_name: str, name: str) -> Hook:
+        module = self.get_submodule(module_name)
+        if not isinstance(module, HookedModule):
+            raise ValueError(
+                f"Module name {module_name} does not point to a HookedModule"
+            )
+        return module.hooks.get(name)

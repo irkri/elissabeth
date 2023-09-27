@@ -11,48 +11,35 @@ from sainomore.callbacks import GeneralConfigCallback, WeightHistory
 from sainomore.data import gridworld
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
-from sainomore.models import (ELISSABETH, CosDecoderOnlyTransformer,
+from sainomore.models import (CosDecoderOnlyTransformer,
                               CosDecoderOnlyTransformerConfig,
                               DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, ELISSABETHConfig,
-                              ModelConfig)
+                              DecoderOnlyTransformerConfig, Elissabeth,
+                              ElissabethConfig, ModelConfig)
 
-USE_WANDB: bool = False
-PROGRESS_BAR: bool = True
+USE_WANDB: bool = True
+PROGRESS_BAR: bool = False
 LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5_000,
+    "n_samples": 50_000,
     "n_steps": 100,
     "S": 9,
 
     "lr": 5e-4,
     "weight_decay": 1e-4,
-    "epochs": 1000,
+    "epochs": 1001,
 
     "batch_size": 32,
-    "val_size": 0.3,
+    "val_size": 0.2,
 }
 
 
 def build_model() -> tuple[L.LightningModule, ModelConfig]:
-    # model_config = DecoderOnlyTransformerConfig(
-    #     context_length=3,
-    #     input_vocab_size=config["P"]+1,
-    #     output_vocab_size=config["P"],
-    #     n_layers=1,
-    #     n_heads=4,
-    #     d_head=32,
-    #     d_hidden=128,
-    #     ffn_units=512,
-    #     normalize=False,
-    # )
-    # model = DecoderOnlyTransformer(model_config)
     # model_config = CosDecoderOnlyTransformerConfig(
     #     context_length=config["n_steps"],
     #     input_vocab_size=config["S"],
-    #     output_vocab_size=config["S"],
     #     n_layers=1,
     #     n_heads=1,
     #     d_head=32,
@@ -63,17 +50,18 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
     #     use_tanh=False,
     # )
     # model = CosDecoderOnlyTransformer(model_config)
-    model_config = ELISSABETHConfig(
+    model_config = ElissabethConfig(
         context_length=config["n_steps"],
         input_vocab_size=config["S"],
-        output_vocab_size=config["S"],
         n_layers=2,
-        iss_length=2,
+        iss_length=5,
+        d_hidden=128,
         d_head=128,
-        d_hidden=64,
         separate_qk=True,
+        normalize_layers=True,
+        normalize_iss=True,
     )
-    model = ELISSABETH(model_config)
+    model = Elissabeth(model_config)
 
     lightning_module = TokenPredictionModule(
         model,
@@ -112,7 +100,7 @@ def train() -> None:
         wandb_logger = WandbLogger(
             project="cosine_attention",
             checkpoint_name=LOAD_PATH,
-            tags=["cos-attention", "gridworld"],
+            tags=["liss", "gridworld"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -139,7 +127,7 @@ def train() -> None:
                 "model.unembedding.weight",
             ),
             reduce_axis=[0, 0, 0, None, None, None],
-            each_n_epochs=50,
+            each_n_epochs=200,
         ),
     ]
 
@@ -165,7 +153,7 @@ def plot() -> None:
         saved_ = torch.load(LOAD_PATH)
         lightning_module.load_state_dict(saved_["state_dict"])
 
-    for name in ["K", "V", "Q"]:
+    for name in ["Q", "K", "V"]:
         weight = lightning_module.get_parameter(
             f"model.decoder.enc_layers.0.causal_self_attention.W_{name}"
         ).detach().numpy()

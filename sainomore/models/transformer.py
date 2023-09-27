@@ -144,7 +144,10 @@ class DecoderOnlyTransformer(nn.Module):
         )
         self.pos_embedding = PositionalEmbedding(config)
         self.decoder = Decoder(config)
-        self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
+        self.unembedding = nn.Linear(
+            config.d_hidden, config.output_vocab_size,
+            bias=config.bias,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)

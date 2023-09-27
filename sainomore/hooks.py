@@ -39,11 +39,15 @@ class Hook(nn.Module):
         self._cache_bwd = input[0].detach()
 
     @property
-    def fwd(self) -> Optional[torch.Tensor]:
+    def fwd(self) -> torch.Tensor:
+        if self._cache_fwd is None:
+            raise ValueError("Did not save forward pass of Hook")
         return self._cache_fwd
 
     @property
-    def bwd(self) -> Optional[torch.Tensor]:
+    def bwd(self) -> torch.Tensor:
+        if self._cache_bwd is None:
+            raise ValueError("Did not save backward pass of Hook")
         return self._cache_bwd
 
     def release(self) -> None:

@@ -135,7 +135,10 @@ class CosDecoderOnlyTransformer(nn.Module):
         self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
         self.pos_embedding = PositionalEmbedding(config)
         self.decoder = CosDecoder(config)
-        self.unembedding = nn.Linear(config.d_hidden, config.output_vocab_size)
+        self.unembedding = nn.Linear(
+            config.d_hidden, config.output_vocab_size,
+            bias=config.bias,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, V) -> (B, O, T)
