@@ -94,7 +94,7 @@ class HookHistory(Callback):
         forward: bool = True,
         backward: bool = False,
         each_n_epochs: int = 1,
-        transform: Optional[Callable[[np.ndarray], Any]] = None,
+        transform: Optional[Callable[[list[list[np.ndarray]]], Any]] = None,
         save_path: Optional[str] = None,
     ) -> None:
         super().__init__()
@@ -133,8 +133,8 @@ class HookHistory(Callback):
             return
 
         self._hooks.attach_all(forward=self._forward, backward=self._backward)
-        data_fwd: list[list] = []
-        data_bwd: list[list] = []
+        data_fwd: list[list[np.ndarray]] = []
+        data_bwd: list[list[np.ndarray]] = []
         columns = ["sample.x", "sample.y"] + self._hook_names
 
         for bid, batch in enumerate(self._data):
@@ -151,13 +151,14 @@ class HookHistory(Callback):
                 metrics["loss"].backward()  # type: ignore
             for hook_name in self._hook_names:
                 if self._forward:
-                    data_fwd[-1].append(self._transform(
-                        self._hooks.get(hook_name).fwd.numpy()  # type: ignore
-                    ))
+                    data_fwd[-1].append(self._hooks.get(hook_name).fwd.numpy())
                 if self._backward:
-                    data_bwd[-1].append(self._transform(
-                        self._hooks.get(hook_name).bwd.numpy()  # type: ignore
-                    ))
+                    data_bwd[-1].append(self._hooks.get(hook_name).bwd.numpy())
+
+        if self._forward:
+            data_fwd = self._transform(data_fwd)
+        if self._backward:
+            data_bwd = self._transform(data_bwd)
 
         for logger in trainer.loggers:
             if isinstance(logger, WandbLogger):

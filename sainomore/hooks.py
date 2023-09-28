@@ -50,6 +50,9 @@ class Hook(nn.Module):
             raise ValueError("Did not save backward pass of Hook")
         return self._cache_bwd
 
+    def is_attached(self) -> bool:
+        return len(self._forward_hooks) > 0 or len(self._backward_hooks) > 0
+
     def release(self) -> None:
         if self._handle_fwd is not None:
             self._handle_fwd.remove()

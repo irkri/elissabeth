@@ -1,14 +1,14 @@
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
-from sainomore.models import (Elissabeth, ElissabethConfig, ModelConfig,
-                              SAINoMoreModule)
+from sainomore.models import Elissabeth, ElissabethConfig, SAINoMoreModule
 
 config = {
     "n_samples": 1_000,
-    "context_length": 50,
+    "context_length": 10,
     "d_hidden": 4,
 
     "n_layers": 10,
@@ -26,14 +26,14 @@ def build_model(
         n_layers=config["n_layers"],
         iss_length=config["iss_length"],
         d_hidden=config["d_hidden"],
-        separate_qk=True,
+        single_query_key=False,
         normalize_iss=normalize_iss,
         normalize_layers=normalize_layers,
     )
     model = Elissabeth(model_config)
 
-    torch.nn.init.uniform_(model.embedding.weight)
-    torch.nn.init.uniform_(model.unembedding.weight)
+    torch.nn.init.normal_(model.embedding.weight)
+    torch.nn.init.normal_(model.unembedding.weight)
 
     for l in range(config["n_layers"]):
         for i in range(config["iss_length"]):
@@ -50,7 +50,7 @@ def calculate_norm():
         (config["n_samples"], config["context_length"]),
     )
 
-    norms = np.zeros((4, config["n_layers"], config["iss_length"]+1))
+    norms = np.zeros((4, config["n_layers"], config["iss_length"]))
 
     c = 0
     for norm_layers in [False, True]:
@@ -69,9 +69,6 @@ def calculate_norm():
                     norms[c, l, i] = np.mean(np.linalg.norm(
                         model.get_hook(f"layers.{l}", f"iss.{i}").fwd, axis=2,
                     ), axis=0)[-1]
-                norms[c, l, -1] = np.mean(np.linalg.norm(
-                    model.get_hook(f"layers.{l}", "iss").fwd, axis=2,
-                ), axis=0)[-1]
             c += 1
 
             model.release_all_hooks()
@@ -87,23 +84,23 @@ def calculate_norm():
     ax.tick_params(axis='x', which='minor', labelsize=0)
 
     ax.set_xticks(
-        [i*(config["iss_length"]+1) for i in range(0, config["n_layers"]+1)]
+        [i*config["iss_length"] for i in range(0, config["n_layers"]+1)]
     )
     ax.set_xticks(
-        list(range((config["iss_length"]+1)*config["n_layers"])),
+        list(range(config["iss_length"]*config["n_layers"])),
         minor=True,
     )
     ax.set_xticklabels(
         [f"Layer {i}" for i in range(config["n_layers"]+1)]
     )
     ax.vlines(
-        [i*(config["iss_length"]+1) for i in range(config["n_layers"]+1)],
+        [i*config["iss_length"] for i in range(config["n_layers"]+1)],
         np.min(norms), np.max(norms),
         colors="black",  # type: ignore
         linestyles="dashed",
     )
     ax.set_title(
-        "Norm of propagated uniform distributed input in Elissabeth\n"
+        "Norm of propagated normal distributed input in Elissabeth\n"
         f"Samples: {config['n_samples']} | "
         f"Context length: {config['context_length']} | "
         f"d_hidden: {config['d_hidden']}"
@@ -112,7 +109,11 @@ def calculate_norm():
     ax.set_yscale("log")
 
     fig.tight_layout()
-    plt.savefig("norms.pdf", bbox_inches="tight", facecolor=(0, 0, 0, 0))
+    plt.savefig(
+        os.path.join(os.path.dirname(__file__), "norms.pdf"),
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
     plt.show()
 
 

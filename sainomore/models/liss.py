@@ -16,10 +16,12 @@ class ElissabethConfig(ModelConfig):
     positional_encoding: bool = False
     normalize_layers: bool = True
     normalize_iss: bool = False
-    share_qk: bool = False
-    share_v: bool = False
 
-    separate_qk: bool = True
+    share_queries: bool = False
+    share_keys: bool = False
+    share_values: bool = False
+    single_query_key: bool = False
+
     iss_length: int = 2
 
 
@@ -35,26 +37,27 @@ class LISS(HookedModule):
                 "which probably leads to unsuccessful training",
                 RuntimeWarning,
             )
-        self.share_qk = config.share_qk
-        self.share_v = config.share_v
+        self.share_queries = config.share_queries
+        self.share_keys = config.share_keys
+        self.share_values = config.share_values
 
         self.W_Q = nn.Parameter(
             torch.empty((
-                config.iss_length if not self.share_qk else 1,
+                config.iss_length if not self.share_queries else 1,
                 config.d_hidden,
-                config.d_head if config.separate_qk else 1,
+                1 if config.single_query_key else config.d_head,
             ))
         )
         self.W_K = nn.Parameter(
             torch.empty((
-                config.iss_length if not self.share_qk else 1,
+                config.iss_length if not self.share_keys else 1,
                 config.d_hidden,
-                config.d_head if config.separate_qk else 1,
+                1 if config.single_query_key else config.d_head,
             ))
         )
         self.W_V = nn.Parameter(
             torch.empty((
-                config.iss_length if not self.share_v else 1,
+                config.iss_length if not self.share_values else 1,
                 config.d_hidden,
                 config.d_head,
             ))
@@ -76,7 +79,7 @@ class LISS(HookedModule):
 
         self.length = config.iss_length
 
-        self.hooks = HookCollection("Q", "K", "V", "iss")
+        self.hooks = HookCollection("Q", "K", "V")
         self.hooks.add_hooks([f"iss.{i}" for i in range(self.length)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -84,29 +87,32 @@ class LISS(HookedModule):
         k = self.hooks("K", torch.einsum('btd,ldh->btlh', x, self.W_K))
         V = self.hooks("V", torch.einsum('btd,ldh->btlh', x, self.W_V))
 
-        result = self.hooks("iss.0",
-            torch.cumsum(torch.exp(-k[:, :, 0, :]) * V[:, :, 0, :], dim=1),
-        )
+        result = torch.cumsum(torch.exp(-k[:, :, 0, :]) * V[:, :, 0, :], dim=1)
 
         for l in range(1, self.length):
+            if self.hooks.get(f"iss.{l-1}").is_attached():
+                self.hooks(f"iss.{l-1}",
+                    torch.exp(q[:, :, (0 if self.share_queries else l-1), :])
+                    * result,
+                )
             result = nn.functional.pad(
                 torch.roll(result, 1, 1)[:, 1:, :],
                 (0, 0, 1, 0),
             )
             if self.normalize:
                 result = self.layernorms[l-1](result)
-            result = self.hooks(f"iss.{l}", torch.cumsum(
-                torch.exp(q[:, :, (0 if self.share_qk else l-1), :]
-                          - k[:, :, (0 if self.share_qk else l), :])
-                    * V[:, :, (0 if self.share_v else l), :]
+            result = torch.cumsum(
+                torch.exp(q[:, :, (0 if self.share_queries else l-1), :]
+                          - k[:, :, (0 if self.share_keys else l), :])
+                    * V[:, :, (0 if self.share_values else l), :]
                     * result,
-                dim=1)
+                dim=1,
             )
 
         if self.normalize:
             result = self.layernorms[self.length-1](result)
-        result = self.hooks("iss",
-            torch.exp(q[:, :, (0 if self.share_qk else self.length-1), :])
+        result = self.hooks(f"iss.{self.length-1}",
+            torch.exp(q[:, :, (0 if self.share_queries else self.length-1), :])
             * result,
         )
         result = torch.einsum("bth,hd->btd", result, self.W_O)

@@ -57,7 +57,7 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
         iss_length=5,
         d_hidden=128,
         d_head=128,
-        separate_qk=True,
+        single_query_key=False,
         normalize_layers=True,
         normalize_iss=True,
     )

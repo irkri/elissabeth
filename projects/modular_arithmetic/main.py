@@ -89,7 +89,6 @@ def build_model() -> tuple[L.LightningModule, ModelConfig]:
 
 def testcase() -> None:
     lightning_module, model_config = build_model()
-    model: torch.nn.Module = lightning_module.model
 
     x, y = modular_arithmetic(config["P"])
 
@@ -122,8 +121,8 @@ def testcase() -> None:
         print(f"{i}, {torch.norm(model.liss.hooks.get(f'iss.{i}').bwd, dim=2)=}")
 
 
-def hook_transform(x: np.ndarray) -> np.ndarray:
-    return x[0, -1, :]
+def hook_transform(x: list[list[np.ndarray]]) -> list[list[np.ndarray]]:
+    return [[z[0, -1, :] for z in y] for y in x]
 
 
 def train() -> None:
