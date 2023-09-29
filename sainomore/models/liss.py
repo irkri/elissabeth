@@ -66,21 +66,18 @@ class LISS(HookedModule):
             torch.empty((config.d_head, config.d_hidden))
         )
 
-        self.normalize = config.normalize_iss
-        if self.normalize:
-            self.layernorms = nn.ModuleList([
-                nn.LayerNorm(config.d_head) for _ in range(config.iss_length)
-            ])
 
         torch.nn.init.xavier_uniform_(self.W_Q)
         torch.nn.init.xavier_uniform_(self.W_K)
         torch.nn.init.xavier_uniform_(self.W_V)
         torch.nn.init.xavier_uniform_(self.W_O)
 
+        self.normalize = config.normalize_iss
         self.length = config.iss_length
 
         self.hooks = HookCollection("Q", "K", "V")
         self.hooks.add_hooks([f"iss.{i}" for i in range(self.length)])
+        self.hooks.add_hooks([f"weighting.{i}" for i in range(self.length)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         q = self.hooks("Q", torch.einsum('btd,ldh->btlh', x, self.W_Q))
@@ -89,18 +86,32 @@ class LISS(HookedModule):
 
         result = torch.cumsum(torch.exp(-k[:, :, 0, :]) * V[:, :, 0, :], dim=1)
 
+        denom = 1 if not self.normalize else (
+            torch.arange(1, result.size(1)+1).reshape(1, result.size(1), 1)
+        )
+
         for l in range(1, self.length):
+            if self.normalize:
+                result = result / denom
             if self.hooks.get(f"iss.{l-1}").is_attached():
                 self.hooks(f"iss.{l-1}",
                     torch.exp(q[:, :, (0 if self.share_queries else l-1), :])
                     * result,
                 )
+            if self.hooks.get(f"weighting.{l-1}").is_attached():
+                self.hooks(f"weighting.{l-1}",
+                    torch.exp(
+                        q[:, :, (0 if self.share_queries else l-1), :].repeat(
+                            1, q.size(1), 1, 1,
+                        ) - k[:, :, (0 if self.share_keys else l-1), :].repeat(
+                            1, k.size(1), 1, 1,
+                        ).transpose(1, 2)
+                    )
+                )
             result = nn.functional.pad(
                 torch.roll(result, 1, 1)[:, 1:, :],
                 (0, 0, 1, 0),
             )
-            if self.normalize:
-                result = self.layernorms[l-1](result)
             result = torch.cumsum(
                 torch.exp(q[:, :, (0 if self.share_queries else l-1), :]
                           - k[:, :, (0 if self.share_keys else l), :])
@@ -109,8 +120,19 @@ class LISS(HookedModule):
                 dim=1,
             )
 
+        if self.hooks.get(f"weighting.{self.length-1}").is_attached():
+            self.hooks(f"weighting.{self.length-1}",
+                torch.exp(
+                    q[:, :,
+                      (0 if self.share_queries else self.length-1),
+                      :].repeat(1, q.size(1), 1, 1)
+                    - k[:, :,
+                        (0 if self.share_keys else self.length-1),
+                        :].repeat(1, k.size(1), 1, 1).transpose(1, 2)
+                )
+            )
         if self.normalize:
-            result = self.layernorms[self.length-1](result)
+            result = result / denom
         result = self.hooks(f"iss.{self.length-1}",
             torch.exp(q[:, :, (0 if self.share_queries else self.length-1), :])
             * result,
@@ -160,11 +182,10 @@ class Elissabeth(SAINoMoreModule):
             x = self.pos_embedding(x)
 
         for i in range(len(self.layers)):
+            y = x
             if self.normalize:
-                x = self.layernorms[i](x)
-            x = x + self.layers[i](x)
+                y = self.layernorms[i](x)
+            x = x + self.layers[i](y)
 
-        if self.normalize:
-            x = self.layernorms[len(self.layers)](x)
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)

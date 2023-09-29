@@ -1,4 +1,10 @@
-__all__ = ["modular_arithmetic", "gridworld", "imitate_mha"]
+__all__ = [
+    "modular_arithmetic",
+    "gridworld",
+    "imitate_mha",
+    "streaks",
+    "numberville",
+]
 
 import itertools
 import os
@@ -115,3 +121,45 @@ def imitate_mha(
     Y, _ = mha(X, X, X)
     Y = Y.detach()
     return X, Y
+
+
+def streaks(
+    n_samples: int,
+    length: int,
+    signal_length: int = 10,
+    signal_start: int = 10,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """A signal of consecutive ones with given length is hidden in a
+    stream of zeros and ones. The placement of this signal is
+    controllable. Predict if the signal is present in the current input.
+    """
+    x = torch.randint(2, size=(n_samples, length+1), dtype=torch.int64)
+    z = torch.randint(2, size=(n_samples, ), dtype=torch.int64)
+    x[z == 1, signal_start:signal_start+signal_length] = 1
+    y = x.detach().clone()
+    x[:, -1] = 0
+    y[:, -1] = z
+    return x, y
+
+
+def numberville(
+    n_samples: int,
+    length: int,
+    start: tuple[int, int],
+    spacing: int = 1,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Why is 6 afraid of 7?
+
+    A dataset of sequences of digits 0-9. Classify if the subsequence
+    ``789`` exists. A given spacing fills the spaces in between these
+    numbers with random digits.
+    """
+    x = torch.randint(10, size=(n_samples, length), dtype=torch.int64)
+    y = torch.randint(2, size=(n_samples, ), dtype=torch.int64)
+    for i in range(n_samples):
+        if y[i] == 1:
+            s = np.random.randint(start[0], start[1])
+            x[i, s] = 7
+            x[i, s+spacing] = 8
+            x[i, s+2*spacing] = 9
+    return x, y
