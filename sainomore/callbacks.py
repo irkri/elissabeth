@@ -232,6 +232,7 @@ class ElissabethWeighting(Callback):
         pl_module: L.LightningModule,
     ) -> None:
         self._epoch = -1
+        self._data = self._data.to(pl_module.device)
 
     def on_train_epoch_end(
         self,

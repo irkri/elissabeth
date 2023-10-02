@@ -23,13 +23,13 @@ LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 1000,
+    "n_samples": 5000,
     "context_length": 20,
     "characters": 5,
 
     "lr": 1e-3,
     "weight_decay": 1e-4,
-    "epochs": 201,
+    "epochs": 501,
 
     "batch_size": 32,
     "val_size": 0.2,
@@ -50,7 +50,7 @@ def build_model() -> tuple[TokenPredictionModule, ElissabethConfig]:
         share_values=False,
         normalize_layers=True,
         normalize_iss=True,
-        positional_encoding=False,
+        positional_encoding=True,
     )
     model = Elissabeth(model_config)
 
@@ -106,7 +106,9 @@ def train() -> None:
         characters=config["characters"],
     )[0]
     np.save(
-        os.path.join(os.path.dirname(__file__), "elissabeth_example.npy"),
+        os.path.join(
+            os.path.dirname(__file__), "data", "elissabeth_example.npy",
+        ),
         example.numpy(),
     )
     callbacks: list[Callback] = [
@@ -120,12 +122,12 @@ def train() -> None:
                 "model.unembedding.weight",
             ),
             reduce_axis=[0, 0, 0, None, None, None],
-            each_n_epochs=50,
+            each_n_epochs=100,
         ),
         ElissabethWeighting(
             example,
-            each_n_epochs=50,
-            save_path=os.path.dirname(__file__),
+            each_n_epochs=100,
+            save_path=os.path.join(os.path.dirname(__file__), "data"),
         ),
     ]
 
@@ -146,19 +148,21 @@ def train() -> None:
 
 def plot() -> None:
     a = np.load(os.path.join(
-            os.path.dirname(__file__), "epoch00200/elissabeth_weighting.npy",
+            os.path.dirname(__file__), "data", "epoch00400",
+            "elissabeth_weighting.npy",
     ))
     ex = np.load(os.path.join(
-            os.path.dirname(__file__), "elissabeth_example.npy",
+            os.path.dirname(__file__), "data", "elissabeth_example.npy",
     ))
     plot_liss_attention_matrix(a, example=ex[0], figsize=(20, 5))
 
-    # plt.savefig(
-    #     os.path.join(os.path.dirname(__file__), "attention_matrix.pdf"),
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
-    plt.show()
+    plt.savefig(
+        os.path.join(os.path.dirname(__file__), "attention_matrix_1.pdf"),
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
+    # plt.show()
+
 
 if __name__ == '__main__':
     plot()

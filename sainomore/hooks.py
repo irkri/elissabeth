@@ -28,7 +28,7 @@ class Hook(nn.Module):
         input: tuple[torch.Tensor, ...],
         output: Any,
     ) -> None:
-        self._cache_fwd = input[0].detach()
+        self._cache_fwd = input[0].detach().cpu()
 
     def hook_bwd(
         self,
@@ -36,7 +36,7 @@ class Hook(nn.Module):
         input: tuple[torch.Tensor, ...] | torch.Tensor,
         output: tuple[torch.Tensor, ...] | torch.Tensor,
     ) -> None:
-        self._cache_bwd = input[0].detach()
+        self._cache_bwd = input[0].detach().cpu()
 
     @property
     def fwd(self) -> torch.Tensor:

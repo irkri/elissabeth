@@ -66,6 +66,11 @@ class LISS(HookedModule):
             torch.empty((config.d_head, config.d_hidden))
         )
 
+        self._denom = nn.Parameter(
+            torch.empty((1, config.context_length, 1)),
+            requires_grad=False,
+        )
+        self._denom[0, :, 0] = torch.arange(1, config.context_length+1)
 
         torch.nn.init.xavier_uniform_(self.W_Q)
         torch.nn.init.xavier_uniform_(self.W_K)
@@ -86,13 +91,9 @@ class LISS(HookedModule):
 
         result = torch.cumsum(torch.exp(-k[:, :, 0, :]) * V[:, :, 0, :], dim=1)
 
-        denom = 1 if not self.normalize else (
-            torch.arange(1, result.size(1)+1).reshape(1, result.size(1), 1)
-        )
-
         for l in range(1, self.length):
             if self.normalize:
-                result = result / denom
+                result = result / self._denom
             if self.hooks.get(f"iss.{l-1}").is_attached():
                 self.hooks(f"iss.{l-1}",
                     torch.exp(q[:, :, (0 if self.share_queries else l-1), :])
@@ -132,7 +133,7 @@ class LISS(HookedModule):
                 )
             )
         if self.normalize:
-            result = result / denom
+            result = result / self._denom
         result = self.hooks(f"iss.{self.length-1}",
             torch.exp(q[:, :, (0 if self.share_queries else self.length-1), :])
             * result,
