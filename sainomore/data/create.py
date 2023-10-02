@@ -4,6 +4,7 @@ __all__ = [
     "imitate_mha",
     "streaks",
     "numberville",
+    "long_lookup"
 ]
 
 import itertools
@@ -155,11 +156,53 @@ def numberville(
     numbers with random digits.
     """
     x = torch.randint(10, size=(n_samples, length), dtype=torch.int64)
-    y = torch.randint(2, size=(n_samples, ), dtype=torch.int64)
+    z = torch.randint(2, size=(n_samples, ), dtype=torch.int64)
     for i in range(n_samples):
-        if y[i] == 1:
+        if z[i] == 1:
             s = np.random.randint(start[0], start[1])
             x[i, s] = 7
             x[i, s+spacing] = 8
             x[i, s+2*spacing] = 9
+    y = x.detach().clone().roll(-1, 1)
+    y[:, -1] = z
     return x, y
+
+
+def long_lookup(
+    n_samples: int,
+    length: int,
+    characters: int = 3,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generates a dataset of characters from an alphabet of given size.
+    The task is to find the first occurence of the last character in the
+    sequence. The answer then is the character right before this first
+    occurence.
+    Examples:
+        "ABADABBCCDAACADDBBDBCAAABD" -> "A"
+        "AABDBABD" -> "B"
+        "BACA" -> "B"
+    """
+    x = torch.randint(
+        characters,
+        size=(n_samples, length),
+        dtype=torch.int64,
+    )
+    y = x.detach().clone().roll(-1, 1)
+    for i in range(n_samples):
+        mark = np.random.randint(characters)
+        indices = torch.where(x[i] == mark)[0]
+        if len(indices) > 0 and indices[0] == 0:
+            x[i, 0] = (mark + 1) % characters
+            indices = indices[1:]
+        if ((len(indices) == 1 and indices[-1] == length-1)
+                or len(indices) == 0):
+            indices = torch.randint(1, length-1, (1, ), dtype=torch.int64)
+        x[i, -1] = mark
+        y[i, -2] = mark
+        x[i, indices[0]] = mark
+        y[i, -1] = x[i, indices[0]-1]
+    return x, y
+
+# def count_letters() -> tuple[torch.Tensor, torch.Tensor]:
+#     """
+#     https://github.com/greentfrapp/attention-primer/tree/master/1_counting-letters"""

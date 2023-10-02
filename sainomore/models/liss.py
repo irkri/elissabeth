@@ -15,7 +15,7 @@ from .transformer import PositionalEmbedding
 class ElissabethConfig(ModelConfig):
     positional_encoding: bool = False
     normalize_layers: bool = True
-    normalize_iss: bool = False
+    normalize_iss: bool = True
 
     share_queries: bool = False
     share_keys: bool = False

@@ -1,59 +1,75 @@
-import torch
-import numpy as np
+from typing import Optional
 
-from matplotlib.axes import Axes
-from matplotlib.figure import Figure
+import numpy as np
 from matplotlib import pyplot as plt
-from .models.liss import Elissabeth, ElissabethConfig
+from matplotlib.figure import Figure
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def plot_liss_attention_matrix(
-    model: Elissabeth,
-    config: ElissabethConfig,
-    x: torch.Tensor,
-    qk_index: int = 0,
-) -> tuple[Figure, Axes]:
-    model.attach_all_hooks()
-    _ = model(x)
-    model.release_all_hooks()
+    matrix: np.ndarray,
+    example: Optional[np.ndarray] = None,
+    cmap_example: str = "Set1",
+    **kwargs,
+) -> tuple[Figure, np.ndarray]:
+    n_layers = matrix.shape[0]
+    iss_length = matrix.shape[1]
 
-    fig, ax = plt.subplots(config.n_layers, config.iss_length+1)
-
-    att_mat = np.empty(
-        (config.n_layers, config.iss_length, x.size(1), x.size(1))
-    )
-    for l in range(config.n_layers):
-        for d in range(config.iss_length):
-            att_mat[l, d] = model.get_hook(
-                f"layers.{l}", f"weighting.{d}",
-            ).fwd[0, :, :, qk_index]
+    fig, ax = plt.subplots(n_layers, iss_length+1, **kwargs)
+    if n_layers == 1:
+        ax = np.array([ax])
 
     content = []
-    for l in range(config.n_layers):
-        max_ = np.max(att_mat[l])
-        min_ = np.min(att_mat[l])
-        for d in range(config.iss_length):
-            ax[l, d].matshow(model.get_hook(
-                f"layers.{l}", f"weighting.{d}",
-            ).fwd[0, :, :, 0], vmin=min_, vmax=max_, cmap="hot")
-            ax[l, d].set_title(f"Layer {l}, IS {d}")
-        content.append(
-            ax[l, config.iss_length].matshow(
-                np.prod(att_mat[l], 0), vmin=min_, vmax=max_, cmap="hot",
+    for l in range(n_layers):
+        max_ = np.max(matrix[l])
+        min_ = np.min(matrix[l])
+        for d in range(iss_length):
+            ax[l, d].matshow(matrix[l, d], vmin=min_, vmax=max_, cmap="hot")
+            ax[l, d].tick_params(
+                top=False, left=False, bottom=False, right=False,
+                labeltop=False, labelleft=False, labelbottom=False,
+                labelright=False,
             )
+            if l == 0:
+                ax[l, d].set_title(f"Length {d+1}")
+        content.append(ax[l, iss_length].matshow(
+                np.prod(matrix[l], 0), vmin=min_, vmax=max_, cmap="hot",
+        ))
+        ax[l, iss_length].set_title("Product")
+        ax[l, iss_length].tick_params(
+            top=False, left=False, bottom=False, right=False,
+            labeltop=False, labelleft=False, labelbottom=False,
+            labelright=False,
         )
-        ax[l, config.iss_length].set_title(f"Product of Layer {l}")
 
-    axis_1 = fig.add_subplot(config.n_layers, config.iss_length+2, 2)
-    axis_2 = fig.add_subplot(config.n_layers, config.iss_length+2, config.iss_length+2)
-    axis_1.matshow(x.T.repeat(1, 5), cmap="gray")
-    axis_1.set_title("input")
-    axis_1.xaxis.set_visible(False)
-    axis_2.matshow(x.T.repeat(1, 5), cmap="gray")
-    axis_2.set_title("input")
-    axis_2.xaxis.set_visible(False)
+    for l in range(n_layers):
+        for d in range(iss_length+1):
+            divider = make_axes_locatable(ax[l, d])
+            axc = divider.append_axes("right", size="5%", pad=0.1)
+            if example is not None:
+                axb = divider.append_axes(
+                    "bottom", size="6%", pad=0.05, sharex=ax[l, d],
+                )
+                axl = divider.append_axes(
+                    "left", size="6%", pad=0.05, sharey=ax[l, d],
+                )
+                axb.matshow(np.expand_dims(example, 0), cmap=cmap_example)
+                axb.tick_params(
+                    top=False, left=False, bottom=False, right=False,
+                    labeltop=False, labelleft=False, labelbottom=False,
+                    labelright=False,
+                )
+                axl.matshow(np.expand_dims(example, 1), cmap=cmap_example)
+                axl.tick_params(
+                    top=False, left=False, bottom=False, right=False,
+                    labeltop=False, labelleft=False, labelbottom=False,
+                    labelright=False,
+                )
+            if d == iss_length:
+                fig.colorbar(content[l], cax=axc)
+            else:
+                axc.remove()
+
     fig.tight_layout()
-    fig.colorbar(content[0])
-    fig.colorbar(content[1])
 
     return fig, ax

@@ -5,12 +5,15 @@ from typing import Any, Callable, Optional, Sequence
 
 import lightning.pytorch as L
 import numpy as np
+import torch
+import wandb
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
 from torch.utils.data import DataLoader
 
 from .models.base import HookedModule
+from .models.liss import Elissabeth
 
 
 class GeneralConfigCallback(Callback):
@@ -105,7 +108,7 @@ class HookHistory(Callback):
         self._backward = backward
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
-        self._transform = transform if transform is not None else lambda x: x
+        self._transform = transform
         self._save_path = save_path
 
     def on_train_start(
@@ -155,9 +158,9 @@ class HookHistory(Callback):
                 if self._backward:
                     data_bwd[-1].append(self._hooks.get(hook_name).bwd.numpy())
 
-        if self._forward:
+        if self._forward and self._transform is not None:
             data_fwd = self._transform(data_fwd)
-        if self._backward:
+        if self._backward and self._transform is not None:
             data_bwd = self._transform(data_bwd)
 
         for logger in trainer.loggers:
@@ -203,3 +206,81 @@ class HookHistory(Callback):
                         data_bwd[s][i],
                     )
         self._hooks.release_all()
+
+
+class ElissabethWeighting(Callback):
+
+    def __init__(
+        self,
+        x: torch.Tensor,
+        qk_index: int = 0,
+        each_n_epochs: int = 1,
+        save_path: Optional[str] = None,
+        use_wandb: bool = False,
+    ) -> None:
+        super().__init__()
+        self._data = x
+        self._qk_index = qk_index
+        self._each_n_epochs = each_n_epochs
+        self._epoch = -1
+        self._save_path = save_path
+        self._wandb = use_wandb
+
+    def on_train_start(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch = -1
+
+    def on_train_epoch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch += 1
+        if self._epoch % self._each_n_epochs != 0:
+            return
+
+        model: Elissabeth = pl_module.model  # type: ignore
+
+        model.attach_all_hooks()
+        model(self._data)
+        model.release_all_hooks()
+
+        n_layers = len(model.layers)
+        iss_length: int = model.layers[0].length  # type: ignore
+        att_mat = np.empty(
+            (n_layers, iss_length, self._data.size(1), self._data.size(1))
+        )
+        for l in range(n_layers):
+            for d in range(iss_length):
+                att_mat[l, d] = model.get_hook(
+                    f"layers.{l}", f"weighting.{d}",
+                ).fwd[0, :, :, self._qk_index]
+
+        if self._wandb:
+            for logger in trainer.loggers:
+                columns = [
+                    f"Length {i}" for i in range(1, iss_length+1)
+                ] + ["Product"]
+                data = [
+                    ([wandb.Image(att_mat[l, d]) for d in range(iss_length)]
+                    +[wandb.Image(np.prod(att_mat[l], axis=0))])
+                    for l in range(n_layers)
+                ]
+                if isinstance(logger, WandbLogger):
+                    logger.log_table(
+                        "hooks/Elissabeth/weighting",
+                        columns=columns,
+                        data=data,
+                        step=self._epoch,
+                    )
+
+        if self._save_path is not None:
+            path = os.path.join(
+                self._save_path,
+                f"epoch{self._epoch:05}",
+            )
+            os.makedirs(path, exist_ok=True)
+            np.save(os.path.join(path, "elissabeth_weighting.npy"), att_mat)
