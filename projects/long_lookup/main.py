@@ -14,7 +14,9 @@ from sainomore.callbacks import (ElissabethWeighting, GeneralConfigCallback,
 from sainomore.data import long_lookup
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
-from sainomore.models import Elissabeth, ElissabethConfig, ModelConfig
+from sainomore.models import (DecoderOnlyTransformer,
+                              DecoderOnlyTransformerConfig, Elissabeth,
+                              ElissabethConfig, ModelConfig)
 from sainomore.tools import plot_liss_attention_matrix
 
 USE_WANDB: bool = True
@@ -37,6 +39,16 @@ config = {
 
 
 def build_model() -> tuple[TokenPredictionModule, ElissabethConfig]:
+    # model_config = DecoderOnlyTransformerConfig(
+    #     context_length=config["context_length"],
+    #     input_vocab_size=config["characters"],
+    #     n_layers=1,
+    #     n_heads=4,
+    #     d_hidden=32,
+    #     d_head=32,
+    # )
+    # model = DecoderOnlyTransformer(model_config)
+
     model_config = ElissabethConfig(
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
@@ -44,7 +56,7 @@ def build_model() -> tuple[TokenPredictionModule, ElissabethConfig]:
         iss_length=5,
         d_hidden=32,
         d_head=32,
-        single_query_key=True,
+        single_query_key=False,
         share_queries=False,
         share_keys=False,
         share_values=False,
@@ -164,5 +176,28 @@ def plot() -> None:
     # plt.show()
 
 
+def test():
+    data = long_lookup(
+        1,
+        length=config["context_length"],
+        characters=config["characters"],
+    )
+    lightning_module, model_config = build_model()
+
+    if LOAD_PATH is not None:
+        saved_ = torch.load(LOAD_PATH)
+        lightning_module.load_state_dict(saved_["state_dict"])
+
+    lightning_module.model.attach_all_hooks()
+    lightning_module.model(data[0])
+
+    plt.matshow(
+        lightning_module.model.get_hook(
+            "layers.0", "weighting.0"
+        ).fwd[0, :, :, 0]
+    )
+    plt.show()
+
+
 if __name__ == '__main__':
-    plot()
+    train()

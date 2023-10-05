@@ -48,7 +48,7 @@ def build_model(
 
 def calculate_norm():
     norms = np.zeros((2, 2, 4, config["n_layers"], config["iss_length"]))
-    initializers = [torch.nn.init.uniform_, torch.nn.init.normal_]
+    initializers = [torch.nn.init.uniform_, torch.nn.init.normal_, torch.nn.init.xavier_normal_]
     context_lengths = [10, 1000]
 
     for il, context_length in enumerate(context_lengths):
@@ -138,28 +138,35 @@ def calculate_norm():
 
 
 def testcase():
-    data = torch.randint(0, 1, (1, 10))
+    data = torch.randint(0, 1, (1, 100))
 
     model, model_config = build_model(
         torch.nn.init.normal_,
         100,
-        normalize_layers=False,
+        normalize_layers=True,
         normalize_iss=True,
     )
 
-    model.attach_all_hooks()
+    model.attach_all_hooks(backward=True)
 
     output = model(data)
+    torch.nn.L1Loss()(output, torch.randint(0, 1, (1, 1, 100))).backward()
 
+    # for l in range(model_config.n_layers):
+    #     for i in range(model_config.iss_length):
+    #         print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
+    #             model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
+    #             axis=2,
+    #         ), axis=0)[-1])
     for l in range(model_config.n_layers):
-        for i in range(model_config.iss_length):
-            print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
-                model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
-                axis=2,
-            ), axis=0)[-1])
+        print("Q", l, np.linalg.norm(model.get_hook(f"layers.{l}", f"Q").bwd))
+        print("V", l, np.linalg.norm(model.get_hook(f"layers.{l}", f"V").bwd))
+
+    # plt.matshow(model.get_hook("layers.0", "weighting.0").fwd[0, :, :, 0])
+    # plt.show()
 
     model.release_all_hooks()
 
 if __name__ == "__main__":
-    calculate_norm()
-    # testcase()
+    # calculate_norm()
+    testcase()
