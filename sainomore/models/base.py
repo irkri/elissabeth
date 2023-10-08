@@ -15,21 +15,14 @@ class ModelConfig:
     output_vocab_size: int = None  #type: ignore
 
     n_layers: int = 4
-    n_heads: int = 4
-
     d_hidden: int = 64
-    d_head: int = None  # type: ignore
-    ffn_units: int = None  # type: ignore
 
+    layer_norm: bool = True
     bias: bool = False
 
     def __post_init__(self) -> None:
         if self.output_vocab_size is None:
             self.output_vocab_size = self.input_vocab_size
-        if self.d_head is None:
-            self.d_head = self.d_hidden
-        if self.ffn_units is None:
-            self.ffn_units = self.d_hidden
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -38,6 +31,10 @@ class ModelConfig:
 class HookedModule(nn.Module):
 
     hooks: HookCollection
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        self.config = config
 
     def release_all_hooks(self) -> None:
         self.hooks.release_all()
@@ -51,6 +48,10 @@ class HookedModule(nn.Module):
 
 
 class SAINoMoreModule(nn.Module):
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        self.config = config
 
     def attach_all_hooks(
         self, *,

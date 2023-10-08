@@ -5,12 +5,21 @@ import torch
 from torch import nn
 
 from ..hooks import HookCollection
-from .base import HookedModule, ModelConfig
+from .base import HookedModule, ModelConfig, SAINoMoreModule
 
 
 @dataclass
 class DecoderOnlyTransformerConfig(ModelConfig):
-    normalize: bool = True
+    n_heads: int = 4
+    d_head: int = None  # type: ignore
+    ffn_units: int = None  # type: ignore
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.d_head is None:
+            self.d_head = self.d_hidden
+        if self.ffn_units is None:
+            self.ffn_units = self.d_hidden
 
 
 class PositionalEmbedding(nn.Module):
@@ -29,8 +38,10 @@ class PositionalEmbedding(nn.Module):
 
 class CausalMultiHeadAttention(HookedModule):
 
+    config: DecoderOnlyTransformerConfig
+
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
-        super().__init__()
+        super().__init__(config)
         self.d_head = config.d_head
 
         self.W_K = nn.Parameter(
@@ -51,9 +62,12 @@ class CausalMultiHeadAttention(HookedModule):
         torch.nn.init.xavier_uniform_(self.W_V)
         torch.nn.init.xavier_uniform_(self.W_O)
 
-        self.mask = torch.tril(
-            torch.ones(1, config.context_length, config.context_length)
-        ).bool()
+        self.mask = nn.Parameter(
+            torch.tril(
+                torch.ones(1, config.context_length, config.context_length)
+            ).bool(),
+            requires_grad=False,
+        )
 
         self.hooks = HookCollection("Q", "K", "V", "A_pre", "A", "heads")
 
@@ -65,8 +79,6 @@ class CausalMultiHeadAttention(HookedModule):
             "A_pre",
             torch.einsum('biph,biqh->biqp', K, Q),
         )
-        if self.mask.get_device() != x.get_device():
-            self.mask = self.mask.to(x.get_device())  # type: ignore
         attn_scores_masked = (
             attn_scores_pre - 1e10 * (~self.mask).float()
         )
@@ -100,11 +112,11 @@ class MLP(nn.Module):
         return self.seq(x)
 
 
-class DecoderLayer(nn.Module):
+class DecoderLayer(SAINoMoreModule):
 
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
-        super().__init__()
-        self._normalize = config.normalize
+        super().__init__(config)
+        self._normalize = config.layer_norm
         self.causal_self_attention = CausalMultiHeadAttention(config)
         self.mlp = MLP(config)
         if self._normalize:
@@ -120,30 +132,17 @@ class DecoderLayer(nn.Module):
         return x, att_matrix
 
 
-class Decoder(nn.Module):
-
+class DecoderOnlyTransformer(SAINoMoreModule):
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
-        super().__init__()
-
-        self.layers = nn.ModuleList([
-            DecoderLayer(config)
-            for _ in range(config.n_layers)
-        ])
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for i in range(len(self.layers)):
-            x, _ = self.layers[i](x)
-        return x
-
-
-class DecoderOnlyTransformer(nn.Module):
-    def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
-        super().__init__()
+        super().__init__(config)
         self.embedding = nn.Embedding(
             config.input_vocab_size, config.d_hidden
         )
         self.pos_embedding = PositionalEmbedding(config)
-        self.decoder = Decoder(config)
+        self.layers = nn.ModuleList([
+            DecoderLayer(config)
+            for _ in range(config.n_layers)
+        ])
         self.unembedding = nn.Linear(
             config.d_hidden, config.output_vocab_size,
             bias=config.bias,
@@ -152,6 +151,7 @@ class DecoderOnlyTransformer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)
         x = self.pos_embedding(x)
-        x = self.decoder(x)
+        for i in range(len(self.layers)):
+            x, _ = self.layers[i](x)
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)

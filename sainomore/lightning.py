@@ -1,6 +1,6 @@
 __all__ = ["TokenPredictionModule"]
 
-from typing import Optional
+from typing import Any, Optional
 
 import lightning.pytorch as L
 import torch
@@ -96,6 +96,17 @@ class TokenPredictionModule(L.LightningModule):
             metrics.update({"accuracy": accuracy})
 
         return metrics
+
+    def predict_step(
+        self,
+        batch: Any,
+        batch_idx: int = 0,
+        dataloader_idx: int = 0,
+    ) -> Any:
+        output = torch.argmax(self(batch), 1)
+        if self._only_last:
+            return output[:, -1]
+        return output
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(

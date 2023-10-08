@@ -249,8 +249,8 @@ class ElissabethWeighting(Callback):
         model(self._data)
         model.release_all_hooks()
 
-        n_layers = len(model.layers)
-        iss_length: int = model.layers[0].length  # type: ignore
+        n_layers = model.config.n_layers
+        iss_length: int = model.config.length_is
         att_mat = np.empty(
             (n_layers, iss_length, self._data.size(1), self._data.size(1))
         )

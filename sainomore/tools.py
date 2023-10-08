@@ -1,15 +1,41 @@
 from typing import Optional
 
 import numpy as np
+import torch
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from .models import Elissabeth
+
+
+def get_liss_attention_matrix(
+    model: Elissabeth,
+    x: torch.Tensor,
+) -> np.ndarray:
+    x = x.to(next(model.parameters()).device)
+    model.attach_all_hooks()
+    model(x)
+    model.release_all_hooks()
+    n_layers = model.config.n_layers
+    iss_length = model.config.length_is
+    att_mat = np.empty(
+        (n_layers, iss_length, model.config.n_is, x.size(1), x.size(1))
+    )
+    for l in range(n_layers):
+        for d in range(iss_length):
+            att_mat[l, d] = model.get_hook(
+                f"layers.{l}", f"weighting.{d}",
+            ).fwd[0, :, :, :].swapaxes(0, 2).swapaxes(1, 2)
+    return att_mat
 
 
 def plot_liss_attention_matrix(
     matrix: np.ndarray,
     example: Optional[np.ndarray] = None,
+    cmap: str = "seismic",
     cmap_example: str = "Set1",
+    causal_mask: bool = True,
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
     n_layers = matrix.shape[0]
@@ -19,12 +45,15 @@ def plot_liss_attention_matrix(
     if n_layers == 1:
         ax = np.array([ax])
 
+    indices = np.tril_indices(matrix.shape[2])
     content = []
     for l in range(n_layers):
         max_ = np.max(matrix[l])
         min_ = np.min(matrix[l])
         for d in range(iss_length):
-            ax[l, d].matshow(matrix[l, d], vmin=min_, vmax=max_, cmap="hot")
+            if causal_mask:
+                matrix[l, d][indices] = np.nan
+            ax[l, d].matshow(matrix[l, d], vmin=min_, vmax=max_, cmap=cmap)
             ax[l, d].tick_params(
                 top=False, left=False, bottom=False, right=False,
                 labeltop=False, labelleft=False, labelbottom=False,
@@ -33,7 +62,7 @@ def plot_liss_attention_matrix(
             if l == 0:
                 ax[l, d].set_title(f"Length {d+1}")
         content.append(ax[l, iss_length].matshow(
-                np.prod(matrix[l], 0), vmin=min_, vmax=max_, cmap="hot",
+                np.prod(matrix[l], 0), vmin=min_, vmax=max_, cmap=cmap,
         ))
         ax[l, iss_length].set_title("Product")
         ax[l, iss_length].tick_params(
