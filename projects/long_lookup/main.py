@@ -26,7 +26,7 @@ LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5000,
+    "n_samples": 1000,
     "context_length": 20,
     "characters": 5,
 
@@ -54,17 +54,17 @@ def build_model() -> TokenPredictionModule:
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
-        length_is=5,
+        length_is=2,
         n_is=64,
-        d_hidden=16,
-        single_query_key=True,
-        share_queries=True,
-        share_keys=True,
-        query_key_weighting=False,
+        d_hidden=config["characters"],
+        weighting="exp",
+        single_query_key=False,
+        share_queries=False,
+        share_keys=False,
         distance_weighting=True,
-        share_values=True,
+        share_values=False,
         normalize_is=True,
-        positional_encoding=False,
+        positional_encoding=True,
     )
     model = Elissabeth(model_config)
 
@@ -116,17 +116,17 @@ def train(only_test: bool = False) -> None:
 
         wandb_logger.watch(lightning_module, log="all")
 
-    example = long_lookup(
-        n_samples=1,
-        length=config["context_length"],
-        characters=config["characters"],
-    )[0]
-    np.save(
-        os.path.join(
-            os.path.dirname(__file__), "data", "elissabeth_example.npy",
-        ),
-        example.numpy(),
-    )
+    # example = long_lookup(
+    #     n_samples=1,
+    #     length=config["context_length"],
+    #     characters=config["characters"],
+    # )[0]
+    # np.save(
+    #     os.path.join(
+    #         os.path.dirname(__file__), "data", "elissabeth_example.npy",
+    #     ),
+    #     example.numpy(),
+    # )
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         # WeightHistory((
@@ -140,11 +140,11 @@ def train(only_test: bool = False) -> None:
         #     reduce_axis=[0, 0, 0, None, None, None],
         #     each_n_epochs=100,
         # ),
-        ElissabethWeighting(
-            example,
-            each_n_epochs=100,
-            save_path=os.path.join(os.path.dirname(__file__), "data"),
-        ),
+        # ElissabethWeighting(
+        #     example,
+        #     each_n_epochs=100,
+        #     save_path=os.path.join(os.path.dirname(__file__), "data"),
+        # ),
     ]
 
     trainer = L.Trainer(

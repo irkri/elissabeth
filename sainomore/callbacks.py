@@ -141,15 +141,18 @@ class HookHistory(Callback):
         columns = ["sample.x", "sample.y"] + self._hook_names
 
         for bid, batch in enumerate(self._data):
+            x, y = batch
+            x = x.to(pl_module.device)
+            y = y.to(pl_module.device)
             if self._forward:
                 data_fwd.append(
-                    [batch[0].detach().numpy(), batch[1].detach().numpy()]
+                    [x.detach().cpu().numpy(), y.detach().cpu().numpy()]
                 )
             if self._backward:
                 data_bwd.append(
-                    [batch[0].detach().numpy(), batch[1].detach().numpy()]
+                    [x.detach().cpu().numpy(), y.detach().cpu().numpy()]
                 )
-            metrics = pl_module.validation_step(batch, bid)
+            metrics = pl_module.validation_step([x, y], bid)
             if self._backward:
                 metrics["loss"].backward()  # type: ignore
             for hook_name in self._hook_names:
