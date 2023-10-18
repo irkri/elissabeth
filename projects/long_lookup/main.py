@@ -26,13 +26,13 @@ LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 1000,
-    "context_length": 20,
+    "n_samples": 5000,
+    "context_length": 100,
     "characters": 5,
 
-    "lr": 1e-3,
+    "lr": 2e-2,
     "weight_decay": 1e-4,
-    "epochs": 501,
+    "epochs": 5001,
 
     "batch_size": 32,
     "val_size": 0.2,
@@ -43,10 +43,12 @@ def build_model() -> TokenPredictionModule:
     # model_config = DecoderOnlyTransformerConfig(
     #     context_length=config["context_length"],
     #     input_vocab_size=config["characters"],
-    #     n_layers=1,
+    #     n_layers=2,
     #     n_heads=4,
-    #     d_hidden=32,
-    #     d_head=32,
+    #     d_hidden=64,
+    #     d_head=16,
+    #     ffn_units=128,
+    #     bias=True,
     # )
     # model = DecoderOnlyTransformer(model_config)
 
@@ -55,18 +57,21 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=64,
+        n_is=32,
         d_hidden=config["characters"],
         weighting="exp",
+        positional_encoding=None,
+        distance_weighting=False,
+        positional_bias=True,
+        positional_bias_values=False,
         single_query_key=False,
         share_queries=False,
         share_keys=False,
-        distance_weighting=True,
         share_values=False,
-        normalize_is=True,
-        positional_encoding=True,
+        normalize_is=False,
     )
     model = Elissabeth(model_config)
+    model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(
         model,
@@ -102,9 +107,9 @@ def train(only_test: bool = False) -> None:
     wandb_logger = None
     if USE_WANDB:
         wandb_logger = WandbLogger(
-            project="Elissabeth",
+            project="Elissabeth 2",
             checkpoint_name=LOAD_PATH,
-            tags=["Elissabeth", "long_lookup"],
+            tags=["transformer", "long_lookup"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -129,17 +134,24 @@ def train(only_test: bool = False) -> None:
     # )
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        # WeightHistory((
-        #         "model.layers.0.W_Q",
-        #         "model.layers.0.W_K",
-        #         "model.layers.0.W_V",
-        #         "model.layers.0.W_O",
-        #         "model.embedding.weight",
-        #         "model.unembedding.weight",
-        #     ),
-        #     reduce_axis=[0, 0, 0, None, None, None],
-        #     each_n_epochs=100,
-        # ),
+        # Progressbar(),
+        WeightHistory((
+                "model.layers.0.W_Q",
+                "model.layers.0.b_Q",
+                "model.layers.0.W_K",
+                "model.layers.0.b_K",
+                "model.layers.0.W_V",
+                # "model.layers.0.b_V",
+                "model.layers.0.W_O",
+                # "model.layers.0.alpha",
+                # "model.layers.0.mu",
+                # "model.layers.0.nu",
+                "model.embedding.weight",
+                "model.unembedding.weight",
+            ),
+            reduce_axis=[0, 0, 0, 0, 0, None, None, None, None, None, None],
+            each_n_epochs=500,
+        ),
         # ElissabethWeighting(
         #     example,
         #     each_n_epochs=100,
@@ -194,15 +206,27 @@ def test():
     if LOAD_PATH is not None:
         saved_ = torch.load(LOAD_PATH)
         lightning_module.load_state_dict(saved_["state_dict"])
-
-    mat = get_liss_attention_matrix(lightning_module.model, x)  # type: ignore
-    y_hat = lightning_module.predict_step(x, 0)
-    print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
-    plot_liss_attention_matrix(
-        mat[:, :, 0, :, :],
-        example=x.numpy()[0],
+    plt.matshow(
+        lightning_module.model.get_parameter("layers.0.mu").detach().numpy()+
+        lightning_module.model.get_parameter("layers.0.nu").detach().numpy(),
+        cmap="seismic",
     )
-    plt.show()
+
+    # mat = get_liss_attention_matrix(lightning_module.model, x)
+    # y_hat = lightning_module.predict_step(x, 0)
+    # print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
+    # plot_liss_attention_matrix(
+    #     mat[:, :, 0, :, :],
+    #     example=x.numpy()[0],
+    #     figsize=(50, 10),
+    #     log_colormap=True,
+    # )
+    plt.savefig(
+        os.path.join(os.path.dirname(__file__), "attention_matrix_1.pdf"),
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
+    # plt.show()
 
 
 if __name__ == '__main__':

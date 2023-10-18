@@ -1,7 +1,7 @@
 __all__ = ["ModelConfig", "HookedModule", "SAINoMoreModule"]
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 from torch import nn
 
@@ -19,6 +19,8 @@ class ModelConfig:
 
     layer_norm: bool = True
     bias: bool = False
+
+    positional_encoding: Literal["learnable", "sinusoidal"] | None = None
 
     def __post_init__(self) -> None:
         if self.output_vocab_size is None:
@@ -88,3 +90,8 @@ class SAINoMoreModule(nn.Module):
                 f"Module name {module_name} does not point to a HookedModule"
             )
         return module.hooks.get(name)
+
+    def set_eye(self, name: str, requires_grad: bool = False) -> None:
+        param = self.get_parameter(name)
+        nn.init.eye_(param)
+        param.requires_grad = requires_grad

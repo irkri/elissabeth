@@ -80,6 +80,7 @@ class TokenPredictionModule(L.LightningModule):
         self.log(
             'validation/loss',
             loss,
+            prog_bar=True,
             on_step=False,
             on_epoch=True,
         )
@@ -90,6 +91,7 @@ class TokenPredictionModule(L.LightningModule):
             self.log(
                 'validation/accuracy',
                 accuracy,
+                prog_bar=True,
                 on_step=False,
                 on_epoch=True,
             )

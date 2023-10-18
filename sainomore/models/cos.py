@@ -6,7 +6,7 @@ from torch import nn
 
 from ..hooks import HookCollection
 from .base import HookedModule
-from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEmbedding
+from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEncoding
 
 
 @dataclass
@@ -18,7 +18,7 @@ class CosDecoderOnlyTransformerConfig(DecoderOnlyTransformerConfig):
 class CosAttention(HookedModule):
 
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
-        super().__init__()
+        super().__init__(config)
         self.W_Q = nn.Parameter(
             torch.empty((config.n_heads, config.d_hidden, 1))
         )
@@ -85,7 +85,7 @@ class CosBlock(nn.Module):
         super().__init__()
         self.cos_attention = CosAttention(config)
         self.mlp = MLP(config)
-        self._normalize = config.normalize
+        self._normalize = config.layer_norm
         if self._normalize:
             self.layer_norm_att = nn.LayerNorm(config.d_hidden)
             self.layer_norm_mlp = nn.LayerNorm(config.d_hidden)
@@ -133,7 +133,7 @@ class CosDecoderOnlyTransformer(nn.Module):
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
         super().__init__()
         self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
-        self.pos_embedding = PositionalEmbedding(config)
+        self.pos_embedding = PositionalEncoding(config)
         self.decoder = CosDecoder(config)
         self.unembedding = nn.Linear(
             config.d_hidden, config.output_vocab_size,

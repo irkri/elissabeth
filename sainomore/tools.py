@@ -2,6 +2,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -36,6 +37,7 @@ def plot_liss_attention_matrix(
     cmap: str = "seismic",
     cmap_example: str = "Set1",
     causal_mask: bool = True,
+    log_colormap: bool = False,
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
     n_layers = matrix.shape[0]
@@ -45,6 +47,8 @@ def plot_liss_attention_matrix(
     if n_layers == 1:
         ax = np.array([ax])
 
+    Norm = LogNorm if log_colormap else Normalize
+
     indices = np.tril_indices(matrix.shape[2])
     content = []
     for l in range(n_layers):
@@ -53,7 +57,11 @@ def plot_liss_attention_matrix(
         for d in range(iss_length):
             if causal_mask:
                 matrix[l, d][indices] = np.nan
-            ax[l, d].matshow(matrix[l, d], vmin=min_, vmax=max_, cmap=cmap)
+            ax[l, d].matshow(
+                matrix[l, d],
+                cmap=cmap,
+                norm=Norm(vmin=min_, vmax=max_),
+            )
             ax[l, d].tick_params(
                 top=False, left=False, bottom=False, right=False,
                 labeltop=False, labelleft=False, labelbottom=False,
@@ -62,7 +70,9 @@ def plot_liss_attention_matrix(
             if l == 0:
                 ax[l, d].set_title(f"Length {d+1}")
         content.append(ax[l, iss_length].matshow(
-                np.prod(matrix[l], 0), vmin=min_, vmax=max_, cmap=cmap,
+                np.prod(matrix[l], 0),
+                cmap=cmap,
+                norm=Norm(vmin=min_, vmax=max_),
         ))
         ax[l, iss_length].set_title("Product")
         ax[l, iss_length].tick_params(
