@@ -170,9 +170,10 @@ class DecoderLayer(SAINoMoreModule):
 class DecoderOnlyTransformer(SAINoMoreModule):
     def __init__(self, config: DecoderOnlyTransformerConfig) -> None:
         super().__init__(config)
-        self.embedding = nn.Embedding(
-            config.input_vocab_size, config.d_hidden
-        )
+        if config.input_type == "token":
+            self.embedding = nn.Embedding(
+                config.input_vocab_size, config.d_hidden
+            )
         if self.config.positional_encoding == "learnable":
             self.pos_enc = LearnablePositionalEmbedding(config)
         elif self.config.positional_encoding == "sinusoidal":
@@ -187,7 +188,8 @@ class DecoderOnlyTransformer(SAINoMoreModule):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.embedding(x)
+        if self.config.input_type == "token":
+            x = self.embedding(x)
         if self.config.positional_encoding is not None:
             x = self.pos_enc(x)
         for i in range(len(self.layers)):

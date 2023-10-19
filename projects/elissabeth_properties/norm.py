@@ -4,116 +4,86 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from sainomore.models import Elissabeth, ElissabethConfig, SAINoMoreModule
+from sainomore.models import Elissabeth, ElissabethConfig
 
 config = {
     "n_samples": 100,
-    "d_hidden": 2,
+    "d_hidden": 5,
 
     "n_layers": 5,
-    "iss_length": 10,
+    "length_is": 10,
 }
 
 
 def build_model(
-    initializer,
     context_length: int,
-    normalize_layers: bool = True,
-    normalize_iss: bool = False,
-) -> tuple[SAINoMoreModule, ElissabethConfig]:
+    layer_norm: bool = True,
+    normalize_is: bool = False,
+) -> Elissabeth:
     model_config = ElissabethConfig(
         context_length=context_length,
-        input_vocab_size=1,
+        input_vocab_size=config["d_hidden"],
         n_layers=config["n_layers"],
-        iss_length=config["iss_length"],
-        d_hidden=config["d_hidden"],
+        length_is=config["length_is"],
+        d_hidden=config["d_hidden"],  # n_is = d_hidden
+        layer_norm=layer_norm,
+        normalize_is=normalize_is,
         single_query_key=False,
-        normalize_iss=normalize_iss,
-        normalize_layers=normalize_layers,
+        input_type="vector",
     )
     model = Elissabeth(model_config)
+    model.set_eye("unembedding.weight")
 
-    initializer(model.embedding.weight)
-    initializer(model.unembedding.weight)
+    # for l in range(config["n_layers"]):
+    #     model.set_eye(f"layers.{l}.W_Q", requires_grad=True)
+    #     model.set_eye(f"layers.{l}.W_K", requires_grad=True)
+    #     model.set_eye(f"layers.{l}.W_V", requires_grad=True)
+    #     model.set_eye(f"layers.{l}.W_O", requires_grad=True)
 
-    for l in range(config["n_layers"]):
-        for i in range(config["iss_length"]):
-            torch.nn.init.eye_(model.layers[l].W_Q[i])
-            torch.nn.init.eye_(model.layers[l].W_K[i])
-            torch.nn.init.eye_(model.layers[l].W_V[i])
-        torch.nn.init.eye_(model.layers[l].W_O)
-
-    return model, model_config
+    return model
 
 
-def calculate_norm():
-    norms = np.zeros((2, 2, 4, config["n_layers"], config["iss_length"]))
-    initializers = [torch.nn.init.uniform_, torch.nn.init.normal_, torch.nn.init.xavier_normal_]
-    context_lengths = [10, 1000]
-
-    for il, context_length in enumerate(context_lengths):
-        data = torch.randint(0, 1, (config["n_samples"], context_length))
-        for k, initializer in enumerate(initializers):
-            c = 0
-            for norm_layers in [False, True]:
-                for norm_iss in [False, True]:
-                    model, model_config = build_model(
-                        initializer,
-                        context_length,
-                        normalize_layers=norm_layers,
-                        normalize_iss=norm_iss,
-                    )
-
-                    model.attach_all_hooks()
-
-                    output = model(data)
-
-                    for l in range(model_config.n_layers):
-                        for i in range(model_config.iss_length):
-                            norms[k, il, c, l, i] = np.mean(np.linalg.norm(
-                                model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
-                                axis=2,
-                            ), axis=0)[-1]
-                    c += 1
-
-                    model.release_all_hooks()
-
+def make_plot(norms, initializers, context_lengths):
     fig, ax = plt.subplots(
         len(initializers), len(context_lengths),
         figsize=(16, 9),
     )
+    if len(initializers) == 1:
+        ax = ax[np.newaxis, :]
+    if len(context_lengths) == 1:
+        ax = ax[:, np.newaxis]
 
     for i in range(len(initializers)):
         for j in range(len(context_lengths)):
             ax[i, j].plot(
-                norms[i, j, 0].flatten(), "-x", label="no normalization",
+                norms[i, j, 0].flatten(), "-x", label="No Normalization",
             )
             ax[i, j].plot(
-                norms[i, j, 1].flatten(), "-x", label="iss norm",
+                norms[i, j, 1].flatten(), "-x", label="ISNorm",
             )
             ax[i, j].plot(
-                norms[i, j, 2].flatten(), "-x", label="layer norm",
+                norms[i, j, 2].flatten(), "-x", label="LayerNorm",
             )
             ax[i, j].plot(
-                norms[i, j, 3].flatten(), "-x", label="layer + iss norm",
+                norms[i, j, 3].flatten(), "-x", label="LayerNorm + ISNorm",
             )
 
             ax[i, j].tick_params(axis='x', which='major', labelsize=12)
             ax[i, j].tick_params(axis='x', which='minor', labelsize=0)
 
             ax[i, j].set_xticks(
-                [l*config["iss_length"]
+                [l*config["length_is"]
                  for l in range(0, config["n_layers"]+1)]
             )
             ax[i, j].set_xticks(
-                list(range(config["iss_length"]*config["n_layers"])),
+                list(range(config["length_is"]*config["n_layers"])),
                 minor=True,
             )
             ax[i, j].set_xticklabels(
                 [f"Layer {l}" for l in range(config["n_layers"]+1)]
             )
             ax[i, j].vlines(
-                [l*config["iss_length"] for l in range(config["n_layers"]+1)],
+                [l*config["length_is"] for l in range(config["n_layers"]+1)],
                 np.min(norms), np.max(norms),
                 colors="black",  # type: ignore
                 linestyles="dashed",
@@ -122,51 +92,128 @@ def calculate_norm():
             ax[i, j].set_title(
                 f"{initializers[i].__name__}, T={context_lengths[j]}"
             )
-    ax[1, 1].legend(loc="best")
+    ax[0, 0].legend(loc="best")
 
-    fig.suptitle(
+    return fig, ax
+
+
+def calculate_norm():
+    initializers = [
+        torch.nn.init.uniform_,
+        torch.nn.init.normal_,
+        # torch.nn.init.xavier_normal_,
+    ]
+    context_lengths = [10, 1000]
+    norms = np.zeros(
+        (len(initializers), len(context_lengths), 4,
+         config["n_layers"], config["length_is"])
+    )
+    norms_grad = np.zeros(
+        (len(initializers), len(context_lengths), 4,
+         config["n_layers"], config["length_is"])
+    )
+
+    for il, context_length in enumerate(context_lengths):
+        data = torch.empty(
+            (config["n_samples"], context_length, config["d_hidden"])
+        )
+        for k, initializer in enumerate(initializers):
+            initializer(data)
+            c = 0
+            for norm_layers in [False, True]:
+                for norm_iss in [False, True]:
+                    model = build_model(
+                        context_length,
+                        layer_norm=norm_layers,
+                        normalize_is=norm_iss,
+                    )
+
+                    model.attach_all_hooks()
+
+                    output = model(data)
+                    loss = torch.nn.L1Loss()(
+                        output,
+                        torch.randn((config["n_samples"], config["d_hidden"],
+                                     context_length)),
+                    )
+                    loss.backward()
+
+                    for l in range(model.config.n_layers):
+                        for i in range(model.config.length_is):
+                            norms[k, il, c, l, i] = np.mean(np.linalg.norm(
+                                model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
+                                axis=2,
+                            ), axis=0)[-1]
+                    for l in range(model.config.n_layers):
+                        norms_grad[k, il, c, l, :] = np.mean(np.linalg.norm(
+                            model.layers[l].W_V.grad.detach(),  # type: ignore
+                            axis=2,
+                        ), axis=1)
+                    c += 1
+
+                    model.release_all_hooks()
+
+    fig1, _ = make_plot(norms, initializers, context_lengths)
+    fig2, _ = make_plot(norms_grad, initializers, context_lengths)
+
+    fig1.suptitle(
         f"Norm of propagated input in Elissabeth\n"
         f"Samples: {config['n_samples']} | d_hidden: {config['d_hidden']}"
     )
-    fig.tight_layout()
-    plt.savefig(
+    fig1.tight_layout()
+    fig1.savefig(
         os.path.join(os.path.dirname(__file__), "norms.pdf"),
         bbox_inches="tight",
         facecolor=(0, 0, 0, 0),
     )
+
+    fig2.suptitle(
+        f"Norm of gradient of W_Q in Elissabeth\n"
+        f"Samples: {config['n_samples']} | d_hidden: {config['d_hidden']}"
+    )
+    fig2.tight_layout()
+    fig2.savefig(
+        os.path.join(os.path.dirname(__file__), "norms_grad.pdf"),
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
+
     plt.show()
 
 
 def testcase():
-    data = torch.randint(0, 1, (1, 100))
+    data = torch.empty((1, 100, config["d_hidden"]))
 
-    model, model_config = build_model(
-        torch.nn.init.normal_,
+    torch.nn.init.normal_(data)
+    model = build_model(
         100,
-        normalize_layers=True,
-        normalize_iss=True,
+        layer_norm=True,
+        normalize_is=True,
     )
 
     model.attach_all_hooks(backward=True)
 
     output = model(data)
-    torch.nn.L1Loss()(output, torch.randint(0, 1, (1, 1, 100))).backward()
+    loss = torch.nn.L1Loss()(output, torch.randint(0, 1, (1, 1, 100)))
+    loss.backward()
 
     # for l in range(model_config.n_layers):
-    #     for i in range(model_config.iss_length):
+    #     for i in range(model_config.length_is):
     #         print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
     #             model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
     #             axis=2,
     #         ), axis=0)[-1])
-    for l in range(model_config.n_layers):
-        print("Q", l, np.linalg.norm(model.get_hook(f"layers.{l}", f"Q").bwd))
-        print("V", l, np.linalg.norm(model.get_hook(f"layers.{l}", f"V").bwd))
+    for l in range(model.config.n_layers):
+        print("THIS", id(model.get_hook(f"layers.{l}", f"Q")))
+        # print("Q", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
+        print("V", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
 
     # plt.matshow(model.get_hook("layers.0", "weighting.0").fwd[0, :, :, 0])
     # plt.show()
 
     model.release_all_hooks()
 
+
 if __name__ == "__main__":
     # calculate_norm()
-    testcase()
+    calculate_norm()

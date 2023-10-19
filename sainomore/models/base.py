@@ -3,6 +3,7 @@ __all__ = ["ModelConfig", "HookedModule", "SAINoMoreModule"]
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+import torch
 from torch import nn
 
 from ..hooks import HookCollection, Hook
@@ -21,6 +22,8 @@ class ModelConfig:
     bias: bool = False
 
     positional_encoding: Literal["learnable", "sinusoidal"] | None = None
+
+    input_type: Literal["token", "vector"] = "token"
 
     def __post_init__(self) -> None:
         if self.output_vocab_size is None:
@@ -93,5 +96,20 @@ class SAINoMoreModule(nn.Module):
 
     def set_eye(self, name: str, requires_grad: bool = False) -> None:
         param = self.get_parameter(name)
-        nn.init.eye_(param)
+        if param.dim() == 2:
+            nn.init.eye_(param)
+        elif param.dim() == 1:
+            raise IndexError("Can't set one dimensional tensor to eye")
+        else:
+            if param.size(-1) != param.size(-2):
+                raise IndexError("Last two dimensions of tensor do not match")
+            SAINoMoreModule._set_eye(param)
         param.requires_grad = requires_grad
+
+    @staticmethod
+    def _set_eye(param: torch.Tensor) -> None:
+        if param.dim() == 2:
+            nn.init.eye_(param)
+        else:
+            for i in range(param.size(0)):
+                SAINoMoreModule._set_eye(param[i])

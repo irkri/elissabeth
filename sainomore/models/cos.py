@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from ..hooks import HookCollection
-from .base import HookedModule
+from .base import HookedModule, SAINoMoreModule
 from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEncoding
 
 
@@ -128,11 +128,14 @@ class CosDecoder(nn.Module):
         return x
 
 
-class CosDecoderOnlyTransformer(nn.Module):
+class CosDecoderOnlyTransformer(SAINoMoreModule):
 
     def __init__(self, config: CosDecoderOnlyTransformerConfig) -> None:
-        super().__init__()
-        self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
+        super().__init__(config)
+        if config.input_type == "token":
+            self.embedding = nn.Embedding(
+                config.input_vocab_size, config.d_hidden
+            )
         self.pos_embedding = PositionalEncoding(config)
         self.decoder = CosDecoder(config)
         self.unembedding = nn.Linear(
@@ -147,7 +150,8 @@ class CosDecoderOnlyTransformer(nn.Module):
         V: vocabulary size
         O: output dimension
         """
-        x = self.embedding(x)
+        if self.config.input_type == "token":
+            x = self.embedding(x)
         x = self.pos_embedding(x)
         x = self.decoder(x)
         logits = self.unembedding(x)

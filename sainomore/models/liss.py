@@ -337,7 +337,10 @@ class Elissabeth(SAINoMoreModule):
 
     def __init__(self, config: ElissabethConfig) -> None:
         super().__init__(config)
-        self.embedding = nn.Embedding(config.input_vocab_size, config.d_hidden)
+        if config.input_type == "token":
+            self.embedding = nn.Embedding(
+                config.input_vocab_size, config.d_hidden
+            )
         if (self.config.positional_encoding is None
                 and not config.positional_bias and config.length_is == 1):
             warnings.warn(
@@ -370,7 +373,8 @@ class Elissabeth(SAINoMoreModule):
         V: vocabulary size
         O: output dimension
         """
-        x = self.embedding(x)
+        if self.config.input_type == "token":
+            x = self.embedding(x)
         if self.config.positional_encoding is not None:
             x = self.pos_enc(x)
 
