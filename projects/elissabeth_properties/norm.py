@@ -7,11 +7,11 @@ import torch
 from sainomore.models import Elissabeth, ElissabethConfig
 
 config = {
-    "n_samples": 100,
+    "n_samples": 10,
     "d_hidden": 5,
 
-    "n_layers": 5,
-    "length_is": 10,
+    "n_layers": 1,
+    "length_is": 4,
 }
 
 
@@ -28,17 +28,22 @@ def build_model(
         d_hidden=config["d_hidden"],  # n_is = d_hidden
         layer_norm=layer_norm,
         normalize_is=normalize_is,
+        denominator_is=False,
         single_query_key=False,
+        positional_bias=False,
+        distance_weighting=True,
+        weighting=None,
+        positional_encoding=None,
         input_type="vector",
     )
     model = Elissabeth(model_config)
     model.set_eye("unembedding.weight")
 
-    # for l in range(config["n_layers"]):
-    #     model.set_eye(f"layers.{l}.W_Q", requires_grad=True)
-    #     model.set_eye(f"layers.{l}.W_K", requires_grad=True)
-    #     model.set_eye(f"layers.{l}.W_V", requires_grad=True)
-    #     model.set_eye(f"layers.{l}.W_O", requires_grad=True)
+    for l in range(config["n_layers"]):
+        # model.set_eye(f"layers.{l}.W_Q", requires_grad=True)
+        # model.set_eye(f"layers.{l}.W_K", requires_grad=True)
+        model.set_eye(f"layers.{l}.W_V", requires_grad=True)
+        model.set_eye(f"layers.{l}.W_O", requires_grad=True)
 
     return model
 
@@ -154,7 +159,7 @@ def calculate_norm():
                     model.release_all_hooks()
 
     fig1, _ = make_plot(norms, initializers, context_lengths)
-    fig2, _ = make_plot(norms_grad, initializers, context_lengths)
+    # fig2, _ = make_plot(norms_grad, initializers, context_lengths)
 
     fig1.suptitle(
         f"Norm of propagated input in Elissabeth\n"
@@ -167,46 +172,60 @@ def calculate_norm():
         facecolor=(0, 0, 0, 0),
     )
 
-    fig2.suptitle(
-        f"Norm of gradient of W_Q in Elissabeth\n"
-        f"Samples: {config['n_samples']} | d_hidden: {config['d_hidden']}"
-    )
-    fig2.tight_layout()
-    fig2.savefig(
-        os.path.join(os.path.dirname(__file__), "norms_grad.pdf"),
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
+    # fig2.suptitle(
+    #     f"Norm of gradient of W_Q in Elissabeth\n"
+    #     f"Samples: {config['n_samples']} | d_hidden: {config['d_hidden']}"
+    # )
+    # fig2.tight_layout()
+    # fig2.savefig(
+    #     os.path.join(os.path.dirname(__file__), "norms_grad.pdf"),
+    #     bbox_inches="tight",
+    #     facecolor=(0, 0, 0, 0),
+    # )
 
     plt.show()
 
 
 def testcase():
-    data = torch.empty((1, 100, config["d_hidden"]))
+    data = torch.ones((1, 1000, config["d_hidden"]))
 
-    torch.nn.init.normal_(data)
+    # torch.nn.init.ones_(data)
     model = build_model(
-        100,
-        layer_norm=True,
+        context_length=1000,
+        layer_norm=False,
         normalize_is=True,
     )
 
-    model.attach_all_hooks(backward=True)
+    model.attach_all_hooks(backward=False)
 
     output = model(data)
-    loss = torch.nn.L1Loss()(output, torch.randint(0, 1, (1, 1, 100)))
+    loss = torch.nn.L1Loss()(
+        output, torch.randint(0, 1, (1, config["d_hidden"], 1000))
+    )
     loss.backward()
 
-    # for l in range(model_config.n_layers):
-    #     for i in range(model_config.length_is):
-    #         print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
-    #             model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
-    #             axis=2,
-    #         ), axis=0)[-1])
     for l in range(model.config.n_layers):
-        print("THIS", id(model.get_hook(f"layers.{l}", f"Q")))
-        # print("Q", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
-        print("V", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
+        # print(f"Layer {l}, Q:", np.linalg.norm(
+        #     model.get_hook("layers.0", "Q").fwd[0, :, :],
+        #     axis=2,
+        # ))
+        # print(f"Layer {l}, K:", np.linalg.norm(
+        #     model.get_hook("layers.0", "Q").fwd[0, :, :],
+        #     axis=2,
+        # ))
+        # print(f"Layer {l}, V:", np.linalg.norm(
+        #     model.get_hook("layers.0", "Q").fwd[0, :, :],
+        #     axis=2,
+        # ))
+        for i in range(model.config.length_is):
+            print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
+                model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
+                axis=2,
+            ), axis=0)[-1])
+    # for l in range(model.config.n_layers):
+    #     print("THIS", id(model.get_hook(f"layers.{l}", f"Q")))
+    #     # print("Q", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
+    #     print("V", l, np.linalg.norm(model.get_hook(f"layers.{l}", "Q").bwd))
 
     # plt.matshow(model.get_hook("layers.0", "weighting.0").fwd[0, :, :, 0])
     # plt.show()
@@ -216,4 +235,4 @@ def testcase():
 
 if __name__ == "__main__":
     # calculate_norm()
-    calculate_norm()
+    testcase()

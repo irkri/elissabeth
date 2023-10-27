@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal
 
 import numpy as np
 import torch
@@ -15,14 +15,16 @@ class DecoderOnlyTransformerConfig(ModelConfig):
     d_head: int = None  # type: ignore
     ffn_units: int = None  # type: ignore
 
+    positional_encoding: Literal["learnable", "sinusoidal"] | None = (
+        "sinusoidal"
+    )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.d_head is None:
             self.d_head = self.d_hidden
         if self.ffn_units is None:
             self.ffn_units = self.d_hidden
-
-        self.positional_encoding = "sinusoidal"
 
 
 class LearnablePositionalEmbedding(nn.Module):
@@ -36,7 +38,7 @@ class LearnablePositionalEmbedding(nn.Module):
         nn.init.xavier_normal_(self.pos_embedding)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pos_embedding
+        return x + self.pos_embedding[:x.size(1), :]
 
 
 class PositionalEncoding(nn.Module):
@@ -50,15 +52,15 @@ class PositionalEncoding(nn.Module):
             * (-np.log(10000.0) / config.d_hidden)
         )
         pe = torch.zeros(1, config.context_length, config.d_hidden)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
         if config.d_hidden % 2 != 0:
-            pe[:, 0, 1::2] = torch.cos(position * div_term[:-1])
+            pe[0, :, 1::2] = torch.cos(position * div_term[:-1])
         else:
-            pe[:, 0, 1::2] = torch.cos(position * div_term)
+            pe[0, :, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.get_buffer("pe")[:x.size(0)]
+        x = x + self.get_buffer("pe")[:, :x.size(1), :]
         return x
 
 
@@ -73,34 +75,50 @@ class CausalMultiHeadAttention(HookedModule):
         self.W_K = nn.Parameter(
             torch.empty(config.n_heads, self.d_head, config.d_hidden)
         )
+        self.b_K = nn.Parameter(
+            torch.empty(1, config.n_heads, 1, config.d_head)
+        )
         self.W_Q = nn.Parameter(
             torch.empty(config.n_heads, self.d_head, config.d_hidden)
+        )
+        self.b_Q = nn.Parameter(
+            torch.empty(1, config.n_heads, 1, config.d_head)
         )
         self.W_V = nn.Parameter(
             torch.empty(config.n_heads, self.d_head, config.d_hidden)
         )
+        self.b_V = nn.Parameter(
+            torch.empty(1, config.n_heads, 1, config.d_head)
+        )
         self.W_O = nn.Parameter(
             torch.empty(config.d_hidden, self.d_head, config.n_heads)
         )
+        self.b_O = nn.Parameter(
+            torch.empty(config.d_hidden,)
+        )
 
         torch.nn.init.xavier_uniform_(self.W_Q)
+        torch.nn.init.xavier_uniform_(self.b_Q)
         torch.nn.init.xavier_uniform_(self.W_K)
+        torch.nn.init.xavier_uniform_(self.b_K)
         torch.nn.init.xavier_uniform_(self.W_V)
+        torch.nn.init.xavier_uniform_(self.b_V)
         torch.nn.init.xavier_uniform_(self.W_O)
+        torch.nn.init.zeros_(self.b_O)
 
-        self.mask = nn.Parameter(
+        self.register_buffer("mask",
             torch.tril(
                 torch.ones(1, 1, config.context_length, config.context_length)
             ).bool(),
-            requires_grad=False,
         )
 
         self.hooks = HookCollection("Q", "K", "V", "A_pre", "A", "heads")
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        Q = self.hooks("Q", torch.einsum('ihd,btd->bith', self.W_Q, x))
-        K = self.hooks("K", torch.einsum('ihd,btd->bith', self.W_K, x))
-        V = self.hooks("V", torch.einsum('ihd,btd->bith', self.W_V, x))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T = x.size(1)
+        Q = self.hooks("Q", torch.einsum('ihd,btd->bith', self.W_Q, x)) + self.b_Q
+        K = self.hooks("K", torch.einsum('ihd,btd->bith', self.W_K, x)) + self.b_K
+        V = self.hooks("V", torch.einsum('ihd,btd->bith', self.W_V, x)) + self.b_V
         attn_scores_pre = self.hooks(
             "A_pre",
             torch.einsum('bith,bish->bist', K, Q),
@@ -114,8 +132,8 @@ class CausalMultiHeadAttention(HookedModule):
         #     - K[:, :, :, :].repeat(1, 1, T, 1).reshape(B, N, T, T, D)
         #         .transpose(2, 3),
         # dim=4)
-        attn_scores_masked = (
-            attn_scores_pre - 1e10 * (~self.mask).float()
+        attn_scores_masked = (attn_scores_pre
+            - 1e10 * (~self.get_buffer("mask")[:, :, :T, :T]).float()
         )
         attn_matrix = self.hooks("A", nn.functional.softmax(
             attn_scores_masked / np.sqrt(self.d_head),
@@ -125,9 +143,9 @@ class CausalMultiHeadAttention(HookedModule):
             "heads",
             torch.einsum('bith,bist->bish', V, attn_matrix),
         )
-        out = torch.einsum('dhi,bish->bsd', self.W_O, z)
+        out = torch.einsum('dhi,bish->bsd', self.W_O, z) + self.b_O
 
-        return out, attn_matrix
+        return out
 
 
 class MLP(nn.Module):
@@ -141,7 +159,6 @@ class MLP(nn.Module):
             nn.ReLU(),
             nn.Linear(config.ffn_units, config.d_hidden)
         )
-        self.add = nn.ModuleList([nn.Identity(), nn.Identity()])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.seq(x)
@@ -158,13 +175,13 @@ class DecoderLayer(SAINoMoreModule):
             self.layer_norm_att = nn.LayerNorm(config.d_hidden)
             self.layer_norm_mlp = nn.LayerNorm(config.d_hidden)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x if not self._normalize else self.layer_norm_att(x)
-        x_att, att_matrix = self.causal_self_attention(y)
+        x_att = self.causal_self_attention(y)
         x = x + x_att
         y = x if not self._normalize else self.layer_norm_mlp(x)
         x = x + self.mlp(y)
-        return x, att_matrix
+        return x
 
 
 class DecoderOnlyTransformer(SAINoMoreModule):
@@ -174,6 +191,7 @@ class DecoderOnlyTransformer(SAINoMoreModule):
             self.embedding = nn.Embedding(
                 config.input_vocab_size, config.d_hidden
             )
+        print(f"{self.config.positional_encoding=}")
         if self.config.positional_encoding == "learnable":
             self.pos_enc = LearnablePositionalEmbedding(config)
         elif self.config.positional_encoding == "sinusoidal":
@@ -182,6 +200,9 @@ class DecoderOnlyTransformer(SAINoMoreModule):
             DecoderLayer(config)
             for _ in range(config.n_layers)
         ])
+        self.final_norm = None
+        if config.layer_norm:
+            self.final_norm = nn.LayerNorm(config.d_hidden)
         self.unembedding = nn.Linear(
             config.d_hidden, config.output_vocab_size,
             bias=config.bias,
@@ -193,6 +214,9 @@ class DecoderOnlyTransformer(SAINoMoreModule):
         if self.config.positional_encoding is not None:
             x = self.pos_enc(x)
         for i in range(len(self.layers)):
-            x, _ = self.layers[i](x)
+            x = self.layers[i](x)
+        if self.final_norm is not None:
+            x = self.final_norm(x)
         logits = self.unembedding(x)
+
         return torch.swapaxes(logits, 1, 2)

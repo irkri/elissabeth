@@ -4,7 +4,6 @@ from typing import Any, Optional
 
 import lightning.pytorch as L
 import torch
-import torchmetrics.classification
 from torch import nn
 
 from sainomore.models.base import SAINoMoreModule
@@ -19,20 +18,18 @@ class TokenPredictionModule(L.LightningModule):
     def __init__(
         self,
         model: SAINoMoreModule,
-        num_classes: Optional[int] = None,
         learning_rate: float = 1e-3,
         only_last: bool = True,
-        loss: type[nn.Module] = nn.CrossEntropyLoss,
+        loss: Optional[nn.Module] = None,
+        accuracy: Optional[nn.Module] = None,
         **kwargs,
     ) -> None:
         super().__init__()
-        self.save_hyperparameters(ignore=["model"])
+        self.save_hyperparameters(ignore=["model", "loss", "accuracy"])
         self.learning_rate = learning_rate
         self.model = model
-        self.criterion = loss()
-        self.acc_metric = torchmetrics.classification.MulticlassAccuracy(
-            num_classes,
-        ) if num_classes is not None else None
+        self.criterion = loss if loss is not None else nn.CrossEntropyLoss()
+        self.acc_metric = accuracy
         self._only_last = only_last
         self.optim_kwargs = kwargs
 
