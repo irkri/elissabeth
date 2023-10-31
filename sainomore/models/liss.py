@@ -114,7 +114,7 @@ class LISS(HookedModule):
                 1, config.context_length + 1
             )
             self.register_buffer("norm", factor_norm)
-            self.beta = nn.Parameter(torch.empty((config.length_is, )))
+            self.beta = nn.Parameter(torch.ones((config.length_is, )))
             nn.init.zeros_(self.beta)
 
         self.E_K = None
@@ -193,6 +193,13 @@ class LISS(HookedModule):
         result = self._weight_is(result, Q, K, sin_Q, cos_Q, sin_K, cos_K, 0)
         result = torch.cumsum(result, dim=1)
 
+        if self.beta is not None:
+            result /= (
+                (0.5*torch.exp(-self.beta[0]**2)+0.5)**(
+                    torch.log10(self.get_buffer("norm")[:, :T, :])
+                ) * self.get_buffer("norm")[:, :T, :]
+            )
+
         denom = None
         if self.config.denominator_is:
             denom = torch.ones_like(V[:, :, 0, :], device=V.device)
@@ -200,24 +207,23 @@ class LISS(HookedModule):
             denom = torch.cumsum(denom, dim=1)
 
         for l in range(1, p):
-            if self.beta is not None:
-                result = result / (
-                    (0.5*torch.sigmoid(self.beta[l])+0.5)**(
-                        torch.log10(self.get_buffer("norm")[:, :T, :])
-                    )
-                    * self.get_buffer("norm")[:, :T, :]
-                )
-
             self._hook_weighting(Q, K, V, sin_Q, cos_Q, sin_K, cos_K, l)
 
-            result = nn.functional.pad(
-                torch.roll(result, 1, 1)[:, 1:, :], (0, 0, 1, 0),
-            )
+            result = nn.functional.pad(result[:, :-1, :], (0, 0, 1, 0))
             result = result * V[:, :, 0 if self.config.share_values else l, :]
             result = self._weight_is(
                 result, Q, K, sin_Q, cos_Q, sin_K, cos_K, l
             )
             result = torch.cumsum(result, dim=1)
+
+            if self.beta is not None:
+                result /= nn.functional.pad(
+                    (0.5*torch.exp(-self.beta[l]**2)+0.5)**(
+                        torch.log10(self.get_buffer("norm")[:, :T, :])
+                    ) * self.get_buffer("norm")[:, :T, :],
+                    (0, 0, l, 0),
+                    value=1.0,
+                )[:, :-l, :]
 
             if denom is not None:
                 denom = self._weight_is(
@@ -227,13 +233,6 @@ class LISS(HookedModule):
 
         self._hook_weighting(Q, K, V, sin_Q, cos_Q, sin_K, cos_K, p)
 
-        if self.beta is not None:
-            result = result / (
-                (0.5*torch.sigmoid(self.beta[p-1])+0.5)**(
-                    torch.log10(self.get_buffer("norm")[:, :T, :])
-                )
-                * self.get_buffer("norm")[:, :T, :]
-            )
         result = self._weight_is(result, Q, K, sin_Q, cos_Q, sin_K, cos_K, p)
 
         if denom is not None:

@@ -2,6 +2,7 @@ import argparse
 import os
 from typing import Optional
 
+import numpy as np
 import lightning.pytorch as L
 import torch
 import wandb
@@ -12,7 +13,7 @@ from torchmetrics.classification import MulticlassAccuracy
 
 from data import LetterAssembler
 from sainomore.callbacks import (ElissabethWeighting, GeneralConfigCallback,
-                                 WeightHistory)
+                                 WeightHistory, ElissabethISTracker)
 from sainomore.data import long_lookup
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
@@ -37,7 +38,7 @@ config = {
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 501,
+    "epochs": 101,
 
     "batch_size": 32,
     "val_size": 0.05,
@@ -58,10 +59,11 @@ class PredictionCallback(Callback):
     ) -> None:
         self._epoch = -1
 
-    def on_validation_epoch_end(
+    def on_training_batch_end(
         self,
         trainer: L.Trainer,
         pl_module: L.LightningModule,
+        a,b,c,
     ) -> None:
         self._epoch += 1
         if self._epoch % self._each_n_epochs != 0:
@@ -148,7 +150,7 @@ def train(
         wandb_logger = WandbLogger(
             project="Elissabeth 3",
             checkpoint_name=LOAD_PATH,
-            tags=["Elissabeth", "long lookup"],
+            tags=["Elissabeth", "makemore_quotes"],
             id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
             resume="must" if LOAD_PATH is not None else False,
         )
@@ -171,9 +173,10 @@ def train(
     #     ),
     #     example.numpy(),
     # )
-    callbacks: list[Callback] = [
+    example = assembler.sample(2418)[0]
+    callbacks = [
         GeneralConfigCallback(max_depth=10),
-        # PredictionCallback(each_n_epochs=50),
+        PredictionCallback(each_n_epochs=10),
         # Progressbar(),
         WeightHistory((
                 "model.layers.0.W_Q",
@@ -186,9 +189,15 @@ def train(
                 "model.embedding.weight",
                 "model.unembedding.weight",
             ),
-            reduce_axis=[0, 0, 2, 0, None, None, None, None, None, None],
-            each_n_epochs=50,
+            reduce_axis=[0, 0, 2, 0, None, None, None, None],
+            each_n_epochs=10,
         ),
+        ElissabethISTracker(
+            example,
+            reduce="norm",
+            each_n_epochs=5,
+            use_wandb=True,
+        )
         # ElissabethWeighting(
         #     example,
         #     each_n_epochs=100,
@@ -215,13 +224,18 @@ def train(
 
 
 def generate(lightning_module: TokenPredictionModule) -> list[str]:
-    n_samples = 5
+    lightning_module.to("cuda")
+    n_samples = 1
 
     start = torch.zeros((n_samples, 1)).long().to(lightning_module.device)
 
-    for i in range(1, assembler.context_length):
+    # lightning_module.model.get_hook("layers.0", "iss.0").attach()
+    for i in range(1, 100):#assembler.context_length):
         out = lightning_module.model(start)
         probabilities = torch.softmax(out[:, :, -1], dim=-1)
+        # if torch.sum(torch.isnan(probabilities)) > 0:
+        #     print(lightning_module.model.layers[0].W_Q)
+        #     print(lightning_module.model.get_hook("layers.0", "iss.0").fwd)
         start = torch.cat(
             (start, torch.multinomial(probabilities, num_samples=1)),
             dim=1,
@@ -232,27 +246,41 @@ def generate(lightning_module: TokenPredictionModule) -> list[str]:
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
+    lightning_module.to("cuda")
 
-    print(lightning_module.model.layers[0].beta)
+    # print(lightning_module.model.layers[0].beta)
+    # print(
+    #     torch.min(lightning_module.model.layers[0].alpha),
+    #     torch.max(lightning_module.model.layers[0].alpha),
+    # )
+    model = lightning_module.model
 
-    # x, y = assembler.sample(2418)
+    x, y = assembler.sample(2418)
+    x, y = x.to(lightning_module.device), y.to(lightning_module.device)
     # print(y[0, -100:])
 
-    # metrics = lightning_module.training_step((x, y), 0)
+    model.attach_all_hooks()
+    metrics = lightning_module.training_step((x, y), 0)
 
-    # metrics["loss"].backward()
+    metrics["loss"].backward()
 
-    # gradient = lightning_module.get_parameter(
-    #     "model.layers.0.W_Q"
-    # ).grad.detach().numpy()
-    # print(np.linalg.norm(gradient, axis=0))
+    gradient = lightning_module.get_parameter(
+        "model.layers.0.W_V"
+    ).grad.cpu().detach().numpy()
+    print(np.max(gradient))
+    # for l in range(model.config.n_layers):
+    #     for i in range(model.config.length_is):
+    #         print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
+    #             model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
+    #             axis=2,
+    #         ), axis=0)[-1])
 
     # mat = get_liss_attention_matrix(lightning_module.model, x)
     # y_hat = lightning_module.predict_step(x, 0)
     # print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
     # plot_liss_attention_matrix(
     #     mat[:, :, 0, :, :],
-    #     example=x.numpy()[0],
+    #     example=x.cpu().numpy()[0],
     #     figsize=(50, 10),
     #     log_colormap=False,
     #     causal_mask=False,
@@ -290,7 +318,7 @@ def main() -> None:
     elif args.mode == "plot":
         plot(lightning_module)
     elif args.mode == "generate":
-        generate(lightning_module)
+        print("\n".join(generate(lightning_module)))
 
 
 if __name__ == '__main__':

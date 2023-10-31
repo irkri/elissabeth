@@ -1,12 +1,11 @@
-__all__ = ["GeneralConfigCallback", "WeightHistory", "HookHistory"]
-
 import os
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, Literal
 
 import lightning.pytorch as L
 import numpy as np
 import torch
 import wandb
+from plotly import graph_objects as go
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
@@ -265,17 +264,18 @@ class ElissabethWeighting(Callback):
 
         if self._wandb:
             for logger in trainer.loggers:
-                columns = [
-                    f"Length {i}" for i in range(1, iss_length+1)
-                ] + ["Product"]
-                data = [
-                    ([wandb.Image(att_mat[l, d]) for d in range(iss_length)]
-                    +[wandb.Image(np.prod(att_mat[l], axis=0))])
-                    for l in range(n_layers)
-                ]
                 if isinstance(logger, WandbLogger):
+                    columns = [
+                        f"Length {i}" for i in range(1, iss_length+1)
+                    ] + ["Product"]
+                    data = [
+                        ([wandb.Image(att_mat[l, d])
+                          for d in range(iss_length)]
+                        +[wandb.Image(np.prod(att_mat[l], axis=0))])
+                        for l in range(n_layers)
+                    ]
                     logger.log_table(
-                        "hooks/Elissabeth/weighting",
+                        "hooks/weighting",
                         columns=columns,
                         data=data,
                         step=self._epoch,
@@ -288,3 +288,92 @@ class ElissabethWeighting(Callback):
             )
             os.makedirs(path, exist_ok=True)
             np.save(os.path.join(path, "elissabeth_weighting.npy"), att_mat)
+
+
+class ElissabethISTracker(Callback):
+
+    def __init__(
+        self,
+        x: torch.Tensor,
+        reduce: Literal["max", "norm"] = "norm",
+        each_n_epochs: int = 1,
+        save_path: Optional[str] = None,
+        use_wandb: bool = False,
+    ) -> None:
+        super().__init__()
+        self._data = x
+        self._reduce = reduce
+        self._each_n_epochs = each_n_epochs
+        self._epoch = -1
+        self._save_path = save_path
+        self._wandb = use_wandb
+
+    def on_train_start(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch = -1
+        self._data = self._data.to(pl_module.device)
+
+    def on_train_epoch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+    ) -> None:
+        self._epoch += 1
+        if self._epoch % self._each_n_epochs != 0:
+            return
+
+        model: Elissabeth = pl_module.model  # type: ignore
+
+        for l in range(model.config.length_is):
+            model.get_hook("layers.0", f"iss.{l}").attach()
+        model(self._data)
+        model.release_all_hooks()
+
+        n_layers = model.config.n_layers
+        iss_length: int = model.config.length_is
+        values = np.empty((n_layers, iss_length, self._data.size(1)))
+        for l in range(n_layers):
+            for d in range(iss_length):
+                if self._reduce == "norm":
+                    values[l, d, :] = np.mean(np.linalg.norm(
+                        model.get_hook(
+                            f"layers.{l}", f"iss.{d}",
+                        ).fwd[:, :, :],
+                    axis=2), axis=0)
+                elif self._reduce == "max":
+                    iss = model.get_hook(f"layers.{l}", f"iss.{d}").fwd
+                    index = np.unravel_index(np.argmax(iss), iss.shape)
+                    values[l, d, :] = np.mean(iss[:, :, index], axis=0)
+
+        if self._wandb:
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    columns = [f"Layer {i}" for i in range(1, n_layers+1)]
+                    content = [[]]
+                    for l in range(n_layers):
+                        figure = go.Figure()
+                        for d in range(iss_length):
+                            figure.add_trace(go.Scatter(
+                                x=np.arange(self._data.size(1)),
+                                y=values[l, d],
+                                mode="lines",
+                                name=f"iss.{d}"
+                            ))
+                        content[-1].append(figure)
+                    logger.log_table(
+                        "hooks/iss",
+                        columns=columns,
+                        data=content,
+                        step=self._epoch,
+                    )
+
+        if self._save_path is not None:
+            path = os.path.join(
+                self._save_path,
+                f"epoch{self._epoch:05}",
+            )
+            os.makedirs(path, exist_ok=True)
+            np.save(os.path.join(path, "elissabeth_iss.npy"), values)

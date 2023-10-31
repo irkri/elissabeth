@@ -12,6 +12,7 @@ torch = "^2.0.0"
 lightning = "^2.0.8"
 wandb = "^0.15.10"
 matplotlib = "^3.7.3"
+plotly = "^5.18.0"
 
 
 [build-system]

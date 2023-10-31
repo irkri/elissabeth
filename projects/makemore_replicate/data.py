@@ -8,7 +8,7 @@ import numpy as np
 class LetterAssembler:
 
     def __init__(self, path: str) -> None:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             lines = list(filter(None, f.read().split("\n")))
         lines = [x.strip() for x in lines]
 
