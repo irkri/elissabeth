@@ -114,8 +114,8 @@ class LISS(HookedModule):
                 1, config.context_length + 1
             )
             self.register_buffer("norm", factor_norm)
-            self.beta = nn.Parameter(torch.ones((config.length_is, )))
-            nn.init.zeros_(self.beta)
+            self.beta = nn.Parameter(torch.empty((config.length_is, )))
+            nn.init.constant_(self.beta, 5.40988)
 
         self.E_K = None
         if config.positional_bias or config.positional_bias_values:
@@ -152,7 +152,9 @@ class LISS(HookedModule):
             nn.init.zeros_(self.nu)
 
         self.hooks = HookCollection("Q", "K", "V")
-        self.hooks.add_hooks([f"iss.{i}" for i in range(config.length_is)])
+        self.hooks.add_hooks(
+            [f"iss.{i}" for i in range(1, config.length_is+1)]
+        )
         self.hooks.add_hooks(
             [f"weighting.{i}" for i in range(config.length_is)]
         )
@@ -166,8 +168,12 @@ class LISS(HookedModule):
             K = torch.einsum('ldh,btd->btlh', self.W_K, x)
             K = torch.sigmoid(K)
             if self.alpha is not None:
-                Q = Q - (self.alpha**2 * self.get_buffer("T")[:, :T, :, :])
-                K = K - (self.alpha**2 * self.get_buffer("T")[:, :T, :, :])
+                rel_pos = (
+                    torch.sigmoid(self.alpha)*(T/(T-1))
+                    * self.get_buffer("T")[:, :T, :, :]
+                )
+                Q = Q - rel_pos
+                K = K - rel_pos
             if self.E_K is not None:
                 K = K + torch.relu(torch.einsum('ldh,btd->btlh', self.E_K,
                     self.get_buffer("P")[:, :T, :]
@@ -195,7 +201,7 @@ class LISS(HookedModule):
 
         if self.beta is not None:
             result /= (
-                (0.5*torch.exp(-self.beta[0]**2)+0.5)**(
+                (0.25*torch.tanh(self.beta[0])+0.75001)**(
                     torch.log10(self.get_buffer("norm")[:, :T, :])
                 ) * self.get_buffer("norm")[:, :T, :]
             )
@@ -218,7 +224,7 @@ class LISS(HookedModule):
 
             if self.beta is not None:
                 result /= nn.functional.pad(
-                    (0.5*torch.exp(-self.beta[l]**2)+0.5)**(
+                    (0.25*torch.tanh(self.beta[l])+0.75001)**(
                         torch.log10(self.get_buffer("norm")[:, :T, :])
                     ) * self.get_buffer("norm")[:, :T, :],
                     (0, 0, l, 0),
@@ -239,8 +245,8 @@ class LISS(HookedModule):
             denom = self._weight_is(denom, Q, K, sin_Q, cos_Q, sin_K, cos_K, p)
             result = result / denom
 
-        result = self.hooks(f"iss.{p-1}", result)
-        result = torch.einsum("hd,bth->btd", self.W_O, result)
+        result = self.hooks(f"iss.{p}", result)
+        result = torch.einsum("bth,hd->btd", result, self.W_O)
 
         return result
 
@@ -255,55 +261,40 @@ class LISS(HookedModule):
         cos_K: torch.Tensor | None,
         l: int,
     ) -> torch.Tensor:
-        if l == 0:
-            if self.config.weighting == "exp" and K is not None:
-                x = x * torch.exp(-K[:, :, 0, :])
-            elif (self.config.weighting == "cos"
-                    and sin_K is not None and cos_K is not None):
-                x = (x
-                    * sin_K[:, :, 0, :]**(torch.sigmoid(self.mu[0, :])/2)
-                    * cos_K[:, :, 0, :]**(torch.sigmoid(self.nu[0, :])/2)
-                )
-        elif l == (p := self.config.length_is):
-            iq = 0 if self.config.share_queries else p-1
-            if self.config.weighting == "exp" and Q is not None:
-                x = x * torch.exp(Q[:, :, iq, :])
-            elif (self.config.weighting == "cos"
+        p = self.config.length_is
+        iq = 0 if self.config.share_queries else l-1
+        ik = 0 if self.config.share_keys else l
+        if l > 0 and l < p and self.hooks.get(f"iss.{l}").is_attached():
+            temp = x
+            if (self.config.weighting == "cos"
                     and cos_Q is not None and sin_Q is not None):
-                x = (x
-                    * sin_Q[:, :, iq, :]**(torch.sigmoid(self.mu[p-1, :])/2)
-                    * cos_Q[:, :, iq, :]**(torch.sigmoid(self.nu[p-1, :])/2)
+                temp = (temp
+                    * cos_Q[:, :, iq, :]**(torch.sigmoid(self.nu[l-1])/2)
+                    * sin_Q[:, :, iq, :]**(torch.sigmoid(self.mu[l-1])/2)
                 )
-        else:
-            iq = 0 if self.config.share_queries else l-1
-            ik = 0 if self.config.share_keys else l
-            if self.hooks.get(f"iss.{l-1}").is_attached():
-                temp = x
-                if (self.config.weighting == "cos"
-                        and cos_Q is not None and sin_Q is not None):
-                    temp = (temp
-                        * cos_Q[:, :, iq, :]**(
-                            torch.sigmoid(self.nu[l-1, :]) / 2
-                        )
-                        * sin_Q[:, :, iq, :]**(
-                            torch.sigmoid(self.mu[l-1, :]) / 2
-                        )
-                    )
-                elif self.config.weighting == "exp" and Q is not None:
-                    temp = temp * torch.exp(Q[:, :, iq, :])
-                self.hooks(f"iss.{l-1}", temp)
+            elif self.config.weighting == "exp" and Q is not None:
+                temp = temp * torch.exp(Q[:, :, iq, :])
+            self.hooks(f"iss.{l}", temp)
 
-            if (self.config.weighting == "exp"
-                    and Q is not None and K is not None):
-                x = x * torch.exp(Q[:, :, iq, :] - K[:, :, ik, :])
-            elif (self.config.weighting == "cos"
-                    and cos_Q is not None and cos_K is not None
-                    and sin_K is not None and sin_Q is not None):
-                x = (x
-                    * cos_Q[:, :, iq, :]**(torch.sigmoid(self.nu[l-1, :])/2)
-                    * cos_K[:, :, ik, :]**(torch.sigmoid(self.nu[l, :])/2)
-                    * sin_Q[:, :, iq, :]**(torch.sigmoid(self.mu[l-1, :])/2)
-                    * sin_K[:, :, ik, :]**(torch.sigmoid(self.mu[l, :])/2)
+        if (self.config.weighting == "exp"
+                and Q is not None and K is not None):
+            x = x * torch.exp(
+                (0 if l == 0 else Q[:, :, iq, :])
+                - (0 if l == p else K[:, :, ik, :])  # type: ignore
+            )
+
+        elif (self.config.weighting == "cos"
+                and cos_Q is not None and cos_K is not None
+                and sin_K is not None and sin_Q is not None):
+            if l > 0:
+                x *= (
+                    sin_Q[:, :, iq, :]**(torch.sigmoid(self.mu[l-1])/2)
+                    * cos_Q[:, :, iq, :]**(torch.sigmoid(self.nu[l-1])/2)
+                )
+            elif l < p:
+                x *= (
+                    sin_K[:, :, ik, :]**(torch.sigmoid(self.mu[l])/2)
+                    * cos_K[:, :, ik, :]**(torch.sigmoid(self.nu[l])/2)
                 )
         return x
 

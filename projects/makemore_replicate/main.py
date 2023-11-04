@@ -2,8 +2,8 @@ import argparse
 import os
 from typing import Optional
 
-import numpy as np
 import lightning.pytorch as L
+import numpy as np
 import torch
 import wandb
 from lightning.pytorch.callbacks import Callback
@@ -12,9 +12,8 @@ from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
 from data import LetterAssembler
-from sainomore.callbacks import (ElissabethWeighting, GeneralConfigCallback,
-                                 WeightHistory, ElissabethISTracker)
-from sainomore.data import long_lookup
+from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
+                                 GeneralConfigCallback, WeightHistory)
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
 from sainomore.models import (DecoderOnlyTransformer,
@@ -25,7 +24,6 @@ from sainomore.tools import (get_liss_attention_matrix,
 
 torch.set_float32_matmul_precision('high')
 
-LOAD_PATH: Optional[str] = None
 SAVE_PATH: Optional[str] = None
 
 assembler = (
@@ -36,9 +34,9 @@ config = {
     "context_length": assembler.context_length,
     "characters": assembler.vocab_size,
 
-    "lr": 5e-3,
-    "weight_decay": 1e-4,
-    "epochs": 101,
+    "lr": 1e-2,
+    "weight_decay": 1e-2,
+    "epochs": 501,
 
     "batch_size": 32,
     "val_size": 0.05,
@@ -59,17 +57,16 @@ class PredictionCallback(Callback):
     ) -> None:
         self._epoch = -1
 
-    def on_training_batch_end(
+    def on_validation_epoch_end(
         self,
         trainer: L.Trainer,
         pl_module: L.LightningModule,
-        a,b,c,
     ) -> None:
         self._epoch += 1
         if self._epoch % self._each_n_epochs != 0:
             return
 
-        words = generate(pl_module)  # type: ignore
+        words = generate(pl_module, n_samples=5, max_length=None)
         for logger in trainer.loggers:
             if isinstance(logger, WandbLogger):
                 logger.log_text(
@@ -131,6 +128,7 @@ def build_model() -> TokenPredictionModule:
 
 def train(
     lightning_module: TokenPredictionModule,
+    load_path: Optional[str] = None,
     use_wandb: bool = False,
     progress_bar: bool = False,
     only_test: bool = False,
@@ -149,10 +147,10 @@ def train(
     if use_wandb:
         wandb_logger = WandbLogger(
             project="Elissabeth 3",
-            checkpoint_name=LOAD_PATH,
+            checkpoint_name=load_path,
             tags=["Elissabeth", "makemore_quotes"],
-            id=LOAD_PATH.split("/")[1] if LOAD_PATH is not None else None,
-            resume="must" if LOAD_PATH is not None else False,
+            id=load_path.split("/")[-2] if load_path is not None else None,
+            resume="must" if load_path is not None else False,
         )
 
         wandb_logger.experiment.config.update(
@@ -176,8 +174,7 @@ def train(
     example = assembler.sample(2418)[0]
     callbacks = [
         GeneralConfigCallback(max_depth=10),
-        PredictionCallback(each_n_epochs=10),
-        # Progressbar(),
+        PredictionCallback(each_n_epochs=50),
         WeightHistory((
                 "model.layers.0.W_Q",
                 "model.layers.0.W_K",
@@ -195,7 +192,7 @@ def train(
         ElissabethISTracker(
             example,
             reduce="norm",
-            each_n_epochs=5,
+            each_n_epochs=25,
             use_wandb=True,
         )
         # ElissabethWeighting(
@@ -212,30 +209,30 @@ def train(
         logger=wandb_logger if not only_test else None,
         default_root_dir=SAVE_PATH,
         enable_progress_bar=progress_bar,
+        detect_anomaly=True
     )
 
     if only_test:
         trainer.validate(lightning_module, data_module)
     else:
-        trainer.fit(lightning_module, data_module, ckpt_path=LOAD_PATH)
+        trainer.fit(lightning_module, data_module, ckpt_path=load_path)
 
     if use_wandb:
         wandb.finish()
 
 
-def generate(lightning_module: TokenPredictionModule) -> list[str]:
+def generate(
+    lightning_module: TokenPredictionModule,
+    n_samples: int = 5,
+    max_length: Optional[int] = None,
+) -> list[str]:
     lightning_module.to("cuda")
-    n_samples = 1
 
     start = torch.zeros((n_samples, 1)).long().to(lightning_module.device)
-
-    # lightning_module.model.get_hook("layers.0", "iss.0").attach()
-    for i in range(1, 100):#assembler.context_length):
+    T = assembler.context_length if max_length is None else max_length
+    for _ in range(1, T):
         out = lightning_module.model(start)
         probabilities = torch.softmax(out[:, :, -1], dim=-1)
-        # if torch.sum(torch.isnan(probabilities)) > 0:
-        #     print(lightning_module.model.layers[0].W_Q)
-        #     print(lightning_module.model.get_hook("layers.0", "iss.0").fwd)
         start = torch.cat(
             (start, torch.multinomial(probabilities, num_samples=1)),
             dim=1,
@@ -248,26 +245,11 @@ def generate(lightning_module: TokenPredictionModule) -> list[str]:
 def plot(lightning_module: TokenPredictionModule) -> None:
     lightning_module.to("cuda")
 
-    # print(lightning_module.model.layers[0].beta)
-    # print(
-    #     torch.min(lightning_module.model.layers[0].alpha),
-    #     torch.max(lightning_module.model.layers[0].alpha),
-    # )
-    model = lightning_module.model
-
-    x, y = assembler.sample(2418)
-    x, y = x.to(lightning_module.device), y.to(lightning_module.device)
-    # print(y[0, -100:])
-
-    model.attach_all_hooks()
-    metrics = lightning_module.training_step((x, y), 0)
-
-    metrics["loss"].backward()
-
-    gradient = lightning_module.get_parameter(
-        "model.layers.0.W_V"
-    ).grad.cpu().detach().numpy()
-    print(np.max(gradient))
+    print(lightning_module.model.layers[0].alpha)
+    print(
+        torch.min(lightning_module.model.layers[0].alpha),
+        torch.max(lightning_module.model.layers[0].alpha),
+    )
     # for l in range(model.config.n_layers):
     #     for i in range(model.config.length_is):
     #         print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
@@ -298,18 +280,34 @@ def main() -> None:
 
     parser.add_argument("mode", choices=["train", "test", "plot", "generate"])
     parser.add_argument("--online", action="store_true")
+    parser.add_argument("--load", default=None)
 
     args = parser.parse_args()
 
     lightning_module = build_model()
 
-    if LOAD_PATH is not None:
-        saved_ = torch.load(LOAD_PATH)
-        lightning_module.load_state_dict(saved_["state_dict"])
+    load = None
+    if args.load is not None:
+        directory = os.path.dirname(__file__)
+        for folder in os.listdir(directory):
+            path = os.path.join(directory, folder)
+            if not (os.path.isdir(path)
+                        and os.path.isdir(os.path.join(path, args.load))):
+                continue
+            if os.path.join(path, args.load, "checkpoints"):
+                chckpt_path = os.path.join(path, args.load, "checkpoints")
+                load = os.path.join(chckpt_path, os.listdir(chckpt_path)[0])
+                saved_ = torch.load(load)
+                lightning_module.load_state_dict(saved_["state_dict"])
+            else:
+                raise FileExistsError(
+                    "Load specification does not point to a saved model"
+                )
 
     if args.mode == "train":
         train(
             lightning_module,
+            load_path=load,
             use_wandb=args.online,
             progress_bar=not args.online,
         )
