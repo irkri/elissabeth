@@ -5,7 +5,6 @@ import lightning.pytorch as L
 import numpy as np
 import torch
 import wandb
-from plotly import graph_objects as go
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
@@ -327,7 +326,7 @@ class ElissabethISTracker(Callback):
 
         model: Elissabeth = pl_module.model  # type: ignore
 
-        for l in range(model.config.length_is):
+        for l in range(1, model.config.length_is+1):
             model.get_hook("layers.0", f"iss.{l}").attach()
         model(self._data)
         model.release_all_hooks()
@@ -340,34 +339,31 @@ class ElissabethISTracker(Callback):
                 if self._reduce == "norm":
                     values[l, d, :] = np.mean(np.linalg.norm(
                         model.get_hook(
-                            f"layers.{l}", f"iss.{d}",
+                            f"layers.{l}", f"iss.{d+1}",
                         ).fwd[:, :, :],
                     axis=2), axis=0)
                 elif self._reduce == "max":
-                    iss = model.get_hook(f"layers.{l}", f"iss.{d}").fwd
+                    iss = model.get_hook(f"layers.{l}", f"iss.{d+1}").fwd
                     index = np.unravel_index(np.argmax(iss), iss.shape)
                     values[l, d, :] = np.mean(iss[:, :, index], axis=0)
 
         if self._wandb:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
-                    columns = [f"Layer {i}" for i in range(1, n_layers+1)]
-                    content = [[]]
+                    columns = ["Time"] + [
+                        f"Layer {i}, ISS {j}"
+                        for i in range(1, n_layers+1)
+                        for j in range(1, iss_length+1)
+                    ]
+                    content = [list(range(1, self._data.size(1)))]
                     for l in range(n_layers):
-                        figure = go.Figure()
                         for d in range(iss_length):
-                            figure.add_trace(go.Scatter(
-                                x=np.arange(self._data.size(1)),
-                                y=values[l, d],
-                                mode="lines",
-                                name=f"iss.{d}"
-                            ))
-                        content[-1].append(figure)
+                            content.append(list(values[l, d]))
+                    content = list(map(list, zip(*content)))
                     logger.log_table(
                         "hooks/iss",
                         columns=columns,
                         data=content,
-                        step=self._epoch,
                     )
 
         if self._save_path is not None:

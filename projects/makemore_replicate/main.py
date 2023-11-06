@@ -60,7 +60,7 @@ class PredictionCallback(Callback):
     def on_validation_epoch_end(
         self,
         trainer: L.Trainer,
-        pl_module: L.LightningModule,
+        pl_module: TokenPredictionModule,
     ) -> None:
         self._epoch += 1
         if self._epoch % self._each_n_epochs != 0:
@@ -110,7 +110,7 @@ def build_model() -> TokenPredictionModule:
         share_queries=False,
         share_keys=False,
         share_values=False,
-        normalize_is=True,
+        sum_normalization="same",
     )
     model = Elissabeth(model_config)
     # model.set_eye("embedding.weight")

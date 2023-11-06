@@ -2,7 +2,7 @@ __all__ = ["LISS", "Elissabeth", "ElissabethConfig"]
 
 import warnings
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ from .transformer import LearnablePositionalEmbedding, PositionalEncoding
 
 @dataclass
 class ElissabethConfig(ModelConfig):
-    normalize_is: bool = True
+    sum_normalization: Optional[Literal["same", "independent"]] = "same"
     length_is: int = 2
     n_is: int = None  # type: ignore
 
@@ -108,13 +108,15 @@ class LISS(HookedModule):
             nn.init.ones_(self.alpha)
 
         self.beta = None
-        if config.normalize_is:
+        if config.sum_normalization is not None:
             factor_norm = torch.empty((1, config.context_length, 1))
             factor_norm[0, :, 0] = torch.arange(
                 1, config.context_length + 1
             )
             self.register_buffer("norm", factor_norm)
-            self.beta = nn.Parameter(torch.empty((config.length_is, )))
+            self.beta = nn.Parameter(torch.empty((
+                1 if config.sum_normalization == "same" else config.length_is,
+            )))
             nn.init.constant_(self.beta, 5.40988)
 
         self.E_K = None
@@ -167,7 +169,7 @@ class LISS(HookedModule):
             Q = torch.sigmoid(Q)
             K = torch.einsum('ldh,btd->btlh', self.W_K, x)
             K = torch.sigmoid(K)
-            if self.alpha is not None:
+            if self.alpha is not None and T > 1:
                 rel_pos = (
                     torch.sigmoid(self.alpha)*(T/(T-1))
                     * self.get_buffer("T")[:, :T, :, :]
@@ -224,7 +226,9 @@ class LISS(HookedModule):
 
             if self.beta is not None:
                 result /= nn.functional.pad(
-                    (0.25*torch.tanh(self.beta[l])+0.75001)**(
+                    (0.25*torch.tanh(self.beta[
+                        0 if self.config.sum_normalization == "same" else l
+                    ])+0.75001)**(
                         torch.log10(self.get_buffer("norm")[:, :T, :])
                     ) * self.get_buffer("norm")[:, :T, :],
                     (0, 0, l, 0),

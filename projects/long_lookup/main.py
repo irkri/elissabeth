@@ -70,7 +70,7 @@ def build_model() -> TokenPredictionModule:
         share_queries=False,
         share_keys=False,
         share_values=False,
-        normalize_is=True,
+        sum_normalization="same",
     )
     model = Elissabeth(model_config)
     model.set_eye("embedding.weight")
