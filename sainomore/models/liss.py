@@ -15,16 +15,18 @@ from .transformer import LearnablePositionalEmbedding, PositionalEncoding
 
 @dataclass
 class ElissabethConfig(ModelConfig):
-    sum_normalization: Optional[Literal["same", "independent"]] = "same"
+    sum_normalization: Optional[Literal["same", "independent"]] = "independent"
+    n_is: int = 1
     length_is: int = 2
-    n_is: int = None  # type: ignore
+    d_values: int = None  # type: ignore
+    values_2D: bool = True
 
-    single_query_key: bool = False
     share_queries: bool = False
     share_keys: bool = False
-    positional_bias: bool = True
-
     share_values: bool = False
+
+    d_pe: int = 32
+    positional_bias: bool = True
     positional_bias_values: bool = False
 
     distance_weighting: bool = False
@@ -35,8 +37,13 @@ class ElissabethConfig(ModelConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.n_is is None:
-            self.n_is = self.d_hidden
+        if self.d_values is None:
+            self.d_values = self.d_hidden
+        if (isinstance(self.d_values, list)
+                and len(self.d_values) != self.length_is + 1):
+            raise ValueError(
+                "'d_values' has to be a list of length 'length_is'+1"
+            )
 
 
 class LISS(HookedModule):
@@ -58,29 +65,54 @@ class LISS(HookedModule):
         if config.weighting is not None:
             self.W_Q = nn.Parameter(
                 torch.empty((
+                    config.n_is,
                     1 if config.share_queries else config.length_is,
                     config.d_hidden,
-                    1 if config.single_query_key else config.n_is,
+                ))
+            )
+            self.b_Q = nn.Parameter(
+                torch.empty((
+                    config.n_is,
+                    1 if config.share_queries else config.length_is,
                 ))
             )
             nn.init.xavier_normal_(self.W_Q)
+            nn.init.zeros_(self.b_Q)
             self.W_K = nn.Parameter(
                 torch.empty((
-                    1 if config.share_keys else config.length_is,
+                    config.n_is,
+                    1 if config.share_queries else config.length_is,
                     config.d_hidden,
-                    1 if config.single_query_key else config.n_is,
+                ))
+            )
+            self.b_K = nn.Parameter(
+                torch.empty((
+                    config.n_is,
+                    1 if config.share_queries else config.length_is,
                 ))
             )
             nn.init.xavier_normal_(self.W_K)
+            nn.init.zeros_(self.b_K)
 
         self.W_V = nn.Parameter(
             torch.empty((
+                config.n_is,
                 1 if config.share_values else config.length_is,
                 config.d_hidden,
+                config.d_values,
+                config.d_values if config.values_2D else 1,
+            ))
+        )
+        self.b_V = nn.Parameter(
+            torch.empty((
                 config.n_is,
+                1 if config.share_values else config.length_is,
+                config.d_values,
+                config.d_values if config.values_2D else 1,
             ))
         )
         nn.init.xavier_normal_(self.W_V)
+        nn.init.zeros_(self.b_V)
         self.E_V = None
         if config.positional_bias_values:
             self.E_V = nn.Parameter(
@@ -92,25 +124,30 @@ class LISS(HookedModule):
             )
             nn.init.xavier_normal_(self.E_V)
 
-        self.W_O = nn.Parameter(torch.empty((config.n_is, config.d_hidden)))
+        self.W_O = nn.Parameter(torch.empty((
+            config.n_is,
+            config.d_values,
+            config.d_values if config.values_2D else 1,
+            config.d_hidden,
+        )))
         nn.init.xavier_normal_(self.W_O)
 
         self.alpha = None
         if config.distance_weighting:
-            indices = torch.empty((1, config.context_length, 1, 1))
-            indices[0, :, 0, 0] = torch.linspace(
+            indices = torch.empty((config.context_length, 1, 1))
+            indices[:, 0, 0] = torch.linspace(
                 1/config.context_length, 1, config.context_length
             )
             self.register_buffer("T", indices)
             self.alpha = nn.Parameter(
-                torch.empty((1, 1, config.length_is, config.n_is))
+                torch.empty((1, config.n_is, config.length_is))
             )
             nn.init.ones_(self.alpha)
 
         self.beta = None
         if config.sum_normalization is not None:
-            factor_norm = torch.empty((1, config.context_length, 1))
-            factor_norm[0, :, 0] = torch.arange(
+            factor_norm = torch.empty((1, config.context_length, 1, 1, 1))
+            factor_norm[0, :, 0, 0, 0] = torch.arange(
                 1, config.context_length + 1
             )
             self.register_buffer("norm", factor_norm)
@@ -123,22 +160,22 @@ class LISS(HookedModule):
         if config.positional_bias or config.positional_bias_values:
             position = torch.arange(config.context_length).unsqueeze(-1)
             div_term = torch.exp(
-                torch.arange(0, config.d_hidden, 2)
-                * (-np.log(10_000) / config.d_hidden)
+                torch.arange(0, config.d_pe, 2)
+                * (-np.log(config.context_length) / config.d_pe)
             )
-            pe = torch.zeros(1, config.context_length, config.d_hidden)
-            pe[0, :, 0::2] = torch.sin(position * div_term)
-            if config.d_hidden % 2 != 0:
-                pe[0, :, 1::2] = torch.cos(position * div_term[:-1])
+            pe = torch.zeros(config.context_length, config.d_pe)
+            pe[:, 0::2] = torch.sin(position * div_term * np.pi / 2)
+            if config.d_pe % 2 != 0:
+                pe[:, 1::2] = torch.cos(position * div_term[:-1] * np.pi / 2)
             else:
-                pe[0, :, 1::2] = torch.cos(position * div_term)
+                pe[:, 1::2] = torch.cos(position * div_term * np.pi / 2)
             self.register_buffer("P", pe)
 
             self.E_K = nn.Parameter(
                 torch.empty((
+                    config.n_is,
                     1 if config.share_keys else config.length_is,
-                    config.d_hidden,
-                    1,
+                    config.d_pe,
                 ))
             )
             nn.init.xavier_normal_(self.E_K)
@@ -165,60 +202,68 @@ class LISS(HookedModule):
         T = x.size(1)
         Q = K = sin_K = cos_K = sin_Q = cos_Q = None
         if self.W_Q is not None and self.W_K is not None:
-            Q = torch.einsum('ldh,btd->btlh', self.W_Q, x)
+            Q = torch.einsum('hld,btd->bthl', self.W_Q, x) + self.b_Q
             Q = torch.sigmoid(Q)
-            K = torch.einsum('ldh,btd->btlh', self.W_K, x)
+            K = torch.einsum('hld,btd->bthl', self.W_K, x) + self.b_K
             K = torch.sigmoid(K)
             if self.alpha is not None and T > 1:
                 rel_pos = (
-                    torch.sigmoid(self.alpha)*(T/(T-1))
-                    * self.get_buffer("T")[:, :T, :, :]
+                    torch.sigmoid(self.alpha) * self.get_buffer("T")[:T, :, :]
                 )
                 Q = Q - rel_pos
                 K = K - rel_pos
             if self.E_K is not None:
-                K = K + torch.relu(torch.einsum('ldh,btd->btlh', self.E_K,
-                    self.get_buffer("P")[:, :T, :]
+                K = K + torch.sigmoid(torch.einsum('hld,td->thl', self.E_K,
+                    self.get_buffer("P")[:T, :]
                 ))
             self.hooks("Q", Q)
             self.hooks("K", K)
+            Q = Q.unsqueeze(-1).unsqueeze(-1)
+            K = K.unsqueeze(-1).unsqueeze(-1)
             if self.config.weighting == "cos":
                 sin_Q = torch.sin(Q)**2
                 cos_Q = torch.cos(Q)**2
                 sin_K = torch.sin(K)**2
                 cos_K = torch.cos(K)**2
 
-        V = torch.einsum('ldh,btd->btlh', self.W_V, x)
-        if self.E_V is not None:
-            V = V + torch.relu(torch.einsum('ldh,btd->btlh', self.E_V,
-                self.get_buffer("P")[:, :T, :]
-            ))
+        V = torch.einsum('hldvw,btd->bthlvw', self.W_V, x) + self.b_V
+        # if self.E_V is not None:
+        #     V = V + torch.relu(torch.einsum('ldh,btd->btlh', self.E_V,
+        #         self.get_buffer("P")[:, :T, :]
+        #     ))
         self.hooks("V", V)
 
         p = self.config.length_is
 
-        result = V[:, :, 0, :]
+        result = V[:, :, :, 0, :, :]
         result = self._weight_is(result, Q, K, sin_Q, cos_Q, sin_K, cos_K, 0)
         result = torch.cumsum(result, dim=1)
 
         if self.beta is not None:
             result /= (
                 (0.25*torch.tanh(self.beta[0])+0.75001)**(
-                    torch.log10(self.get_buffer("norm")[:, :T, :])
-                ) * self.get_buffer("norm")[:, :T, :]
+                    torch.log10(self.get_buffer("norm")[:, :T, :, :, :])
+                ) * self.get_buffer("norm")[:, :T, :, :, :]
             )
 
         denom = None
         if self.config.denominator_is:
-            denom = torch.ones_like(V[:, :, 0, :], device=V.device)
+            denom = torch.ones_like(V[:, :, :, 0, :, :], device=V.device)
             denom = self._weight_is(denom, Q, K, sin_Q, cos_Q, sin_K, cos_K, 0)
             denom = torch.cumsum(denom, dim=1)
 
         for l in range(1, p):
             self._hook_weighting(Q, K, V, sin_Q, cos_Q, sin_K, cos_K, l)
 
-            result = nn.functional.pad(result[:, :-1, :], (0, 0, 1, 0))
-            result = result * V[:, :, 0 if self.config.share_values else l, :]
+            result = nn.functional.pad(
+                result[:, :-1, :, :, :],
+                (0, 0, 0, 0, 0, 0, 1, 0)
+            )
+            iv = 0 if self.config.share_values else l
+            if self.config.values_2D:
+                result = V[:, :, :, iv, :, :] @ result
+            else:
+                result = V[:, :, :, iv, :, :] * result
             result = self._weight_is(
                 result, Q, K, sin_Q, cos_Q, sin_K, cos_K, l
             )
@@ -229,11 +274,11 @@ class LISS(HookedModule):
                     (0.25*torch.tanh(self.beta[
                         0 if self.config.sum_normalization == "same" else l
                     ])+0.75001)**(
-                        torch.log10(self.get_buffer("norm")[:, :T, :])
-                    ) * self.get_buffer("norm")[:, :T, :],
-                    (0, 0, l, 0),
+                        torch.log10(self.get_buffer("norm")[:, :T, :, :, :])
+                    ) * self.get_buffer("norm")[:, :T, :, :, :],
+                    (0, 0, 0, 0, 0, 0, l, 0),
                     value=1.0,
-                )[:, :-l, :]
+                )[:, :-l, :, :, :]
 
             if denom is not None:
                 denom = self._weight_is(
@@ -250,7 +295,7 @@ class LISS(HookedModule):
             result = result / denom
 
         result = self.hooks(f"iss.{p}", result)
-        result = torch.einsum("bth,hd->btd", result, self.W_O)
+        result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
 
@@ -277,14 +322,14 @@ class LISS(HookedModule):
                     * sin_Q[:, :, iq, :]**(torch.sigmoid(self.mu[l-1])/2)
                 )
             elif self.config.weighting == "exp" and Q is not None:
-                temp = temp * torch.exp(Q[:, :, iq, :])
+                temp = temp * torch.exp(Q[:, :, :, iq, :, :])
             self.hooks(f"iss.{l}", temp)
 
         if (self.config.weighting == "exp"
                 and Q is not None and K is not None):
             x = x * torch.exp(
-                (0 if l == 0 else Q[:, :, iq, :])
-                - (0 if l == p else K[:, :, ik, :])  # type: ignore
+                (0 if l == 0 else Q[:, :, :, iq, :, :])
+                - (0 if l == p else K[:, :, :, ik, :, :])  # type: ignore
             )
 
         elif (self.config.weighting == "cos"
@@ -317,14 +362,14 @@ class LISS(HookedModule):
             return
         B = V.size(0)
         T = V.size(1)
-        D = self.config.n_is if not self.config.single_query_key else 1
-        matrix = torch.ones((B, T, T, D), device=V.device)
+        D = self.config.n_is
+        matrix = torch.ones((B, D, T, T), device=V.device)
         if self.config.weighting == "exp" and Q is not None and K is not None:
             iq = 0 if self.config.share_queries else l-1
             ik = 0 if self.config.share_keys else l-1
             matrix = matrix * torch.exp(
-                Q[:, :, iq, :].repeat(1, T, 1).reshape(B, T, T, D)
-                - (K[:, :, ik, :].repeat(1, T, 1).reshape(B, T, T, D)
+                Q[:, :, :, iq, 0, 0].repeat(1, T, 1).reshape(B, D, T, T)
+                - (K[:, :, :, ik, 0, 0].repeat(1, T, 1).reshape(B, D, T, T)
                     .transpose(1, 2))
             )
         elif (self.config.weighting == "cos"

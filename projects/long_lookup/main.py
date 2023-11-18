@@ -31,7 +31,7 @@ config = {
     "context_length": 100,
     "characters": 5,
 
-    "lr": 75e-4,
+    "lr": 1e-2,
     "weight_decay": 1e-4,
     "epochs": 1001,
 
@@ -49,7 +49,7 @@ def build_model() -> TokenPredictionModule:
     #     d_hidden=64,
     #     d_head=16,
     #     ffn_units=128,
-    #     bias=True,
+    #     bias=False,
     # )
     # model = DecoderOnlyTransformer(model_config)
 
@@ -58,19 +58,21 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=32,
+        n_is=16,
+        d_values=8,
+        values_2D=True,
         d_hidden=config["characters"],
         weighting="exp",
         positional_encoding=None,
-        denominator_is=False,
+        denominator_is=True,
         distance_weighting=True,
+        d_pe=16,
         positional_bias=True,
         positional_bias_values=False,
-        single_query_key=False,
         share_queries=False,
         share_keys=False,
         share_values=False,
-        sum_normalization="same",
+        sum_normalization="independent",
     )
     model = Elissabeth(model_config)
     model.set_eye("embedding.weight")
@@ -110,7 +112,7 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth 3",
+            project="Elissabeth 4",
             checkpoint_name=load_path,
             tags=["Elissabeth", "long lookup"],
             id=load_path.split("/")[1] if load_path is not None else None,
@@ -124,44 +126,34 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    example = long_lookup(
-        n_samples=1,
-        length=config["context_length"],
-        characters=config["characters"],
-    )[0]
-    # np.save(
-    #     os.path.join(
-    #         os.path.dirname(__file__), "data", "elissabeth_example.npy",
-    #     ),
-    #     example.numpy(),
-    # )
+    # example = long_lookup(
+    #     n_samples=1,
+    #     length=config["context_length"],
+    #     characters=config["characters"],
+    # )[0]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        # Progressbar(),
-        WeightHistory((
-                "model.layers.0.W_Q",
-                "model.layers.0.W_K",
-                "model.layers.0.E_K",
-                "model.layers.0.W_V",
-                # "model.layers.0.E_V",
-                "model.layers.0.W_O",
-                "model.layers.0.alpha",
-                "model.embedding.weight",
-                "model.unembedding.weight",
-            ),
-            reduce_axis=[0, 0, 2, 0, None, None, None, None],
-            each_n_epochs=200,
-        ),
-        ElissabethISTracker(
-            example,
-            reduce="norm",
-            each_n_epochs=200,
-            use_wandb=True,
-        ),
-        # ElissabethWeighting(
+        # WeightHistory((
+        #         ("model.layers.0.W_Q", (2, 0)),
+        #         ("model.layers.0.b_Q", (0, )),
+        #         ("model.layers.0.W_K", (2, 0)),
+        #         ("model.layers.0.b_K", (0, )),
+        #         ("model.layers.0.E_K", (2, 0)),
+        #         # "model.layers.0.W_V",
+        #         # "model.layers.0.b_V",
+        #         # "model.layers.0.E_V",
+        #         # "model.layers.0.W_O",
+        #         ("model.layers.0.alpha", (1, 2)),
+        #         "model.embedding.weight",
+        #         "model.unembedding.weight",
+        #     ),
+        #     each_n_epochs=200,
+        # ),
+        # ElissabethISTracker(
         #     example,
-        #     each_n_epochs=100,
-        #     save_path=os.path.join(os.path.dirname(__file__), "data"),
+        #     reduce="norm",
+        #     each_n_epochs=200,
+        #     use_wandb=True,
         # ),
     ]
 
@@ -172,6 +164,7 @@ def train(
         logger=wandb_logger if not only_test else None,
         default_root_dir=SAVE_PATH,
         enable_progress_bar=progress_bar,
+        # overfit_batches=10,
     )
 
     if only_test:

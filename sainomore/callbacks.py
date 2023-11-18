@@ -39,14 +39,12 @@ class WeightHistory(Callback):
 
     def __init__(
         self,
-        weight_names: Sequence[str],
-        reduce_axis: Optional[Sequence[int | None]] = None,
+        weights: Sequence[str | tuple[str, tuple[int, ...]]],
         each_n_epochs: int = 1,
         save_path: Optional[str] = None,
     ) -> None:
         super().__init__()
-        self._weight_names = list(weight_names)
-        self._reduce_axis = reduce_axis
+        self._weights = list(weights)
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
         self._save_path = save_path
@@ -70,19 +68,32 @@ class WeightHistory(Callback):
         if self._save_path is not None:
             path = os.path.join(self._save_path, f"epoch{self._epoch:05}")
             os.makedirs(path, exist_ok=True)
-        for k, wname in enumerate(self._weight_names):
-            param = pl_module.get_parameter(wname).detach().cpu().numpy()
-            if (self._reduce_axis is not None
-                    and self._reduce_axis[k] is not None):
-                param = [np.take(param, i, self._reduce_axis[k])
-                         for i in range(param.shape[self._reduce_axis[k]])]
+        for k, weight in enumerate(self._weights):
+            dim = None
+            if isinstance(weight, str):
+                name = weight
             else:
-                param = [param]
+                name, dim = weight
+            try:
+                param = pl_module.get_parameter(name).detach().cpu().numpy()
+            except AttributeError:
+                continue
+            if dim is None:
+                log_param = [param]
+            else:
+                param = np.moveaxis(
+                    param, dim, tuple(-i for i in range(1, len(dim)+1))
+                )
+                param = np.reshape(
+                    param,
+                    (-1, param.shape[-2], param.shape[-1])
+                )
+                log_param = [param[i] for i in range(param.shape[0])]
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
-                    logger.log_image("weights/"+wname, param)
+                    logger.log_image("weights/"+name, log_param)
             if path is not None:
-                np.save(os.path.join(path, wname+".npy"), np.array(param))
+                np.save(os.path.join(path, name+".npy"), np.array(log_param))
 
 
 class HookHistory(Callback):
@@ -294,7 +305,7 @@ class ElissabethISTracker(Callback):
     def __init__(
         self,
         x: torch.Tensor,
-        reduce: Literal["max", "norm"] = "norm",
+        reduce: Literal["norm"] = "norm",
         each_n_epochs: int = 1,
         save_path: Optional[str] = None,
         use_wandb: bool = False,
@@ -326,13 +337,15 @@ class ElissabethISTracker(Callback):
 
         model: Elissabeth = pl_module.model  # type: ignore
 
-        for l in range(1, model.config.length_is+1):
-            model.get_hook("layers.0", f"iss.{l}").attach()
+        n_layers = model.config.n_layers
+        iss_length: int = model.config.length_is
+
+        for l in range(n_layers):
+            for d in range(iss_length):
+                model.get_hook(f"layers.{l}", f"iss.{d+1}").attach()
         model(self._data)
         model.release_all_hooks()
 
-        n_layers = model.config.n_layers
-        iss_length: int = model.config.length_is
         values = np.empty((n_layers, iss_length, self._data.size(1)))
         for l in range(n_layers):
             for d in range(iss_length):
@@ -340,13 +353,8 @@ class ElissabethISTracker(Callback):
                     values[l, d, :] = np.mean(np.linalg.norm(
                         model.get_hook(
                             f"layers.{l}", f"iss.{d+1}",
-                        ).fwd[:, :, :],
-                    axis=2), axis=0)
-                elif self._reduce == "max":
-                    iss = model.get_hook(f"layers.{l}", f"iss.{d+1}").fwd
-                    index = np.unravel_index(np.argmax(iss), iss.shape)
-                    values[l, d, :] = np.mean(iss[:, :, index], axis=0)
-
+                        ).fwd[:, :, :, :, :],
+                    axis=(3, 4)), axis=(0, 2))
         if self._wandb:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
