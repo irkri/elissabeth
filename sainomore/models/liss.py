@@ -10,6 +10,7 @@ from torch import nn
 
 from ..hooks import HookCollection
 from .base import HookedModule, ModelConfig, SAINoMoreModule
+from .positional import RoPE
 from .transformer import LearnablePositionalEmbedding, PositionalEncoding
 
 
@@ -158,27 +159,28 @@ class LISS(HookedModule):
 
         self.E_K = None
         if config.positional_bias or config.positional_bias_values:
-            position = torch.arange(config.context_length).unsqueeze(-1)
-            div_term = torch.exp(
-                torch.arange(0, config.d_pe, 2)
-                * (-np.log(config.context_length) / config.d_pe)
-            )
-            pe = torch.zeros(config.context_length, config.d_pe)
-            pe[:, 0::2] = torch.sin(position * div_term * np.pi / 2)
-            if config.d_pe % 2 != 0:
-                pe[:, 1::2] = torch.cos(position * div_term[:-1] * np.pi / 2)
-            else:
-                pe[:, 1::2] = torch.cos(position * div_term * np.pi / 2)
-            self.register_buffer("P", pe)
+            # position = torch.arange(config.context_length).unsqueeze(-1)
+            # div_term = torch.exp(
+            #     torch.arange(0, config.d_pe, 2)
+            #     * (-np.log(config.context_length) / config.d_pe)
+            # )
+            # pe = torch.zeros(config.context_length, config.d_pe)
+            # pe[:, 0::2] = torch.sin(position * div_term * np.pi / 2)
+            # if config.d_pe % 2 != 0:
+            #     pe[:, 1::2] = torch.cos(position * div_term[:-1] * np.pi / 2)
+            # else:
+            #     pe[:, 1::2] = torch.cos(position * div_term * np.pi / 2)
+            # self.register_buffer("P", pe)
 
-            self.E_K = nn.Parameter(
-                torch.empty((
-                    config.n_is,
-                    1 if config.share_keys else config.length_is,
-                    config.d_pe,
-                ))
-            )
-            nn.init.xavier_normal_(self.E_K)
+            # self.E_K = nn.Parameter(
+            #     torch.empty((
+            #         config.n_is,
+            #         1 if config.share_keys else config.length_is,
+            #         config.d_pe,
+            #     ))
+            # )
+            # nn.init.xavier_normal_(self.E_K)
+            self.rope = RoPE(T=config.context_length, d=config.d_hidden)
 
         if config.weighting == "cos":
             self.mu = nn.Parameter(
@@ -202,10 +204,10 @@ class LISS(HookedModule):
         T = x.size(1)
         Q = K = sin_K = cos_K = sin_Q = cos_Q = None
         if self.W_Q is not None and self.W_K is not None:
-            Q = torch.einsum('hld,btd->bthl', self.W_Q, x) + self.b_Q
-            Q = torch.sigmoid(Q)
-            K = torch.einsum('hld,btd->bthl', self.W_K, x) + self.b_K
-            K = torch.sigmoid(K)
+            Q = torch.einsum('hld,btd->bthl', self.W_Q, self.rope(x)) + self.b_Q
+            # Q = torch.sigmoid(Q)
+            K = torch.einsum('hld,btd->bthl', self.W_K, self.rope(x)) + self.b_K
+            # K = torch.sigmoid(K)
             if self.alpha is not None and T > 1:
                 rel_pos = (
                     torch.sigmoid(self.alpha) * self.get_buffer("T")[:T, :, :]
