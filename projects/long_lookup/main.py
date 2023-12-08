@@ -31,9 +31,9 @@ config = {
     "context_length": 100,
     "characters": 5,
 
-    "lr": 1e-2,
+    "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 1001,
+    "epochs": 501,
 
     "batch_size": 32,
     "val_size": 0.2,
@@ -57,22 +57,20 @@ def build_model() -> TokenPredictionModule:
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
-        length_is=2,
-        n_is=16,
-        d_values=8,
-        values_2D=True,
-        d_hidden=config["characters"],
+        length_is=3,
+        n_is=32,
+        d_values=4,
+        values_2D=False,
+        d_hidden=32,#config["characters"],
         weighting="exp",
         positional_encoding=None,
-        denominator_is=True,
-        distance_weighting=True,
-        d_pe=16,
-        positional_bias=True,
-        positional_bias_values=False,
+        distance_weighting=False,
+        pe_query_key=True,
+        pe_value=False,
         share_queries=False,
         share_keys=False,
         share_values=False,
-        sum_normalization="independent",
+        sum_normalization="same",
     )
     model = Elissabeth(model_config)
     model.set_eye("embedding.weight")
@@ -114,7 +112,7 @@ def train(
         wandb_logger = WandbLogger(
             project="Elissabeth 4",
             checkpoint_name=load_path,
-            tags=["Elissabeth", "long lookup"],
+            tags=["Elissabeth", "long lookup", "RoPE"],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -126,35 +124,35 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    # example = long_lookup(
-    #     n_samples=1,
-    #     length=config["context_length"],
-    #     characters=config["characters"],
-    # )[0]
+    example = long_lookup(
+        n_samples=1,
+        length=config["context_length"],
+        characters=config["characters"],
+    )[0]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        # WeightHistory((
-        #         ("model.layers.0.W_Q", (2, 0)),
-        #         ("model.layers.0.b_Q", (0, )),
-        #         ("model.layers.0.W_K", (2, 0)),
-        #         ("model.layers.0.b_K", (0, )),
-        #         ("model.layers.0.E_K", (2, 0)),
-        #         # "model.layers.0.W_V",
-        #         # "model.layers.0.b_V",
-        #         # "model.layers.0.E_V",
-        #         # "model.layers.0.W_O",
-        #         ("model.layers.0.alpha", (1, 2)),
-        #         "model.embedding.weight",
-        #         "model.unembedding.weight",
-        #     ),
-        #     each_n_epochs=200,
-        # ),
-        # ElissabethISTracker(
-        #     example,
-        #     reduce="norm",
-        #     each_n_epochs=200,
-        #     use_wandb=True,
-        # ),
+        WeightHistory((
+                ("model.layers.0.W_Q", (2, 0)),
+                ("model.layers.0.b_Q", (0, )),
+                ("model.layers.0.W_K", (2, 0)),
+                ("model.layers.0.b_K", (0, )),
+                # ("model.layers.0.E_K", (2, 0)),
+                # "model.layers.0.W_V",
+                # "model.layers.0.b_V",
+                # "model.layers.0.E_V",
+                # "model.layers.0.W_O",
+                # ("model.layers.0.alpha", (1, 2)),
+                "model.embedding.weight",
+                "model.unembedding.weight",
+            ),
+            each_n_epochs=100,
+        ),
+        ElissabethISTracker(
+            example,
+            reduce="norm",
+            each_n_epochs=100,
+            use_wandb=True,
+        ),
     ]
 
     trainer = L.Trainer(

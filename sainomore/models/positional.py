@@ -17,20 +17,21 @@ class RoPE(torch.nn.Module):
         self.register_buffer("cos", torch.cos(emb))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T = x.size(1)
         flag = x.size(-1) % 2 == 1
         if flag:
-            x = torch.concat((x, torch.zeros_like(x[..., :1])), dim=-1)
+            x = torch.concat((x, torch.zeros_like(x[:, :, :1])), dim=-1)
         first = (
-            x[..., ::2] * self.get_buffer("cos")
-            - x[..., 1::2] * self.get_buffer("sin")
+            x[:, :, ::2] * self.get_buffer("cos")[:T, :]
+            - x[:, :, 1::2] * self.get_buffer("sin")[:T, :]
         )
         second = (
-            x[..., 1::2] * self.get_buffer("cos")
-            + x[..., ::2] * self.get_buffer("sin")
+            x[:, :, 1::2] * self.get_buffer("cos")[:T, :]
+            + x[:, :, ::2] * self.get_buffer("sin")[:T, :]
         )
         result = torch.empty_like(x, dtype=torch.float)
-        result[..., ::2] = first
-        result[..., 1::2] = second
+        result[:, :, ::2] = first
+        result[:, :, 1::2] = second
         if flag:
-            result = result[..., :-1]
+            result = result[:, :, :-1]
         return result

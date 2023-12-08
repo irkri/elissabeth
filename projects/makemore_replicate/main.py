@@ -98,19 +98,19 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=5,
-        n_is=64,
+        n_is=16,
+        d_values=4,
+        values_2D=True,
         d_hidden=64,
         weighting="exp",
         positional_encoding=None,
-        denominator_is=False,
-        distance_weighting=True,
-        positional_bias=True,
-        positional_bias_values=False,
-        single_query_key=False,
+        distance_weighting=False,
+        pe_query_key=True,
+        pe_value=False,
         share_queries=False,
         share_keys=False,
         share_values=False,
-        sum_normalization="same",
+        sum_normalization="independent",
     )
     model = Elissabeth(model_config)
     # model.set_eye("embedding.weight")
@@ -146,9 +146,9 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth 3",
+            project="Elissabeth 4",
             checkpoint_name=load_path,
-            tags=["Elissabeth", "makemore_quotes"],
+            tags=["Elissabeth", "makemore_quotes", "RoPE"],
             id=load_path.split("/")[-2] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -174,32 +174,27 @@ def train(
     example = assembler.sample(2418)[0]
     callbacks = [
         GeneralConfigCallback(max_depth=10),
-        PredictionCallback(each_n_epochs=50),
+        PredictionCallback(each_n_epochs=25),
         WeightHistory((
-                "model.layers.0.W_Q",
-                "model.layers.0.W_K",
-                "model.layers.0.E_K",
-                "model.layers.0.W_V",
-                # "model.layers.0.E_V",
-                "model.layers.0.W_O",
-                "model.layers.0.alpha",
+                ("model.layers.0.W_Q", (2, 0)),
+                ("model.layers.0.b_Q", (0, )),
+                ("model.layers.0.W_K", (2, 0)),
+                ("model.layers.0.b_K", (0, )),
+                # "model.layers.0.W_V",
+                # "model.layers.0.b_V",
+                # "model.layers.0.W_O",
+                # ("model.layers.0.alpha", (1, 2)),
                 "model.embedding.weight",
                 "model.unembedding.weight",
             ),
-            reduce_axis=[0, 0, 2, 0, None, None, None, None],
-            each_n_epochs=10,
+            each_n_epochs=25,
         ),
         ElissabethISTracker(
             example,
             reduce="norm",
             each_n_epochs=25,
             use_wandb=True,
-        )
-        # ElissabethWeighting(
-        #     example,
-        #     each_n_epochs=100,
-        #     save_path=os.path.join(os.path.dirname(__file__), "data"),
-        # ),
+        ),
     ]
 
     trainer = L.Trainer(

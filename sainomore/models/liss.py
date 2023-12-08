@@ -26,13 +26,10 @@ class ElissabethConfig(ModelConfig):
     share_keys: bool = False
     share_values: bool = False
 
-    d_pe: int = 32
-    positional_bias: bool = True
-    positional_bias_values: bool = False
+    pe_query_key: bool = True
+    pe_value: bool = False
 
     distance_weighting: bool = False
-
-    denominator_is: bool = False
 
     weighting: Literal["cos", "exp"] | None = "exp"
 
@@ -114,16 +111,6 @@ class LISS(HookedModule):
         )
         nn.init.xavier_normal_(self.W_V)
         nn.init.zeros_(self.b_V)
-        self.E_V = None
-        if config.positional_bias_values:
-            self.E_V = nn.Parameter(
-                torch.empty((
-                    1 if config.share_values else config.length_is,
-                    config.d_hidden,
-                    1,
-                ))
-            )
-            nn.init.xavier_normal_(self.E_V)
 
         self.W_O = nn.Parameter(torch.empty((
             config.n_is,
@@ -157,30 +144,9 @@ class LISS(HookedModule):
             )))
             nn.init.constant_(self.beta, 5.40988)
 
-        self.E_K = None
-        if config.positional_bias or config.positional_bias_values:
-            # position = torch.arange(config.context_length).unsqueeze(-1)
-            # div_term = torch.exp(
-            #     torch.arange(0, config.d_pe, 2)
-            #     * (-np.log(config.context_length) / config.d_pe)
-            # )
-            # pe = torch.zeros(config.context_length, config.d_pe)
-            # pe[:, 0::2] = torch.sin(position * div_term * np.pi / 2)
-            # if config.d_pe % 2 != 0:
-            #     pe[:, 1::2] = torch.cos(position * div_term[:-1] * np.pi / 2)
-            # else:
-            #     pe[:, 1::2] = torch.cos(position * div_term * np.pi / 2)
-            # self.register_buffer("P", pe)
-
-            # self.E_K = nn.Parameter(
-            #     torch.empty((
-            #         config.n_is,
-            #         1 if config.share_keys else config.length_is,
-            #         config.d_pe,
-            #     ))
-            # )
-            # nn.init.xavier_normal_(self.E_K)
-            self.rope = RoPE(T=config.context_length, d=config.d_hidden)
+        self.pe = None
+        if config.pe_query_key or config.pe_value:
+            self.pe = RoPE(T=config.context_length, d=config.d_hidden)
 
         if config.weighting == "cos":
             self.mu = nn.Parameter(
@@ -203,10 +169,20 @@ class LISS(HookedModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
         Q = K = sin_K = cos_K = sin_Q = cos_Q = None
+        if self.pe is not None:
+            x_enc = self.pe(x)
         if self.W_Q is not None and self.W_K is not None:
-            Q = torch.einsum('hld,btd->bthl', self.W_Q, self.rope(x)) + self.b_Q
+            Q = torch.einsum(
+                'hld,btd->bthl',
+                self.W_Q,
+                x_enc if self.config.pe_query_key else x,  # type: ignore
+            ) + self.b_Q
             # Q = torch.sigmoid(Q)
-            K = torch.einsum('hld,btd->bthl', self.W_K, self.rope(x)) + self.b_K
+            K = torch.einsum(
+                'hld,btd->bthl',
+                self.W_K,
+                x_enc if self.config.pe_query_key else x,  # type: ignore
+            ) + self.b_K
             # K = torch.sigmoid(K)
             if self.alpha is not None and T > 1:
                 rel_pos = (
@@ -214,10 +190,6 @@ class LISS(HookedModule):
                 )
                 Q = Q - rel_pos
                 K = K - rel_pos
-            if self.E_K is not None:
-                K = K + torch.sigmoid(torch.einsum('hld,td->thl', self.E_K,
-                    self.get_buffer("P")[:T, :]
-                ))
             self.hooks("Q", Q)
             self.hooks("K", K)
             Q = Q.unsqueeze(-1).unsqueeze(-1)
@@ -228,11 +200,11 @@ class LISS(HookedModule):
                 sin_K = torch.sin(K)**2
                 cos_K = torch.cos(K)**2
 
-        V = torch.einsum('hldvw,btd->bthlvw', self.W_V, x) + self.b_V
-        # if self.E_V is not None:
-        #     V = V + torch.relu(torch.einsum('ldh,btd->btlh', self.E_V,
-        #         self.get_buffer("P")[:, :T, :]
-        #     ))
+        V = torch.einsum(
+            'hldvw,btd->bthlvw',
+            self.W_V,
+            x_enc if self.config.pe_value else x,  # type: ignore
+        ) + self.b_V
         self.hooks("V", V)
 
         p = self.config.length_is
@@ -247,12 +219,6 @@ class LISS(HookedModule):
                     torch.log10(self.get_buffer("norm")[:, :T, :, :, :])
                 ) * self.get_buffer("norm")[:, :T, :, :, :]
             )
-
-        denom = None
-        if self.config.denominator_is:
-            denom = torch.ones_like(V[:, :, :, 0, :, :], device=V.device)
-            denom = self._weight_is(denom, Q, K, sin_Q, cos_Q, sin_K, cos_K, 0)
-            denom = torch.cumsum(denom, dim=1)
 
         for l in range(1, p):
             self._hook_weighting(Q, K, V, sin_Q, cos_Q, sin_K, cos_K, l)
@@ -282,19 +248,9 @@ class LISS(HookedModule):
                     value=1.0,
                 )[:, :-l, :, :, :]
 
-            if denom is not None:
-                denom = self._weight_is(
-                    denom, Q, K, sin_Q, cos_Q, sin_K, cos_K, l
-                )
-                denom = torch.cumsum(denom, dim=1)
-
         self._hook_weighting(Q, K, V, sin_Q, cos_Q, sin_K, cos_K, p)
 
         result = self._weight_is(result, Q, K, sin_Q, cos_Q, sin_K, cos_K, p)
-
-        if denom is not None:
-            denom = self._weight_is(denom, Q, K, sin_Q, cos_Q, sin_K, cos_K, p)
-            result = result / denom
 
         result = self.hooks(f"iss.{p}", result)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
@@ -403,7 +359,8 @@ class Elissabeth(SAINoMoreModule):
                 config.input_vocab_size, config.d_hidden
             )
         if (self.config.positional_encoding is None
-                and not config.positional_bias and config.length_is == 1):
+                and not config.pe_query_key and not config.pe_value
+                and config.length_is == 1):
             warnings.warn(
                 "No positional encoding and ISS length 1. "
                 "Elissabeth will be permutation invariant.",
