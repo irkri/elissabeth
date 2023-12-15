@@ -2,12 +2,12 @@ from typing import Optional
 
 import numpy as np
 import torch
-from matplotlib.colors import LogNorm, Normalize
 from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .models import Elissabeth
+from .elissabeth import Elissabeth
 
 
 def get_liss_attention_matrix(

@@ -11,14 +11,13 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore.callbacks import (ElissabethWeighting, GeneralConfigCallback,
-                                 WeightHistory, ElissabethISTracker)
-from sainomore.data import long_lookup
-from sainomore.data.lightning import GivenDataModule
+from sainomore import Elissabeth, ElissabethConfig
+from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
+                                 GeneralConfigCallback, WeightHistory)
+from sainomore.data import GivenDataModule, long_lookup
 from sainomore.lightning import TokenPredictionModule
 from sainomore.models import (DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, Elissabeth,
-                              ElissabethConfig, ModelConfig)
+                              DecoderOnlyTransformerConfig, ModelConfig)
 from sainomore.tools import (get_liss_attention_matrix,
                              plot_liss_attention_matrix)
 
@@ -57,11 +56,11 @@ def build_model() -> TokenPredictionModule:
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
-        length_is=3,
-        n_is=32,
+        length_is=2,
+        n_is=16,
         d_values=4,
         values_2D=False,
-        d_hidden=32,#config["characters"],
+        d_hidden=16,#config["characters"],
         weighting="exp",
         positional_encoding=None,
         distance_weighting=False,
@@ -73,7 +72,7 @@ def build_model() -> TokenPredictionModule:
         sum_normalization="same",
     )
     model = Elissabeth(model_config)
-    model.set_eye("embedding.weight")
+    # model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(
         model,

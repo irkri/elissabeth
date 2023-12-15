@@ -4,9 +4,10 @@ from typing import Optional
 import torch
 from torch import nn
 
+from ..base import HookedModule, SAINoMoreModule
 from ..hooks import HookCollection
-from .base import HookedModule, SAINoMoreModule
-from .transformer import MLP, DecoderOnlyTransformerConfig, PositionalEncoding
+from .transformer import (MLP, DecoderOnlyTransformerConfig,
+                          SinusoidalPositionalEncoding)
 
 
 @dataclass
@@ -136,7 +137,9 @@ class CosDecoderOnlyTransformer(SAINoMoreModule):
             self.embedding = nn.Embedding(
                 config.input_vocab_size, config.d_hidden
             )
-        self.pos_embedding = PositionalEncoding(config)
+        self.pos_embedding = SinusoidalPositionalEncoding(
+            config.context_length, config.d_hidden
+        )
         self.decoder = CosDecoder(config)
         self.unembedding = nn.Linear(
             config.d_hidden, config.output_vocab_size,

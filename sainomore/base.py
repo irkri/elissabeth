@@ -1,12 +1,12 @@
 __all__ = ["ModelConfig", "HookedModule", "SAINoMoreModule"]
 
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import torch
 from torch import nn
 
-from ..hooks import HookCollection, Hook
+from .hooks import Hook, HookCollection
 
 
 @dataclass
@@ -94,22 +94,37 @@ class SAINoMoreModule(nn.Module):
             )
         return module.hooks.get(name)
 
-    def set_eye(self, name: str, requires_grad: bool = False) -> None:
+    def set_eye(
+        self,
+        name: str,
+        requires_grad: bool = False,
+        dims: Optional[tuple[int, int]] = None,
+    ) -> None:
         param = self.get_parameter(name)
-        if param.dim() == 2:
-            nn.init.eye_(param)
-        elif param.dim() == 1:
-            raise IndexError("Can't set one dimensional tensor to eye")
+        if dims is None:
+            matching_dims = []
+            for i in range(param.dim()):
+                for j in range(i+1, param.dim()):
+                    if param.size(i) == param.size(j) and param.size(i) != 1:
+                        matching_dims.append((i, j))
+            if len(matching_dims) > 1:
+                raise ValueError("More than 2 dimensions match in size")
+            elif len(matching_dims) == 0:
+                raise ValueError("No matching dimensions found")
         else:
-            if param.size(-1) != param.size(-2):
-                raise IndexError("Last two dimensions of tensor do not match")
-            SAINoMoreModule._set_eye(param)
+            matching_dims = [dims]
+        SAINoMoreModule._set_eye(
+            param,
+            tuple(i for i in range(param.dim()) if i not in matching_dims[0]),
+        )
         param.requires_grad = requires_grad
 
     @staticmethod
-    def _set_eye(param: torch.Tensor) -> None:
+    def _set_eye(param: torch.Tensor, dims: tuple[int, ...]) -> None:
         if param.dim() == 2:
             nn.init.eye_(param)
         else:
-            for i in range(param.size(0)):
-                SAINoMoreModule._set_eye(param[i])
+            dim = dims[-1]
+            dims = dims[:-1]
+            for i in range(param.size(dim)):
+                SAINoMoreModule._set_eye(param.select(dim, i), dims)

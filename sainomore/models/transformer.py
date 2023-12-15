@@ -5,8 +5,10 @@ import numpy as np
 import torch
 from torch import nn
 
+from ..base import HookedModule, ModelConfig, SAINoMoreModule
 from ..hooks import HookCollection
-from .base import HookedModule, ModelConfig, SAINoMoreModule
+from ..positional import (LearnablePositionalEncoding,
+                          SinusoidalPositionalEncoding)
 
 
 @dataclass
@@ -25,43 +27,6 @@ class DecoderOnlyTransformerConfig(ModelConfig):
             self.d_head = self.d_hidden
         if self.ffn_units is None:
             self.ffn_units = self.d_hidden
-
-
-class LearnablePositionalEmbedding(nn.Module):
-
-    def __init__(self, config: ModelConfig) -> None:
-        super().__init__()
-
-        self.pos_embedding = nn.Parameter(
-            torch.empty(config.context_length, config.d_hidden)
-        )
-        nn.init.xavier_normal_(self.pos_embedding)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pos_embedding[:x.size(1), :]
-
-
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, config: ModelConfig) -> None:
-        super().__init__()
-
-        position = torch.arange(config.context_length).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, config.d_hidden, 2)
-            * (-np.log(10000.0) / config.d_hidden)
-        )
-        pe = torch.zeros(1, config.context_length, config.d_hidden)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        if config.d_hidden % 2 != 0:
-            pe[0, :, 1::2] = torch.cos(position * div_term[:-1])
-        else:
-            pe[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.get_buffer("pe")[:, :x.size(1), :]
-        return x
 
 
 class CausalMultiHeadAttention(HookedModule):
@@ -193,9 +158,13 @@ class DecoderOnlyTransformer(SAINoMoreModule):
             )
         print(f"{self.config.positional_encoding=}")
         if self.config.positional_encoding == "learnable":
-            self.pos_enc = LearnablePositionalEmbedding(config)
+            self.pos_enc = LearnablePositionalEncoding(
+                config.context_length, config.d_hidden
+            )
         elif self.config.positional_encoding == "sinusoidal":
-            self.pos_enc = PositionalEncoding(config)
+            self.pos_enc = SinusoidalPositionalEncoding(
+                config.context_length, config.d_hidden
+            )
         self.layers = nn.ModuleList([
             DecoderLayer(config)
             for _ in range(config.n_layers)

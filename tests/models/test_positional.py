@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from sainomore.models.positional import RoPE
+from sainomore.positional import RoPE
 
 
 def test_output() -> None:

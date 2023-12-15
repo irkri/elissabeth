@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Optional, Sequence, Literal
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import lightning.pytorch as L
 import numpy as np
@@ -10,8 +10,8 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
 from torch.utils.data import DataLoader
 
-from .models.base import HookedModule
-from .models.liss import Elissabeth
+from .base import HookedModule
+from .elissabeth import Elissabeth
 
 
 class GeneralConfigCallback(Callback):

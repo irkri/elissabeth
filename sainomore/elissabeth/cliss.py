@@ -1,50 +1,17 @@
-__all__ = ["LISS", "Elissabeth", "ElissabethConfig"]
+__all__ = ["CLISS"]
 
 import warnings
-from dataclasses import dataclass
-from typing import Literal, Optional
 
-import numpy as np
 import torch
 from torch import nn
 
+from ..base import HookedModule
 from ..hooks import HookCollection
-from .base import HookedModule, ModelConfig, SAINoMoreModule
-from .positional import RoPE
-from .transformer import LearnablePositionalEmbedding, PositionalEncoding
+from ..positional import RoPE
+from .config import ElissabethConfig
 
 
-@dataclass
-class ElissabethConfig(ModelConfig):
-    sum_normalization: Optional[Literal["same", "independent"]] = "independent"
-    n_is: int = 1
-    length_is: int = 2
-    d_values: int = None  # type: ignore
-    values_2D: bool = True
-
-    share_queries: bool = False
-    share_keys: bool = False
-    share_values: bool = False
-
-    pe_query_key: bool = True
-    pe_value: bool = False
-
-    distance_weighting: bool = False
-
-    weighting: Literal["cos", "exp"] | None = "exp"
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.d_values is None:
-            self.d_values = self.d_hidden
-        if (isinstance(self.d_values, list)
-                and len(self.d_values) != self.length_is + 1):
-            raise ValueError(
-                "'d_values' has to be a list of length 'length_is'+1"
-            )
-
-
-class LISS(HookedModule):
+class CLISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
     config: ElissabethConfig
@@ -252,7 +219,8 @@ class LISS(HookedModule):
 
         result = self._weight_is(result, Q, K, sin_Q, cos_Q, sin_K, cos_K, p)
 
-        result = self.hooks(f"iss.{p}", result)
+        if self.hooks.get(f"iss.{p}").is_attached():
+            self.hooks(f"iss.{p}", result)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
@@ -345,61 +313,3 @@ class LISS(HookedModule):
                     .transpose(1, 2))**(torch.sigmoid(self.mu[l-1, :])/2)
             )
         self.hooks(f"weighting.{l-1}", matrix)
-
-
-class Elissabeth(SAINoMoreModule):
-    """Extended Learnable Iterated Sums Signature Architecture"""
-
-    config: ElissabethConfig
-
-    def __init__(self, config: ElissabethConfig) -> None:
-        super().__init__(config)
-        if config.input_type == "token":
-            self.embedding = nn.Embedding(
-                config.input_vocab_size, config.d_hidden
-            )
-        if (self.config.positional_encoding is None
-                and not config.pe_query_key and not config.pe_value
-                and config.length_is == 1):
-            warnings.warn(
-                "No positional encoding and ISS length 1. "
-                "Elissabeth will be permutation invariant.",
-                RuntimeWarning,
-            )
-        if self.config.positional_encoding == "learnable":
-            self.pos_enc = LearnablePositionalEmbedding(config)
-        elif self.config.positional_encoding == "sinusoidal":
-            self.pos_enc = PositionalEncoding(config)
-
-        self.layers = nn.ModuleList([
-            LISS(config) for _ in range(config.n_layers)
-        ])
-        if config.layer_norm:
-            self.layernorms = nn.ModuleList([
-                nn.LayerNorm(config.d_hidden) for _ in range(config.n_layers+1)
-            ])
-        self.unembedding = nn.Linear(
-            config.d_hidden, config.output_vocab_size,
-            bias=config.bias,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, T, V) -> (B, O, T)
-        B: batch size
-        T: context length
-        V: vocabulary size
-        O: output dimension
-        """
-        if self.config.input_type == "token":
-            x = self.embedding(x)
-        if self.config.positional_encoding is not None:
-            x = self.pos_enc(x)
-
-        for i in range(len(self.layers)):
-            y = x
-            if self.config.layer_norm:
-                y = self.layernorms[i](x)
-            x = x + self.layers[i](y)
-
-        logits = self.unembedding(x)
-        return torch.swapaxes(logits, 1, 2)

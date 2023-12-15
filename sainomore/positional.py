@@ -1,8 +1,9 @@
 import numpy as np
 import torch
+from torch import nn
 
 
-class RoPE(torch.nn.Module):
+class RoPE(nn.Module):
 
     def __init__(self, T: int, d: int) -> None:
         super().__init__()
@@ -35,3 +36,34 @@ class RoPE(torch.nn.Module):
         if flag:
             result = result[:, :, :-1]
         return result
+
+
+class LearnablePositionalEncoding(nn.Module):
+
+    def __init__(self, T: int, d: int) -> None:
+        super().__init__()
+
+        self.pos_embedding = nn.Parameter(torch.empty(T, d))
+        nn.init.xavier_normal_(self.pos_embedding)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.pos_embedding[:x.size(1), :]
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+
+    def __init__(self, T: int, d: int) -> None:
+        super().__init__()
+        position = torch.arange(T).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d, 2) * (-np.log(10000.0) / d))
+        pe = torch.zeros(1, T, d)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        if d % 2 != 0:
+            pe[0, :, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.get_buffer("pe")[:, :x.size(1), :]
+        return x

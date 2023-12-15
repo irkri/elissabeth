@@ -1,16 +1,17 @@
 import torch
 
-from sainomore.models import LISS, ELISSABETHConfig
+from sainomore.elissabeth.liss import LISS
+from sainomore.elissabeth import ElissabethConfig
 
 
 def test_output() -> None:
-    config = ELISSABETHConfig(
+    config = ElissabethConfig(
         context_length=13,
         input_vocab_size=4,
-        n_heads=1,
+        n_is=1,
         n_layers=5,
         d_hidden=2,
-        d_head=6,
+        d_values=6,
     )
 
     liss = LISS(config)

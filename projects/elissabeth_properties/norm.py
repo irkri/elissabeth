@@ -4,13 +4,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from sainomore.models import Elissabeth, ElissabethConfig
+from sainomore import Elissabeth, ElissabethConfig
 
 config = {
     "n_samples": 10,
     "d_hidden": 5,
 
-    "n_layers": 1,
+    "n_layers": 5,
     "length_is": 4,
 }
 
@@ -25,13 +25,13 @@ def build_model(
         input_vocab_size=config["d_hidden"],
         n_layers=config["n_layers"],
         length_is=config["length_is"],
-        d_hidden=config["d_hidden"],  # n_is = d_hidden
+        n_is=1,
+        d_hidden=config["d_hidden"],
         layer_norm=layer_norm,
-        normalize_is=normalize_is,
-        denominator_is=False,
-        single_query_key=False,
-        positional_bias=False,
+        sum_normalization="same" if normalize_is else None,
         distance_weighting=True,
+        values_2D=False,
+        d_values=config["d_hidden"],
         weighting=None,
         positional_encoding=None,
         input_type="vector",
@@ -113,10 +113,10 @@ def calculate_norm():
         (len(initializers), len(context_lengths), 4,
          config["n_layers"], config["length_is"])
     )
-    norms_grad = np.zeros(
-        (len(initializers), len(context_lengths), 4,
-         config["n_layers"], config["length_is"])
-    )
+    # norms_grad = np.zeros(
+    #     (len(initializers), len(context_lengths), 4,
+    #      config["n_layers"], config["length_is"])
+    # )
 
     for il, context_length in enumerate(context_lengths):
         data = torch.empty(
@@ -144,16 +144,16 @@ def calculate_norm():
                     loss.backward()
 
                     for l in range(model.config.n_layers):
-                        for i in range(model.config.length_is):
-                            norms[k, il, c, l, i] = np.mean(np.linalg.norm(
+                        for i in range(1, model.config.length_is+1):
+                            norms[k, il, c, l, i-1] = np.mean(np.linalg.norm(
                                 model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
-                                axis=2,
+                                axis=3,
                             ), axis=0)[-1]
-                    for l in range(model.config.n_layers):
-                        norms_grad[k, il, c, l, :] = np.mean(np.linalg.norm(
-                            model.layers[l].W_V.grad.detach(),  # type: ignore
-                            axis=2,
-                        ), axis=1)
+                    # for l in range(model.config.n_layers):
+                    #     norms_grad[k, il, c, l, :] = np.mean(np.linalg.norm(
+                    #         model.layers[l].W_V.grad.detach(),  # type: ignore
+                    #         axis=2,
+                    #     ), axis=1)
                     c += 1
 
                     model.release_all_hooks()
@@ -217,7 +217,7 @@ def testcase():
         #     model.get_hook("layers.0", "Q").fwd[0, :, :],
         #     axis=2,
         # ))
-        for i in range(model.config.length_is):
+        for i in range(1, model.config.length_is+1):
             print(f"Layer {l}, ISS {i}:", np.mean(np.linalg.norm(
                 model.get_hook(f"layers.{l}", f"iss.{i}").fwd,
                 axis=2,
@@ -234,5 +234,5 @@ def testcase():
 
 
 if __name__ == "__main__":
-    # calculate_norm()
-    testcase()
+    calculate_norm()
+    # testcase()

@@ -6,7 +6,7 @@ import lightning.pytorch as L
 import torch
 from torch import nn
 
-from sainomore.models.base import SAINoMoreModule
+from .base import SAINoMoreModule
 
 
 class TokenPredictionModule(L.LightningModule):
