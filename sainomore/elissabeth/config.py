@@ -19,6 +19,9 @@ class ElissabethConfig(ModelConfig):
     pe_query_key: bool = True
     pe_value: bool = False
 
+    bias_query_key: bool = False
+    bias_value: bool = False
+
     distance_weighting: bool = False
 
     weighting: Literal["cos", "exp"] | None = "exp"

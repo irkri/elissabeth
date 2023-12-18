@@ -26,8 +26,8 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5000,
-    "context_length": 100,
+    "n_samples": 2500,
+    "context_length": 25,
     "characters": 5,
 
     "lr": 5e-3,
@@ -57,13 +57,15 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=16,
+        n_is=8,
         d_values=4,
         values_2D=False,
-        d_hidden=16,#config["characters"],
+        d_hidden=32,#config["characters"],
         weighting="exp",
+        bias_query_key=False,
+        bias_value=False,
         positional_encoding=None,
-        distance_weighting=False,
+        distance_weighting=True,
         pe_query_key=True,
         pe_value=False,
         share_queries=False,
@@ -201,7 +203,7 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     #     cmap="seismic",
     # )
     # print(W_O)
-    mat = get_liss_attention_matrix(lightning_module.model, x)
+    mat = get_liss_attention_matrix(lightning_module.model, x)  # type: ignore
     y_hat = lightning_module.predict_step(x, 0)
     print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
     plot_liss_attention_matrix(

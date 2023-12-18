@@ -27,6 +27,7 @@ class LISS(HookedModule):
             )
 
         self.W_Q = self.W_K = None
+        self.b_Q = self.b_K = None
         if config.weighting is not None:
             self.W_Q = nn.Parameter(
                 torch.empty((
@@ -35,14 +36,7 @@ class LISS(HookedModule):
                     config.d_hidden,
                 ))
             )
-            self.b_Q = nn.Parameter(
-                torch.empty((
-                    config.n_is,
-                    1 if config.share_queries else config.length_is,
-                ))
-            )
             nn.init.xavier_normal_(self.W_Q)
-            nn.init.zeros_(self.b_Q)
             self.W_K = nn.Parameter(
                 torch.empty((
                     config.n_is,
@@ -50,14 +44,22 @@ class LISS(HookedModule):
                     config.d_hidden,
                 ))
             )
-            self.b_K = nn.Parameter(
-                torch.empty((
-                    config.n_is,
-                    1 if config.share_queries else config.length_is,
-                ))
-            )
             nn.init.xavier_normal_(self.W_K)
-            nn.init.zeros_(self.b_K)
+            if config.bias_query_key:
+                self.b_Q = nn.Parameter(
+                    torch.empty((
+                        config.n_is,
+                        1 if config.share_queries else config.length_is,
+                    ))
+                )
+                nn.init.zeros_(self.b_Q)
+                self.b_K = nn.Parameter(
+                    torch.empty((
+                        config.n_is,
+                        1 if config.share_queries else config.length_is,
+                    ))
+                )
+                nn.init.zeros_(self.b_K)
 
         self.W_V = nn.Parameter(
             torch.empty((
@@ -68,16 +70,18 @@ class LISS(HookedModule):
                 config.d_values if config.values_2D else 1,
             ))
         )
-        self.b_V = nn.Parameter(
-            torch.empty((
-                config.n_is,
-                1 if config.share_values else config.length_is,
-                config.d_values,
-                config.d_values if config.values_2D else 1,
-            ))
-        )
         nn.init.xavier_normal_(self.W_V)
-        nn.init.zeros_(self.b_V)
+        self.b_V = None
+        if config.bias_value:
+            self.b_V = nn.Parameter(
+                torch.empty((
+                    config.n_is,
+                    1 if config.share_values else config.length_is,
+                    config.d_values,
+                    config.d_values if config.values_2D else 1,
+                ))
+            )
+            nn.init.zeros_(self.b_V)
 
         self.W_O = nn.Parameter(torch.empty((
             config.n_is,
@@ -119,9 +123,6 @@ class LISS(HookedModule):
         self.hooks.add_hooks(
             [f"iss.{i}" for i in range(1, config.length_is+1)]
         )
-        self.hooks.add_hooks(
-            [f"weighting.{i}" for i in range(config.length_is)]
-        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
@@ -133,12 +134,16 @@ class LISS(HookedModule):
                 'hld,btd->bthl',
                 self.W_Q,
                 x_enc if self.config.pe_query_key else x,  # type: ignore
-            )# + self.b_Q
+            )
+            if self.b_Q is not None:
+                Q = Q + self.b_Q
             K = torch.einsum(
                 'hld,btd->bthl',
                 self.W_K,
                 x_enc if self.config.pe_query_key else x,  # type: ignore
-            )# + self.b_K
+            )
+            if self.b_K is not None:
+                K = K + self.b_K
         if self.alpha is not None and T > 1:
             rel_pos = (
                 torch.sigmoid(self.alpha) * self.get_buffer("T")[:T, :, :]
@@ -159,7 +164,9 @@ class LISS(HookedModule):
             'hldvw,btd->bthlvw',
             self.W_V,
             x_enc if self.config.pe_value else x,  # type: ignore
-        )# + self.b_V
+        )
+        if self.b_V is not None:
+            V = V + self.b_V
         self.hooks("V", V)
 
         p = self.config.length_is
@@ -176,8 +183,6 @@ class LISS(HookedModule):
             )
 
         for l in range(1, p):
-            self._hook_weighting(Q, K, V, l)
-
             result = nn.functional.pad(
                 result[:, :-1, :, :, :],
                 (0, 0, 0, 0, 0, 0, 1, 0)
@@ -202,8 +207,6 @@ class LISS(HookedModule):
                     (0, 0, 0, 0, 0, 0, l, 0),
                     value=1.0,
                 )[:, :-l, :, :, :]
-
-        self._hook_weighting(Q, K, V, p)
 
         result = self._weight_is(result, Q, K, p)
 
@@ -234,30 +237,3 @@ class LISS(HookedModule):
             )  # type: ignore
         )
         return x
-
-    def _hook_weighting(
-        self,
-        Q: torch.Tensor | None,
-        K: torch.Tensor | None,
-        V: torch.Tensor,
-        l: int,
-    ) -> None:
-        if not self.hooks.get(f"weighting.{l-1}").is_attached():
-            return
-        if Q is None and K is None:
-            return
-        B = V.size(0)
-        T = V.size(1)
-        D = self.config.n_is
-        matrix = torch.ones((B, D, T, T), device=V.device)
-        iq = 0 if self.config.share_queries else l-1
-        ik = 0 if self.config.share_keys else l-1
-        matrix = matrix * torch.exp(
-            (0 if Q is None else
-             Q[:, :, :, iq, 0, 0].repeat(1, T, 1).reshape(B, D, T, T)
-            ) - (0 if K is None else
-               (K[:, :, :, ik, 0, 0].repeat(1, T, 1).reshape(B, D, T, T)
-                .transpose(1, 2))
-            )  # type: ignore
-        )
-        self.hooks(f"weighting.{l-1}", matrix)
