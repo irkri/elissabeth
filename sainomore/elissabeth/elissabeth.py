@@ -42,7 +42,10 @@ class Elissabeth(SAINoMoreModule):
             )
 
         self.layers = nn.ModuleList([
-            (LISS(config) if config.weighting == "exp" else CLISS(config))
+            (LISS(config) if (config.weighting == "exp"
+                              or config.weighting is None)
+             else
+             CLISS(config, exponent=int(config.weighting[4:])))
             for _ in range(config.n_layers)
         ])
         if config.layer_norm:

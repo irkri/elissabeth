@@ -24,12 +24,15 @@ class ElissabethConfig(ModelConfig):
 
     distance_weighting: bool = False
 
-    weighting: Literal["cos", "exp"] | None = "exp"
+    weighting: str | None = "exp"
 
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.d_values is None:
             self.d_values = self.d_hidden
+        if self.weighting is not None and self.weighting != "exp":
+            if not self.weighting.startswith("cos"):
+                raise ValueError("Unknown value given for 'weighting'")
         if (isinstance(self.d_values, list)
                 and len(self.d_values) != self.length_is + 1):
             raise ValueError(

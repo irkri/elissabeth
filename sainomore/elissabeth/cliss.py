@@ -17,7 +17,11 @@ class CLISS(HookedModule):
 
     config: ElissabethConfig
 
-    def __init__(self, config: ElissabethConfig) -> None:
+    def __init__(
+        self,
+        config: ElissabethConfig,
+        exponent: int = 2,
+    ) -> None:
         super().__init__(config)
         if config.context_length < config.length_is:
             warnings.warn(
@@ -120,13 +124,12 @@ class CLISS(HookedModule):
         if config.pe_query_key or config.pe_value:
             self.pe = RoPE(T=config.context_length, d=config.d_hidden)
 
-        self._weight_signature = self._get_weight_signature()
+        self._weight_signature = self._get_weight_signature(exponent)
 
         self.hooks = HookCollection("Q", "K", "V")
 
-    def _get_weight_signature(self) -> torch.Tensor:
+    def _get_weight_signature(self, exponent: int) -> torch.Tensor:
         p = self.config.length_is + 1
-        exponent = 2
         trig_id = []
         trig_exp = [exponent, 0]
         trig_coeff = 1
@@ -227,9 +230,6 @@ class CLISS(HookedModule):
 
         result = self._weight_is(result, sin_Q, cos_Q, sin_K, cos_K, p)
         result = (result * self._weight_signature[..., 0]).sum(dim=0)
-
-        if self.hooks.get(f"iss.{p}").is_attached():
-            self.hooks(f"iss.{p}", result)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
@@ -248,9 +248,9 @@ class CLISS(HookedModule):
         ik = 0 if self.config.share_keys else l
         W = self._weight_signature
         if cos_Q is not None and sin_Q is not None and l > 0:
-            x = (x * cos_Q[..., iq, :, :]**W[..., 4*(l-1)+1]
-                   * sin_Q[..., iq, :, :]**W[..., 4*(l-1)+2])
+            x = (x * cos_Q[..., iq, :, :]**W[..., -(4*(l-1)+4)]
+                   * sin_Q[..., iq, :, :]**W[..., -(4*(l-1)+3)])
         if cos_K is not None and sin_K is not None and l < p:
-            x = (x * cos_K[..., ik, :, :]**W[..., 4*(l-1)+3]
-                   * sin_K[..., ik, :, :]**W[..., 4*(l-1)+4])
+            x = (x * cos_K[..., ik, :, :]**W[..., -(4*l+2)]
+                   * sin_K[..., ik, :, :]**W[..., -(4*l+1)])
         return x
