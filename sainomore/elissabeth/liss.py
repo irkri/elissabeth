@@ -1,22 +1,56 @@
-__all__ = ["LISS"]
+__all__ = ["LISS", "LISSConfig"]
 
 import warnings
+from dataclasses import dataclass
+from typing import Literal, Optional
 
 import torch
 from torch import nn
 
-from ..base import HookedModule
+from ..base import HookedModule, ModelConfig
 from ..hooks import HookCollection
 from ..positional import RoPE
-from .elissabeth import ElissabethConfig
+
+
+@dataclass
+class LISSConfig(ModelConfig):
+    sum_normalization: Optional[Literal["same", "independent"]] = "independent"
+    n_is: int = 1
+    length_is: int = 2
+    d_values: int = None  # type: ignore
+    values_2D: bool = True
+
+    share_queries: bool = False
+    share_keys: bool = False
+    share_values: bool = False
+
+    pe_query_key: bool = True
+    pe_value: bool = False
+
+    bias_query_key: bool = False
+    bias_value: bool = False
+
+    distance_weighting: bool = False
+
+    weighting: bool = False
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.d_values is None:
+            self.d_values = self.d_hidden
+        if (isinstance(self.d_values, list)
+                and len(self.d_values) != self.length_is + 1):
+            raise ValueError(
+                "'d_values' has to be a list of length 'length_is'+1"
+            )
 
 
 class LISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
-    config: ElissabethConfig
+    config: LISSConfig
 
-    def __init__(self, config: ElissabethConfig) -> None:
+    def __init__(self, config: LISSConfig) -> None:
         super().__init__(config)
         if config.context_length < config.length_is:
             warnings.warn(
@@ -28,7 +62,7 @@ class LISS(HookedModule):
 
         self.W_Q = self.W_K = None
         self.b_Q = self.b_K = None
-        if config.weighting is not None:
+        if config.weighting:
             self.W_Q = nn.Parameter(
                 torch.empty((
                     config.n_is,

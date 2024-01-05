@@ -1,2 +1,3 @@
-from .config import ElissabethConfig
+from .cliss import *
 from .elissabeth import Elissabeth
+from .liss import *

@@ -1,27 +1,59 @@
-__all__ = ["CLISS"]
+__all__ = ["CLISS", "CLISSConfig"]
 
 import itertools
 import warnings
+from dataclasses import dataclass
+from typing import Literal, Optional
 
 import torch
 from torch import nn
 
-from ..base import HookedModule
+from ..base import HookedModule, ModelConfig
 from ..hooks import HookCollection
 from ..positional import RoPE
-from .config import ElissabethConfig
+
+
+@dataclass
+class CLISSConfig(ModelConfig):
+    sum_normalization: Optional[Literal["same", "independent"]] = "independent"
+    n_is: int = 1
+    length_is: int = 2
+    d_query_key: int = 1
+    d_values: int = None  # type: ignore
+    values_2D: bool = True
+
+    share_queries: bool = False
+    share_keys: bool = False
+    share_values: bool = False
+
+    pe_query_key: bool = True
+    pe_value: bool = False
+
+    bias_query_key: bool = False
+    bias_value: bool = False
+
+    distance_weighting: bool = False
+
+    weighting: bool = True
+    exponent: int = 1
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.d_values is None:
+            self.d_values = self.d_hidden
+        if (isinstance(self.d_values, list)
+                and len(self.d_values) != self.length_is + 1):
+            raise ValueError(
+                "'d_values' has to be a list of length 'length_is'+1"
+            )
 
 
 class CLISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
-    config: ElissabethConfig
+    config: CLISSConfig
 
-    def __init__(
-        self,
-        config: ElissabethConfig,
-        exponent: int = 2,
-    ) -> None:
+    def __init__(self, config: CLISSConfig) -> None:
         super().__init__(config)
         if config.context_length < config.length_is:
             warnings.warn(
@@ -33,12 +65,13 @@ class CLISS(HookedModule):
 
         self.W_Q = self.W_K = None
         self.b_Q = self.b_K = None
-        if config.weighting is not None:
+        if config.weighting:
             self.W_Q = nn.Parameter(
                 torch.empty((
                     config.n_is,
                     1 if config.share_queries else config.length_is,
                     config.d_hidden,
+                    config.d_query_key,
                 ))
             )
             nn.init.xavier_normal_(self.W_Q)
@@ -47,6 +80,7 @@ class CLISS(HookedModule):
                     config.n_is,
                     1 if config.share_queries else config.length_is,
                     config.d_hidden,
+                    config.d_query_key,
                 ))
             )
             nn.init.xavier_normal_(self.W_K)
@@ -55,6 +89,7 @@ class CLISS(HookedModule):
                     torch.empty((
                         config.n_is,
                         1 if config.share_queries else config.length_is,
+                        config.d_query_key,
                     ))
                 )
                 nn.init.zeros_(self.b_Q)
@@ -62,6 +97,7 @@ class CLISS(HookedModule):
                     torch.empty((
                         config.n_is,
                         1 if config.share_queries else config.length_is,
+                        config.d_query_key,
                     ))
                 )
                 nn.init.zeros_(self.b_K)
@@ -124,33 +160,33 @@ class CLISS(HookedModule):
         if config.pe_query_key or config.pe_value:
             self.pe = RoPE(T=config.context_length, d=config.d_hidden)
 
-        self._weight_signature = self._get_weight_signature(exponent)
+        self._create_weight_signature()
 
         self.hooks = HookCollection("Q", "K", "V")
 
-    def _get_weight_signature(self, exponent: int) -> torch.Tensor:
-        p = self.config.length_is + 1
+    def _create_weight_signature(self) -> None:
+        p = self.config.length_is * self.config.d_query_key
         trig_id = []
-        trig_exp = [exponent, 0]
+        trig_exp = [self.config.exponent, 0]
         trig_coeff = 1
-        for k in range(exponent+1):
+        for k in range(self.config.exponent+1):
             trig_id.append(f"{trig_coeff}{trig_exp[0]}{trig_exp[1]}")
             trig_exp[0] -= 1
             trig_exp[1] += 1
-            trig_coeff = trig_coeff * (exponent - k) // (k + 1)
+            trig_coeff = trig_coeff * (self.config.exponent - k) // (k + 1)
         weightings = torch.zeros(
-            ((exponent+1)**(p-1), 1, 1, 1, 1, 1, 4*(p-1)+1),
+            ((self.config.exponent+1)**p, 1, 1, 1, 1, 1, 4*p+1),
             dtype=torch.int32,
         )
         weightings[:, ..., 0] = 1
-        for c, comb in enumerate(itertools.product(trig_id, repeat=p-1)):
-            for i in range(p-1):
+        for c, comb in enumerate(itertools.product(trig_id, repeat=p)):
+            for i in range(p):
                 weightings[c, ..., 0] *= int(comb[i][0])
                 weightings[c, ..., 4*i+1] += int(comb[i][1])
                 weightings[c, ..., 4*i+3] += int(comb[i][1])
                 weightings[c, ..., 4*i+2] += int(comb[i][2])
                 weightings[c, ..., 4*i+4] += int(comb[i][2])
-        return weightings
+        self.register_buffer("weight_signature", weightings)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
@@ -159,14 +195,14 @@ class CLISS(HookedModule):
             x_enc = self.pe(x)
         if self.W_Q is not None and self.W_K is not None:
             Q = torch.einsum(
-                'hld,btd->bthl',
+                'hldi,btd->bthli',
                 self.W_Q,
                 x_enc if self.config.pe_query_key else x,  # type: ignore
             )
             if self.b_Q is not None:
                 Q = Q + self.b_Q
             K = torch.einsum(
-                'hld,btd->bthl',
+                'hldi,btd->bthli',
                 self.W_K,
                 x_enc if self.config.pe_query_key else x,  # type: ignore
             )
@@ -229,7 +265,9 @@ class CLISS(HookedModule):
                 )[:, :, :-l, :, :, :]
 
         result = self._weight_is(result, sin_Q, cos_Q, sin_K, cos_K, p)
-        result = (result * self._weight_signature[..., 0]).sum(dim=0)
+        result = (
+            result * self.get_buffer("weight_signature")[..., 0]
+        ).sum(dim=0)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
@@ -246,11 +284,14 @@ class CLISS(HookedModule):
         p = self.config.length_is
         iq = 0 if self.config.share_queries else l-1
         ik = 0 if self.config.share_keys else l
-        W = self._weight_signature
+        W = self.get_buffer("weight_signature")
+        dqk = self.config.d_query_key
         if cos_Q is not None and sin_Q is not None and l > 0:
-            x = (x * cos_Q[..., iq, :, :]**W[..., -(4*(l-1)+4)]
-                   * sin_Q[..., iq, :, :]**W[..., -(4*(l-1)+3)])
+            for i in range(dqk):
+                x = (x * cos_Q[..., iq, i, :, :]**W[..., -(4*(l-1)*dqk+4+4*i)]
+                       * sin_Q[..., iq, i, :, :]**W[..., -(4*(l-1)*dqk+3+4*i)])
         if cos_K is not None and sin_K is not None and l < p:
-            x = (x * cos_K[..., ik, :, :]**W[..., -(4*l+2)]
-                   * sin_K[..., ik, :, :]**W[..., -(4*l+1)])
+            for i in range(dqk):
+                x = (x * cos_K[..., ik, i, :, :]**W[..., -(4*l*dqk+2+4*i)]
+                       * sin_K[..., ik, i, :, :]**W[..., -(4*l*dqk+1+4*i)])
         return x

@@ -1,4 +1,4 @@
-__all__ = ["Elissabeth", "ElissabethConfig"]
+__all__ = ["Elissabeth"]
 
 import warnings
 
@@ -8,17 +8,16 @@ from torch import nn
 from ..base import SAINoMoreModule
 from ..positional import (LearnablePositionalEncoding,
                           SinusoidalPositionalEncoding)
-from .cliss import CLISS
-from .config import ElissabethConfig
-from .liss import LISS
+from .cliss import CLISS, CLISSConfig
+from .liss import LISS, LISSConfig
 
 
 class Elissabeth(SAINoMoreModule):
     """Extended Learnable Iterated Sums Signature Architecture"""
 
-    config: ElissabethConfig
+    config: LISSConfig | CLISSConfig
 
-    def __init__(self, config: ElissabethConfig) -> None:
+    def __init__(self, config: LISSConfig | CLISSConfig) -> None:
         super().__init__(config)
         if config.input_type == "token":
             self.embedding = nn.Embedding(
@@ -41,13 +40,14 @@ class Elissabeth(SAINoMoreModule):
                 config.context_length, config.d_hidden
             )
 
-        self.layers = nn.ModuleList([
-            (LISS(config) if (config.weighting == "exp"
-                              or config.weighting is None)
-             else
-             CLISS(config, exponent=int(config.weighting[4:])))
-            for _ in range(config.n_layers)
-        ])
+        if isinstance(config, LISSConfig):
+            self.layers = nn.ModuleList([
+                LISS(config) for _ in range(config.n_layers)
+            ])
+        elif isinstance(config, CLISSConfig):
+            self.layers = nn.ModuleList([
+                CLISS(config) for _ in range(config.n_layers)
+            ])
         if config.layer_norm:
             self.layernorms = nn.ModuleList([
                 nn.LayerNorm(config.d_hidden) for _ in range(config.n_layers+1)

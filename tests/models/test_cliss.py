@@ -1,9 +1,11 @@
 import torch
-import sainomore
+
+from sainomore.elissabeth import Elissabeth, CLISSConfig
+
 
 def test_cliss_weights() -> None:
-    cliss = sainomore.Elissabeth(
-        sainomore.ElissabethConfig(
+    cliss = Elissabeth(
+        CLISSConfig(
             context_length=10,
             input_vocab_size=1,
             d_hidden=1,
@@ -11,7 +13,8 @@ def test_cliss_weights() -> None:
             length_is=3,
             n_layers=1,
             layer_norm=False,
-            weighting="cos^3",
+            d_query_key=1,
+            exponent=3,
             input_type="vector",
             values_2D=False,
             bias_query_key=False,
@@ -49,6 +52,7 @@ def test_cliss_weights() -> None:
     result = cliss(X.unsqueeze(-1))
     cliss.release_all_hooks()
     torch.testing.assert_close(result[0, :, :], the_result+X)
+
 
 if __name__ == "__main__":
     test_cliss_weights()
