@@ -186,7 +186,7 @@ class CLISS(HookedModule):
                 weightings[c, ..., 4*i+3] += int(comb[i][1])
                 weightings[c, ..., 4*i+2] += int(comb[i][2])
                 weightings[c, ..., 4*i+4] += int(comb[i][2])
-        self.register_buffer("weight_signature", weightings)
+        self.register_buffer("weight_signature", weightings.swapaxes(-1, -3))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
@@ -266,7 +266,7 @@ class CLISS(HookedModule):
 
         result = self._weight_is(result, sin_Q, cos_Q, sin_K, cos_K, p)
         result = (
-            result * self.get_buffer("weight_signature")[..., 0]
+            result * self.get_buffer("weight_signature")[..., 0, :, :]
         ).sum(dim=0)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
@@ -287,11 +287,27 @@ class CLISS(HookedModule):
         W = self.get_buffer("weight_signature")
         dqk = self.config.d_query_key
         if cos_Q is not None and sin_Q is not None and l > 0:
-            for i in range(dqk):
-                x = (x * cos_Q[..., iq, i, :, :]**W[..., -(4*(l-1)*dqk+4+4*i)]
-                       * sin_Q[..., iq, i, :, :]**W[..., -(4*(l-1)*dqk+3+4*i)])
+            indices = torch.arange(
+                W.size(-3)-(4*(l-1)*dqk), W.size(-3)-(4*(l-1)*dqk+dqk*4), -4
+            )
+            x = x * torch.prod(
+                cos_Q[..., iq, :, :, :].pow(W.index_select(-3, indices-4)),
+                dim=-3,
+            )
+            x = x * torch.prod(
+                sin_Q[..., iq, :, :, :].pow(W.index_select(-3, indices-3)),
+                dim=-3,
+            )
         if cos_K is not None and sin_K is not None and l < p:
-            for i in range(dqk):
-                x = (x * cos_K[..., ik, i, :, :]**W[..., -(4*l*dqk+2+4*i)]
-                       * sin_K[..., ik, i, :, :]**W[..., -(4*l*dqk+1+4*i)])
+            indices = torch.arange(
+                W.size(-3)-(4*l*dqk), W.size(-3)-(4*l*dqk+dqk*4), -4
+            )
+            x = x * torch.prod(
+                cos_K[..., iq, :, :, :].pow(W.index_select(-3, indices-2)),
+                dim=-3,
+            )
+            x = x * torch.prod(
+                sin_K[..., iq, :, :, :].pow(W.index_select(-3, indices-1)),
+                dim=-3,
+            )
         return x
