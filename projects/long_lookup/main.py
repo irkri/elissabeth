@@ -11,7 +11,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore import Elissabeth, ElissabethConfig
+from sainomore.elissabeth import Elissabeth, CLISSConfig
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data import GivenDataModule, long_lookup
@@ -52,7 +52,7 @@ def build_model() -> TokenPredictionModule:
     # )
     # model = DecoderOnlyTransformer(model_config)
 
-    model_config = ElissabethConfig(
+    model_config = CLISSConfig(
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
@@ -61,12 +61,13 @@ def build_model() -> TokenPredictionModule:
         d_values=4,
         values_2D=False,
         d_hidden=32,#config["characters"],
-        weighting="exp",
+        exponent=1,
+        d_query_key=3,
         bias_query_key=False,
         bias_value=False,
         positional_encoding=None,
         distance_weighting=True,
-        pe_query_key=True,
+        pe_key=True,
         pe_value=False,
         share_queries=False,
         share_keys=False,
@@ -148,12 +149,12 @@ def train(
             ),
             each_n_epochs=100,
         ),
-        ElissabethISTracker(
-            example,
-            reduce="norm",
-            each_n_epochs=100,
-            use_wandb=True,
-        ),
+        # ElissabethISTracker(
+        #     example,
+        #     reduce="norm",
+        #     each_n_epochs=100,
+        #     use_wandb=True,
+        # ),
     ]
 
     trainer = L.Trainer(

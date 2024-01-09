@@ -23,14 +23,6 @@ class Elissabeth(SAINoMoreModule):
             self.embedding = nn.Embedding(
                 config.input_vocab_size, config.d_hidden
             )
-        if (self.config.positional_encoding is None
-                and not config.pe_query_key and not config.pe_value
-                and config.length_is == 1):
-            warnings.warn(
-                "No positional encoding and ISS length 1. "
-                "Elissabeth will be permutation invariant.",
-                RuntimeWarning,
-            )
         if self.config.positional_encoding == "learnable":
             self.pos_enc = LearnablePositionalEncoding(
                 config.context_length, config.d_hidden

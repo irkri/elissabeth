@@ -67,3 +67,29 @@ class SinusoidalPositionalEncoding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.get_buffer("pe")[:, :x.size(1), :]
         return x
+
+
+class APES(nn.Module):
+    """Additive Positional Encoding with Sinusoids"""
+
+    def __init__(self, T: int, d: int, latent: tuple[int, ...]) -> None:
+        super().__init__()
+        position = torch.arange(T).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d, 2) * (-np.log(10000.0) / d))
+        pe = torch.zeros(T, d)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d % 2 != 0:
+            pe[:, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+        self.weight = nn.Parameter(torch.empty(latent + (d, )))
+        nn.init.xavier_normal_(self.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        encoding = torch.einsum(
+            "...d,td->t...",
+            self.weight,
+            self.get_buffer("pe"),
+        )
+        return x + encoding
