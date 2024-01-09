@@ -26,8 +26,8 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 2500,
-    "context_length": 25,
+    "n_samples": 5000,
+    "context_length": 100,
     "characters": 5,
 
     "lr": 5e-3,
@@ -58,11 +58,10 @@ def build_model() -> TokenPredictionModule:
         n_layers=1,
         length_is=2,
         n_is=8,
-        d_values=4,
+        d_values=1,
         values_2D=False,
         d_hidden=32,#config["characters"],
-        exponent=1,
-        d_query_key=3,
+        weighting="exp",
         bias_query_key=False,
         bias_value=False,
         positional_encoding=None,
