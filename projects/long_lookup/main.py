@@ -11,7 +11,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore.elissabeth import Elissabeth, CLISSConfig
+from sainomore.elissabeth import Elissabeth, LISSConfig, CLISSConfig
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data import GivenDataModule, long_lookup
@@ -27,14 +27,14 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 5000,
-    "context_length": 100,
+    "context_length": 500,
     "characters": 5,
 
-    "lr": 5e-3,
+    "lr": 1e-2,
     "weight_decay": 1e-4,
     "epochs": 501,
 
-    "batch_size": 32,
+    "batch_size": 64,
     "val_size": 0.2,
 }
 
@@ -57,15 +57,16 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=8,
-        d_values=1,
+        n_is=1,
+        d_values=4,
         values_2D=False,
         d_hidden=32,#config["characters"],
-        weighting="exp",
-        bias_query_key=False,
-        bias_value=False,
+        exponent=1,
+        d_query_key=5,
+        bias_query_key=True,
+        bias_value=True,
         positional_encoding=None,
-        distance_weighting=True,
+        distance_weighting=False,
         pe_key=True,
         pe_value=False,
         share_queries=False,
@@ -111,9 +112,9 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth 4",
+            project="Elissabeth Long Lookup",
             checkpoint_name=load_path,
-            tags=["Elissabeth", "long lookup", "RoPE"],
+            tags=[lightning_module.model.layers[0].__class__.__name__],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )

@@ -32,7 +32,7 @@ class LISSConfig(ModelConfig):
 
     distance_weighting: bool = False
 
-    weighting: bool = False
+    weighting: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -127,8 +127,8 @@ class LISS(HookedModule):
 
         self.alpha = None
         if config.distance_weighting:
-            indices = torch.empty((config.context_length, 1, 1))
-            indices[:, 0, 0] = torch.linspace(
+            indices = torch.empty((1, config.context_length, 1, 1))
+            indices[0, :, 0, 0] = torch.linspace(
                 1/config.context_length, 1, config.context_length
             )
             self.register_buffer("T", indices)
@@ -178,9 +178,11 @@ class LISS(HookedModule):
             )
             if self.b_K is not None:
                 K = K + self.b_K
+            Q = torch.tanh(Q)
+            K = torch.tanh(K)
         if self.alpha is not None and T > 1:
             rel_pos = (
-                torch.sigmoid(self.alpha) * self.get_buffer("T")[:T, :, :]
+                torch.sigmoid(self.alpha) * self.get_buffer("T")[:, :T, :, :]
             )
             if Q is None and K is None:
                 Q = - rel_pos

@@ -17,8 +17,8 @@ from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
 from sainomore.models import (DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, Elissabeth,
-                              ElissabethConfig)
+                              DecoderOnlyTransformerConfig)
+from sainomore import Elissabeth, LISSConfig
 from sainomore.tools import (get_liss_attention_matrix,
                              plot_liss_attention_matrix)
 
@@ -93,16 +93,15 @@ def build_model() -> TokenPredictionModule:
     # )
     # model = DecoderOnlyTransformer(model_config)
 
-    model_config = ElissabethConfig(
+    model_config = LISSConfig(
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
-        length_is=5,
+        length_is=3,
         n_is=16,
         d_values=4,
         values_2D=True,
         d_hidden=64,
-        weighting="exp",
         positional_encoding=None,
         distance_weighting=False,
         pe_query_key=True,

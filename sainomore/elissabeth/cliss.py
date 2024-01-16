@@ -284,8 +284,8 @@ class CLISS(HookedModule):
         dqk = self.config.d_query_key
         if cos_Q is not None and sin_Q is not None and l > 0:
             indices = torch.arange(
-                W.size(-3)-(4*(l-1)*dqk), W.size(-3)-(4*(l-1)*dqk+dqk*4), -4
-            )
+                W.size(-3)-4*(l-1)*dqk, W.size(-3)-4*l*dqk, -4
+            ).to(W.device)
             x = x * torch.prod(
                 cos_Q[..., iq, :, :, :].pow(W.index_select(-3, indices-4)),
                 dim=-3,
@@ -296,8 +296,8 @@ class CLISS(HookedModule):
             )
         if cos_K is not None and sin_K is not None and l < p:
             indices = torch.arange(
-                W.size(-3)-(4*l*dqk), W.size(-3)-(4*l*dqk+dqk*4), -4
-            )
+                W.size(-3)-4*l*dqk, W.size(-3)-4*(l+1)*dqk, -4
+            ).to(W.device)
             x = x * torch.prod(
                 cos_K[..., iq, :, :, :].pow(W.index_select(-3, indices-2)),
                 dim=-3,
