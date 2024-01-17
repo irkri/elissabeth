@@ -24,7 +24,7 @@ class LISSConfig(ModelConfig):
     share_keys: bool = False
     share_values: bool = False
 
-    pe_query_key: bool = True
+    pe_key: bool = True
     pe_value: bool = False
 
     bias_query_key: bool = False
@@ -149,8 +149,8 @@ class LISS(HookedModule):
             )))
             nn.init.constant_(self.beta, 5.40988)
 
-        self.pe = None
-        if config.pe_query_key or config.pe_value:
+        self.pe = nn.Identity()
+        if config.pe_key or config.pe_value:
             self.pe = RoPE(T=config.context_length, d=config.d_hidden)
 
         self.hooks = HookCollection("Q", "K", "V")
@@ -161,21 +161,11 @@ class LISS(HookedModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
         Q = K = None
-        if self.pe is not None:
-            x_enc = self.pe(x)
         if self.W_Q is not None and self.W_K is not None:
-            Q = torch.einsum(
-                'hld,btd->bthl',
-                self.W_Q,
-                x_enc if self.config.pe_query_key else x,  # type: ignore
-            )
+            Q = torch.einsum('hld,btd->bthl', self.W_Q, x)
             if self.b_Q is not None:
                 Q = Q + self.b_Q
-            K = torch.einsum(
-                'hld,btd->bthl',
-                self.W_K,
-                x_enc if self.config.pe_query_key else x,  # type: ignore
-            )
+            K = torch.einsum('hld,btd->bthl', self.W_K, self.pe(x))
             if self.b_K is not None:
                 K = K + self.b_K
             Q = torch.tanh(Q)
@@ -199,7 +189,7 @@ class LISS(HookedModule):
         V = torch.einsum(
             'hldvw,btd->bthlvw',
             self.W_V,
-            x_enc if self.config.pe_value else x,  # type: ignore
+            self.pe(x) if self.config.pe_value else x,
         )
         if self.b_V is not None:
             V = V + self.b_V

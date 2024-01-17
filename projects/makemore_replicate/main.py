@@ -104,7 +104,7 @@ def build_model() -> TokenPredictionModule:
         d_hidden=64,
         positional_encoding=None,
         distance_weighting=False,
-        pe_query_key=True,
+        pe_key=True,
         pe_value=False,
         share_queries=False,
         share_keys=False,

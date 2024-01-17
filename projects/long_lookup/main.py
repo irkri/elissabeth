@@ -27,10 +27,10 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 5000,
-    "context_length": 500,
+    "context_length": 100,
     "characters": 5,
 
-    "lr": 1e-2,
+    "lr": 5e-3,
     "weight_decay": 1e-4,
     "epochs": 501,
 
@@ -52,17 +52,17 @@ def build_model() -> TokenPredictionModule:
     # )
     # model = DecoderOnlyTransformer(model_config)
 
-    model_config = CLISSConfig(
+    model_config = LISSConfig(
         context_length=config["context_length"],
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=1,
-        d_values=4,
+        n_is=8,
+        d_values=16,
         values_2D=False,
         d_hidden=32,#config["characters"],
-        exponent=1,
-        d_query_key=5,
+        # exponent=1,
+        # d_query_key=5,
         bias_query_key=True,
         bias_value=True,
         positional_encoding=None,
@@ -100,6 +100,7 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
+            # multiple_keys=False,
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
@@ -108,6 +109,10 @@ def train(
         # (no more waiting between epochs)
         persistent_workers=True,
     )
+    # ex = next(iter(data_module.train_dataloader()))
+    # print(ex[0][0, :])
+    # print(ex[1][0, :])
+    # exit()
 
     wandb_logger = None
     if use_wandb:

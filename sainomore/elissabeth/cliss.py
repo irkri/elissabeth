@@ -10,7 +10,7 @@ from torch import nn
 
 from ..base import HookedModule, ModelConfig
 from ..hooks import HookCollection
-from ..positional import APES
+from ..positional import RoPE
 
 
 @dataclass
@@ -156,13 +156,9 @@ class CLISS(HookedModule):
             )))
             nn.init.constant_(self.beta, 5.40988)
 
-        self.pe = None
+        self.pe = nn.Identity()
         if config.pe_key or config.pe_value:
-            self.pe = APES(
-                T=config.context_length,
-                d=config.d_hidden,
-                latent=(config.n_is, config.length_is, config.d_query_key),
-            )
+            self.pe = RoPE(T=config.context_length, d=config.d_hidden)
 
         self._create_weight_signature()
 
@@ -199,11 +195,9 @@ class CLISS(HookedModule):
             Q = torch.einsum('hldi,btd->bthli', self.W_Q, x)
             if self.b_Q is not None:
                 Q = Q + self.b_Q
-            K = torch.einsum('hldi,btd->bthli', self.W_K, x)
+            K = torch.einsum('hldi,btd->bthli', self.W_K, self.pe(x))
             if self.b_K is not None:
                 K = K + self.b_K
-            if self.pe is not None:
-                K = self.pe(K)
             self.hooks("Q", Q)
             self.hooks("K", K)
             Q = Q.unsqueeze(-1).unsqueeze(-1)
@@ -216,7 +210,7 @@ class CLISS(HookedModule):
         V = torch.einsum(
             'hldvw,btd->bthlvw',
             self.W_V,
-            x_enc if self.config.pe_value else x,  # type: ignore
+            self.pe(x) if self.config.pe_value else x,
         )
         if self.b_V is not None:
             V = V + self.b_V
