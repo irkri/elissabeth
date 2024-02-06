@@ -11,26 +11,25 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore.elissabeth import Elissabeth, LISSConfig, CLISSConfig
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data import GivenDataModule, long_lookup
+from sainomore.elissabeth import CLISSConfig, Elissabeth, LISSConfig
 from sainomore.lightning import TokenPredictionModule
 from sainomore.models import (DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig, ModelConfig)
-from sainomore.tools import (get_liss_attention_matrix,
-                             plot_liss_attention_matrix)
+from sainomore.tools import get_attention_matrix, plot_attention_matrix
 
 torch.set_float32_matmul_precision('high')
 
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5000,
-    "context_length": 100,
-    "characters": 5,
+    "n_samples": 500,
+    "context_length": 25,
+    "characters": 10,
 
-    "lr": 5e-3,
+    "lr": 5e-4,
     "weight_decay": 1e-4,
     "epochs": 501,
 
@@ -45,9 +44,9 @@ def build_model() -> TokenPredictionModule:
     #     input_vocab_size=config["characters"],
     #     n_layers=2,
     #     n_heads=4,
-    #     d_hidden=64,
+    #     d_hidden=16,
     #     d_head=16,
-    #     ffn_units=128,
+    #     ffn_units=64,
     #     bias=False,
     # )
     # model = DecoderOnlyTransformer(model_config)
@@ -57,14 +56,14 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=8,
-        d_values=16,
+        n_is=32,
+        d_values=1,
         values_2D=False,
-        d_hidden=32,#config["characters"],
-        # exponent=1,
-        # d_query_key=5,
-        bias_query_key=True,
-        bias_value=True,
+        d_hidden=5,#config["characters"],
+        # exponent=2,
+        # d_query_key=2,
+        bias_query_key=False,
+        bias_value=False,
         positional_encoding=None,
         distance_weighting=False,
         pe_key=True,
@@ -100,11 +99,11 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
-            # multiple_keys=False,
+            multiple_keys=False,
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=3,
+        num_workers=5,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -119,7 +118,7 @@ def train(
         wandb_logger = WandbLogger(
             project="Elissabeth Long Lookup",
             checkpoint_name=load_path,
-            tags=[lightning_module.model.layers[0].__class__.__name__],
+            tags=[lightning_module.model.layers[0].__class__.__name__, "one key"],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -209,15 +208,21 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     #     cmap="seismic",
     # )
     # print(W_O)
-    mat = get_liss_attention_matrix(lightning_module.model, x)  # type: ignore
+    mat = get_attention_matrix(
+        lightning_module.model,  # type: ignore
+        x,
+        dims=2,
+    )
+    print(mat.shape)
     y_hat = lightning_module.predict_step(x, 0)
     print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
-    plot_liss_attention_matrix(
-        mat[:, :, 0, :, :],
+    plot_attention_matrix(
+        mat[0, ..., 0],
         example=x.numpy()[0],
         figsize=(50, 10),
+        show_product=True,
         log_colormap=False,
-        causal_mask=False,
+        causal_mask=True,
     )
     plt.savefig(
         os.path.join(os.path.dirname(__file__), "plot.pdf"),
@@ -251,10 +256,10 @@ def main() -> None:
                 load = os.path.join(chckpt_path, os.listdir(chckpt_path)[0])
                 saved_ = torch.load(load)
                 lightning_module.load_state_dict(saved_["state_dict"])
-            else:
-                raise FileExistsError(
-                    "Load specification does not point to a saved model"
-                )
+    if args.load is not None and load is None:
+        raise FileExistsError(
+            "Load specification does not point to a saved model"
+        )
 
     if args.mode == "train":
         train(

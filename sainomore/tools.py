@@ -7,10 +7,10 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .elissabeth import Elissabeth
+from .elissabeth import Elissabeth, LISSConfig, CLISSConfig
 
 
-def get_liss_attention_matrix(
+def get_attention_matrix(
     model: Elissabeth,
     x: torch.Tensor,
     dims: Literal[2, 3] = 2,
@@ -23,13 +23,15 @@ def get_liss_attention_matrix(
     iss_length = model.config.length_is
     B = x.size(0)
     T = x.size(1)
-    H = model.config.n_is
+    N = model.config.n_is
+    is_liss = isinstance(model.config, LISSConfig)
+    is_cliss = isinstance(model.config, CLISSConfig)
     if dims == 2:
-        att_mat = np.empty((B, n_layers, iss_length, T, T, H))
+        att_mat = np.empty((B, n_layers, iss_length, T, T, N))
     elif dims == 3:
-        att_mat = np.empty((B, n_layers, iss_length-1, T, T, T, H))
+        att_mat = np.empty((B, n_layers, iss_length-1, T, T, T, N))
     for l in range(n_layers):
-        # shape Q/K: (B, T, H, L)
+        # shape Q/K: (B, T, N, L)
         try:
             Q = model.get_hook(f"layers.{l}", "Q").fwd
         except ValueError:
@@ -42,35 +44,79 @@ def get_liss_attention_matrix(
             for d in range(iss_length):
                 iq = 0 if model.config.share_queries else d
                 ik = 0 if model.config.share_keys else d
-                Q_ = 0 if Q is None else (Q[..., iq]
-                    .repeat(1, T, 1).reshape(B, T, T, H).transpose(1, 2)
-                )
-                K_ = 0 if K is None else K[..., ik].unsqueeze(1)
-                att_mat[:, l, d] = torch.exp(Q_ - K_)  # type: ignore
+                if is_liss:
+                    Q_ = 0 if Q is None else (Q[..., iq]
+                        .repeat(1, T, 1).reshape(B, T, T, N).transpose(1, 2)
+                    )
+                    K_ = 0 if K is None else K[..., ik].unsqueeze(1)
+                    att_mat[:, l, d] = torch.exp(Q_ - K_)  # type: ignore
+                elif is_cliss:
+                    D = model.config.d_query_key  # type: ignore
+                    Q_ = 0 if Q is None else (Q[..., iq, :]
+                        .repeat(1, T, 1, 1).reshape(B, T, T, N, D)
+                        .transpose(1, 2)
+                    )
+                    K_ = 0 if K is None else K[..., ik, :].unsqueeze(1)
+                    att_mat[:, l, d] = torch.prod(
+                        torch.cos(Q_ - K_),  # type: ignore
+                        dim=-1,
+                    )
         elif dims == 3:
             for d in range(iss_length-1):
-                iq1 = 0 if model.config.share_queries else d
-                ik1 = 0 if model.config.share_keys else d
-                iq2 = 0 if model.config.share_queries else d+1
-                ik2 = 0 if model.config.share_keys else d+1
-                Q1 = 0 if Q is None else (Q[..., iq1]
-                    .repeat(1, T, 1).reshape((B, T, T, H)).unsqueeze(3)
-                    .transpose(1, 2)
-                )
-                K1 = 0 if K is None else (K[..., ik1]
-                    .repeat(1, T, 1).reshape((B, T, T, H)).unsqueeze(3)
-                )
-                Q2 = 0 if Q is None else (Q[..., iq2]
-                    .repeat(1, T, 1).reshape((B, T, T, H)).unsqueeze(3)
-                )
-                K2 = 0 if K is None else (K[..., ik2]
-                    .repeat(1, T, 1).reshape((B, T, T, H)).unsqueeze(1)
-                )
-                att_mat[:, l, d] = torch.exp(Q1 - K1 + Q2 - K2)  # type: ignore
+                if is_liss:
+                    iq1 = 0 if model.config.share_queries else d
+                    ik1 = 0 if model.config.share_keys else d
+                    iq2 = 0 if model.config.share_queries else d+1
+                    ik2 = 0 if model.config.share_keys else d+1
+                    Q1 = 0 if Q is None else (Q[..., iq1]
+                        .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                        .transpose(1, 2)
+                    )
+                    K1 = 0 if K is None else (K[..., ik1]
+                        .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                    )
+                    Q2 = 0 if Q is None else (Q[..., iq2]
+                        .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                    )
+                    K2 = 0 if K is None else (K[..., ik2]
+                        .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(1)
+                    )
+                    att_mat[:, l, d] = torch.exp(
+                        Q1 - K1 + Q2 - K2  # type: ignore
+                    )
+                elif is_cliss:
+                    D = model.config.d_query_key  # type: ignore
+                    iq1 = 0 if model.config.share_queries else d
+                    ik1 = 0 if model.config.share_keys else d
+                    iq2 = 0 if model.config.share_queries else d+1
+                    ik2 = 0 if model.config.share_keys else d+1
+                    Q1 = 0 if Q is None else (Q[..., iq1, :]
+                        .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                        .unsqueeze(3).transpose(1, 2)
+                    )
+                    K1 = 0 if K is None else (K[..., ik1, :]
+                        .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                        .unsqueeze(3)
+                    )
+                    Q2 = 0 if Q is None else (Q[..., iq2, :]
+                        .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                        .unsqueeze(3)
+                    )
+                    K2 = 0 if K is None else (K[..., ik2, :]
+                        .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                        .unsqueeze(1)
+                    )
+                    att_mat[:, l, d] = torch.prod(
+                        torch.cos(Q1 - K1), # type: ignore
+                        dim=-1,
+                    ) * torch.prod(
+                        torch.cos(Q2 - K2), # type: ignore
+                        dim=-1,
+                    )
     return att_mat
 
 
-def plot_liss_attention_matrix(
+def plot_attention_matrix(
     matrix: np.ndarray,
     example: Optional[np.ndarray] = None,
     show_product: bool = False,

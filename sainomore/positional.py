@@ -13,7 +13,6 @@ class RoPE(nn.Module):
         emb = torch.arange(T).unsqueeze(-1) * emb * np.pi / 2
         if d % 2 == 1:
             emb = torch.concat((emb, torch.zeros((T, 1))), dim=1)
-        emb = emb.unsqueeze(0)
         self.register_buffer("sin", torch.sin(emb))
         self.register_buffer("cos", torch.cos(emb))
 

@@ -19,8 +19,8 @@ from sainomore.lightning import TokenPredictionModule
 from sainomore.models import (DecoderOnlyTransformer,
                               DecoderOnlyTransformerConfig)
 from sainomore import Elissabeth, LISSConfig
-from sainomore.tools import (get_liss_attention_matrix,
-                             plot_liss_attention_matrix)
+# from sainomore.tools import (get_liss_attention_matrix,
+#                              plot_liss_attention_matrix)
 
 torch.set_float32_matmul_precision('high')
 
@@ -99,9 +99,13 @@ def build_model() -> TokenPredictionModule:
         n_layers=1,
         length_is=3,
         n_is=16,
-        d_values=4,
-        values_2D=True,
-        d_hidden=64,
+        d_values=16,
+        values_2D=False,
+        d_hidden=64,#config["characters"],
+        # exponent=2,
+        # d_query_key=2,
+        bias_query_key=True,
+        bias_value=True,
         positional_encoding=None,
         distance_weighting=False,
         pe_key=True,
@@ -136,7 +140,7 @@ def train(
         assembler.get_dataset(),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=3,
+        num_workers=5,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
@@ -145,9 +149,9 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth 4",
+            project="Elissabeth Makemore",
             checkpoint_name=load_path,
-            tags=["Elissabeth", "makemore_quotes", "RoPE"],
+            tags=[lightning_module.model.layers[0].__class__.__name__],
             id=load_path.split("/")[-2] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -188,12 +192,12 @@ def train(
             ),
             each_n_epochs=25,
         ),
-        ElissabethISTracker(
-            example,
-            reduce="norm",
-            each_n_epochs=25,
-            use_wandb=True,
-        ),
+        # ElissabethISTracker(
+        #     example,
+        #     reduce="norm",
+        #     each_n_epochs=25,
+        #     use_wandb=True,
+        # ),
     ]
 
     trainer = L.Trainer(
@@ -220,7 +224,7 @@ def generate(
     n_samples: int = 5,
     max_length: Optional[int] = None,
 ) -> list[str]:
-    lightning_module.to("cuda")
+    # lightning_module.to("cuda")
 
     start = torch.zeros((n_samples, 1)).long().to(lightning_module.device)
     T = assembler.context_length if max_length is None else max_length
@@ -293,10 +297,10 @@ def main() -> None:
                 load = os.path.join(chckpt_path, os.listdir(chckpt_path)[0])
                 saved_ = torch.load(load)
                 lightning_module.load_state_dict(saved_["state_dict"])
-            else:
-                raise FileExistsError(
-                    "Load specification does not point to a saved model"
-                )
+    if args.load is not None and load is None:
+        raise FileExistsError(
+            "Load specification does not point to a saved model"
+        )
 
     if args.mode == "train":
         train(

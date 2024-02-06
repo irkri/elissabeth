@@ -74,7 +74,7 @@ class LISS(HookedModule):
             self.W_K = nn.Parameter(
                 torch.empty((
                     config.n_is,
-                    1 if config.share_queries else config.length_is,
+                    1 if config.share_keys else config.length_is,
                     config.d_hidden,
                 ))
             )
@@ -90,7 +90,7 @@ class LISS(HookedModule):
                 self.b_K = nn.Parameter(
                     torch.empty((
                         config.n_is,
-                        1 if config.share_queries else config.length_is,
+                        1 if config.share_keys else config.length_is,
                     ))
                 )
                 nn.init.zeros_(self.b_K)
