@@ -31,6 +31,7 @@ class LISSConfig(ModelConfig):
     bias_value: bool = False
 
     distance_weighting: bool = False
+    alpha_multiplier: int = 1
 
     weighting: bool = True
 
@@ -171,7 +172,7 @@ class LISS(HookedModule):
             Q = torch.tanh(Q)
             K = torch.tanh(K)
         if self.alpha is not None and T > 1:
-            rel_pos = (
+            rel_pos = self.config.alpha_multiplier * (
                 torch.sigmoid(self.alpha) * self.get_buffer("T")[:, :T, :, :]
             )
             if Q is None and K is None:
@@ -257,9 +258,8 @@ class LISS(HookedModule):
             if Q is not None:
                 temp = x * torch.exp(Q[:, :, :, iq, :, :])
             self.hooks(f"iss.{l}", temp)
-        x = x * torch.exp((
-                0 if l == 0 or Q is None else Q[:, :, :, iq, :, :])
-                - (0 if l == p or K is None else K[:, :, :, ik, :, :]
-            )  # type: ignore
+        x = x * torch.exp(
+            (0 if l == 0 or Q is None else Q[:, :, :, iq])
+            - (0 if l == p or K is None else K[:, :, :, ik])  # type: ignore
         )
         return x

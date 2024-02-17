@@ -33,6 +33,7 @@ class CLISSConfig(ModelConfig):
     bias_value: bool = False
 
     distance_weighting: bool = False
+    alpha_multiplier: int = 1
 
     weighting: bool = True
     exponent: int = 1
@@ -134,13 +135,13 @@ class CLISS(HookedModule):
 
         self.alpha = None
         if config.distance_weighting:
-            indices = torch.empty((config.context_length, 1, 1))
-            indices[:, 0, 0] = torch.linspace(
+            indices = torch.empty((config.context_length, 1, 1, 1))
+            indices[:, 0, 0, 0] = torch.linspace(
                 1/config.context_length, 1, config.context_length
             )
             self.register_buffer("T", indices)
             self.alpha = nn.Parameter(
-                torch.empty((1, config.n_is, config.length_is))
+                torch.empty((1, config.n_is, config.length_is, 1, 1))
             )
             nn.init.ones_(self.alpha)
 
@@ -293,11 +294,24 @@ class CLISS(HookedModule):
                 W.size(-3)-4*l*dqk, W.size(-3)-4*(l+1)*dqk, -4
             ).to(W.device)
             x = x * torch.prod(
-                cos_K[..., iq, :, :, :].pow(W.index_select(-3, indices-2)),
+                cos_K[..., ik, :, :, :].pow(W.index_select(-3, indices-2)),
                 dim=-3,
             )
             x = x * torch.prod(
-                sin_K[..., iq, :, :, :].pow(W.index_select(-3, indices-1)),
+                sin_K[..., ik, :, :, :].pow(W.index_select(-3, indices-1)),
                 dim=-3,
+            )
+        if self.alpha is not None and x.shape[2] > 1:
+            alpha_q = 0 if l == 0 else (
+                self.config.alpha_multiplier
+                * torch.sigmoid(self.alpha[:, :, iq])
+            )
+            alpha_k = 0 if l == p else (
+                self.config.alpha_multiplier
+                * torch.sigmoid(self.alpha[:, :, ik])
+            )
+            x = x * torch.exp(
+                (alpha_k - alpha_q)  # type: ignore
+                * self.get_buffer("T")[:x.shape[2]]
             )
         return x

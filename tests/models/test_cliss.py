@@ -1,6 +1,7 @@
+import numpy as np
 import torch
 
-from sainomore.elissabeth import Elissabeth, CLISSConfig
+from sainomore.elissabeth import CLISSConfig, Elissabeth
 
 
 def test_cliss_weights() -> None:
@@ -16,10 +17,12 @@ def test_cliss_weights() -> None:
             d_query_key=1,
             exponent=3,
             input_type="vector",
+            distance_weighting=True,
+            alpha_multiplier=2,
             values_2D=False,
             bias_query_key=False,
             bias_value=False,
-            pe_query_key=False,
+            pe_key=False,
             pe_value=False,
             share_queries=False,
             share_keys=False,
@@ -33,6 +36,12 @@ def test_cliss_weights() -> None:
     torch.nn.init.ones_(cliss.get_parameter("layers.0.W_V"))
     torch.nn.init.ones_(cliss.get_parameter("layers.0.W_O"))
     cliss.set_eye("unembedding.weight", requires_grad=False, dims=(0, 1))
+    states = cliss.state_dict()
+    alpha = torch.Tensor([1, 3, 2])
+    states["layers.0.alpha"] = (
+        alpha.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+    )
+    cliss.load_state_dict(states)
 
     X = torch.randn((1, 10))
     the_result = torch.zeros_like(X)
@@ -46,6 +55,9 @@ def test_cliss_weights() -> None:
                         * torch.cos(X[0, i_2] - X[0, i_1])**3
                         * torch.cos(X[0, i_3] - X[0, i_2])**3
                         * torch.cos(X[0, k] - X[0, i_3])**3
+                        * np.exp(-2*torch.sigmoid(alpha[2])*(k - i_3)/10)
+                        * np.exp(-2*torch.sigmoid(alpha[1])*(i_3 - i_2)/10)
+                        * np.exp(-2*torch.sigmoid(alpha[0])*(i_2 - i_1)/10)
                     )
 
     cliss.attach_all_hooks()
