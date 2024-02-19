@@ -35,6 +35,7 @@ class CLISSConfig(ModelConfig):
     distance_weighting: bool = False
     alpha_multiplier: int = 1
 
+    restrict_query_key: bool = False
     weighting: bool = True
     exponent: int = 1
 
@@ -163,7 +164,7 @@ class CLISS(HookedModule):
 
         self._create_weight_signature()
 
-        self.hooks = HookCollection("Q", "K", "V")
+        self.hooks = HookCollection("Q", "K", "V", "iss")
 
     def _create_weight_signature(self) -> None:
         p = self.config.length_is * self.config.d_query_key
@@ -199,6 +200,9 @@ class CLISS(HookedModule):
             K = torch.einsum('hldi,btd->bthli', self.W_K, self.pe(x))
             if self.b_K is not None:
                 K = K + self.b_K
+            if self.config.restrict_query_key:
+                Q = torch.tanh(Q) * torch.pi / 4
+                K = torch.tanh(K) * torch.pi / 4
             self.hooks("Q", Q)
             self.hooks("K", K)
             Q = Q.unsqueeze(-1).unsqueeze(-1)
@@ -259,6 +263,7 @@ class CLISS(HookedModule):
         result = (
             result * self.get_buffer("weight_signature")[..., 0, :, :]
         ).sum(dim=0)
+        self.hooks("iss", result)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
