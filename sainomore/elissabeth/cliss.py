@@ -309,14 +309,20 @@ class CLISS(HookedModule):
         if self.alpha is not None and x.shape[2] > 1:
             alpha_q = 0 if l == 0 else (
                 self.config.alpha_multiplier
-                * torch.sigmoid(self.alpha[:, :, iq])
+                * (1 - 1 / (self.alpha[:, :, iq]**2 + 1))
             )
             alpha_k = 0 if l == p else (
                 self.config.alpha_multiplier
-                * torch.sigmoid(self.alpha[:, :, ik])
+                * (1 - 1 / (self.alpha[:, :, ik]**2 + 1))
             )
             x = x * torch.exp(
                 (alpha_k - alpha_q)  # type: ignore
                 * self.get_buffer("T")[:x.shape[2]]
             )
+            if l < p:
+                x = x * torch.exp(
+                    self.config.alpha_multiplier
+                    * (1 - 1 / (self.alpha[:, :, l]**2 + 1))
+                    / self.config.context_length
+                )
         return x

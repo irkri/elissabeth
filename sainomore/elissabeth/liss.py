@@ -33,7 +33,10 @@ class LISSConfig(ModelConfig):
     distance_weighting: bool = False
     alpha_multiplier: int = 1
 
+    restrict_query_key: bool = False
     weighting: bool = True
+    complex_exponential: bool = False
+    normalize_weighting: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -125,6 +128,14 @@ class LISS(HookedModule):
             config.d_hidden,
         )))
         nn.init.xavier_normal_(self.W_O)
+        if config.complex_exponential:
+            self.W_O_i = nn.Parameter(torch.empty((
+                config.n_is,
+                config.d_values,
+                config.d_values if config.values_2D else 1,
+                config.d_hidden,
+            )))
+            nn.init.xavier_normal_(self.W_O_i)
 
         self.alpha = None
         if config.distance_weighting:
@@ -169,18 +180,18 @@ class LISS(HookedModule):
             K = torch.einsum('hld,btd->bthl', self.W_K, self.pe(x))
             if self.b_K is not None:
                 K = K + self.b_K
-            Q = torch.tanh(Q)
-            K = torch.tanh(K)
+            if self.config.restrict_query_key:
+                Q = torch.tanh(Q)
+                K = torch.tanh(K)
         if self.alpha is not None and T > 1:
-            rel_pos = self.config.alpha_multiplier * (
-                torch.sigmoid(self.alpha) * self.get_buffer("T")[:, :T, :, :]
-            )
+            alpha = self.config.alpha_multiplier * (1 - 1 / (self.alpha**2+1))
+            rel_pos = alpha * self.get_buffer("T")[:, :T, :, :]
             if Q is None and K is None:
                 Q = - rel_pos
-                K = - rel_pos
+                K = - rel_pos - alpha/self.config.context_length
             else:
                 Q = Q - rel_pos
-                K = K - rel_pos
+                K = K - rel_pos - alpha/self.config.context_length
         if Q is not None and K is not None:
             self.hooks("Q", Q)
             self.hooks("K", K)
@@ -201,6 +212,11 @@ class LISS(HookedModule):
         result = V[:, :, :, 0, :, :]
         result = self._weight_is(result, Q, K, 0)
         result = torch.cumsum(result, dim=1)
+        if self.config.normalize_weighting:
+            denom = torch.ones_like(V[:, :, :, 0, :, :])
+            denom = self._weight_is(denom, Q, K, 0)
+            denom = torch.cumsum(denom, dim=1)
+            result = result / denom
 
         if self.beta is not None:
             result /= (
@@ -210,6 +226,8 @@ class LISS(HookedModule):
             )
 
         for l in range(1, p):
+            if self.config.normalize_weighting:
+                denom = torch.cumsum(self._weight_is(result, Q, K, l), dim=1)
             result = nn.functional.pad(
                 result[:, :-1, :, :, :],
                 (0, 0, 0, 0, 0, 0, 1, 0)
@@ -219,10 +237,10 @@ class LISS(HookedModule):
                 result = V[:, :, :, iv, :, :] @ result
             else:
                 result = V[:, :, :, iv, :, :] * result
-            result = self._weight_is(
-                result, Q, K, l
-            )
+            result = self._weight_is(result, Q, K, l)
             result = torch.cumsum(result, dim=1)
+            if self.config.normalize_weighting:
+                result = result / (denom)
 
             if self.beta is not None:
                 result /= nn.functional.pad(
@@ -239,7 +257,13 @@ class LISS(HookedModule):
 
         if self.hooks.get(f"iss.{p}").is_attached():
             self.hooks(f"iss.{p}", result)
-        result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
+        if self.config.complex_exponential:
+            result = (
+                torch.einsum("hvwd,bthvw->btd", self.W_O, result.real)
+                + torch.einsum("hvwd,bthvw->btd ", self.W_O_i, result.imag)
+            )
+        else:
+            result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
 
@@ -253,13 +277,15 @@ class LISS(HookedModule):
         p = self.config.length_is
         iq = 0 if self.config.share_queries else l-1
         ik = 0 if self.config.share_keys else l
-        if l > 0 and l < p and self.hooks.get(f"iss.{l}").is_attached():
+        if 0 < l < p and self.hooks.get(f"iss.{l}").is_attached():
             temp = x
             if Q is not None:
-                temp = x * torch.exp(Q[:, :, :, iq, :, :])
+                temp = x * torch.exp(Q[:, :, :, iq, :, :]
+                    * (1j if self.config.complex_exponential else 1)
+                )
             self.hooks(f"iss.{l}", temp)
-        x = x * torch.exp(
+        x = x * torch.exp((
             (0 if l == 0 or Q is None else Q[:, :, :, iq])
             - (0 if l == p or K is None else K[:, :, :, ik])  # type: ignore
-        )
+        ) * (1j if self.config.complex_exponential else 1))
         return x

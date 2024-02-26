@@ -41,23 +41,24 @@ def test_cliss_weights() -> None:
     states["layers.0.alpha"] = (
         alpha.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     )
+    alpha = 1 - 1 / (alpha**2 + 1)
     cliss.load_state_dict(states)
 
     X = torch.randn((1, 10))
     the_result = torch.zeros_like(X)
-    for k in range(X.shape[1]):
-        for i_3 in range(k+1):
-            for i_2 in range(i_3):
-                for i_1 in range(i_2):
-                    the_result[0, k] += (X[0, i_1]
-                        * X[0, i_2]
-                        * X[0, i_3]
-                        * torch.cos(X[0, i_2] - X[0, i_1])**3
-                        * torch.cos(X[0, i_3] - X[0, i_2])**3
-                        * torch.cos(X[0, k] - X[0, i_3])**3
-                        * np.exp(-2*torch.sigmoid(alpha[2])*(k - i_3)/10)
-                        * np.exp(-2*torch.sigmoid(alpha[1])*(i_3 - i_2)/10)
-                        * np.exp(-2*torch.sigmoid(alpha[0])*(i_2 - i_1)/10)
+    for t in range(X.shape[1]):
+        for t_3 in range(t+1):
+            for t_2 in range(t_3):
+                for t_1 in range(t_2):
+                    the_result[0, t] += (X[0, t_1]
+                        * X[0, t_2]
+                        * X[0, t_3]
+                        * torch.cos(X[0, t_2] - X[0, t_1])**3
+                        * torch.cos(X[0, t_3] - X[0, t_2])**3
+                        * torch.cos(X[0,   t] - X[0, t_3])**3
+                        * np.exp(-2*alpha[2] * (  t - t_3 - 1)/10)
+                        * np.exp(-2*alpha[1] * (t_3 - t_2 - 1)/10)
+                        * np.exp(-2*alpha[0] * (t_2 - t_1 - 1)/10)
                     )
 
     cliss.attach_all_hooks()

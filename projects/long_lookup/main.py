@@ -25,11 +25,11 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 500,
-    "context_length": 25,
-    "characters": 10,
+    "n_samples": 5000,
+    "context_length": 100,
+    "characters": 5,
 
-    "lr": 5e-4,
+    "lr": 5e-3,
     "weight_decay": 1e-4,
     "epochs": 501,
 
@@ -56,8 +56,8 @@ def build_model() -> TokenPredictionModule:
         input_vocab_size=config["characters"],
         n_layers=1,
         length_is=2,
-        n_is=32,
-        d_values=1,
+        n_is=1,
+        d_values=5,
         values_2D=False,
         d_hidden=5,#config["characters"],
         # exponent=2,
@@ -65,16 +65,21 @@ def build_model() -> TokenPredictionModule:
         bias_query_key=False,
         bias_value=False,
         positional_encoding=None,
-        distance_weighting=False,
+        distance_weighting=True,
+        alpha_multiplier=5,
         pe_key=True,
         pe_value=False,
         share_queries=False,
         share_keys=False,
         share_values=False,
         sum_normalization="same",
+        restrict_query_key=False,
+        weighting=True,
+        complex_exponential=False,
+        normalize_weighting=False,
     )
     model = Elissabeth(model_config)
-    # model.set_eye("embedding.weight")
+    model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(
         model,
@@ -99,7 +104,7 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
-            multiple_keys=False,
+            # multiple_keys=False,
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
