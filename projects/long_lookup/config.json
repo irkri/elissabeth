@@ -1,0 +1,30 @@
+{
+    "context_length": 25,
+    "input_vocab_size": 5,
+
+    "n_layers": 1,
+    "length_is": 2,
+    "n_is": 1,
+    "d_values": 5,
+    "values_2D": "False",
+    "d_hidden": 5,
+
+    "positional_encoding": null,
+    "distance_weighting": "True",
+    "alpha_multiplier": 5,
+    "pe_key": "False",
+    "pe_value": "False",
+
+    "sum_normalization": null,
+    "restrict_query_key": "True",
+    "weighting": "True",
+
+    "bias_query_key": "False",
+    "bias_value": "False",
+    "share_queries": "False",
+    "share_keys": "False",
+    "share_values": "False",
+
+    "exponent": 1,
+    "d_query_key": 1
+}
