@@ -7,7 +7,7 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .elissabeth import Elissabeth, LISSConfig, CLISSConfig
+from .elissabeth import Elissabeth, LISSConfig
 
 
 def get_attention_matrix(
@@ -25,7 +25,7 @@ def get_attention_matrix(
     T = x.size(1)
     N = model.config.n_is
     is_liss = isinstance(model.config, LISSConfig)
-    is_cliss = isinstance(model.config, CLISSConfig)
+    is_cliss = False
     if dims == 2:
         att_mat = np.empty((B, n_layers, iss_length, T, T, N))
     elif dims == 3:

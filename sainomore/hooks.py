@@ -71,36 +71,28 @@ class Hook(nn.Module):
 
 class HookCollection(nn.Module):
 
-    def __init__(self, *names: str, backward: bool = False) -> None:
+    def __init__(self, *names: str) -> None:
         super().__init__()
         self._hooks: dict[str, Hook] = {}
-        self._backward = backward
-        self.add_hooks(names)
+        self.add_hooks(*names)
 
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(self._hooks.keys())
 
-    def add_hooks(self, names: str | Sequence[str]) -> None:
-        if isinstance(names, str):
-            if names in self._hooks:
-                warnings.warn(f"Already hooked {names}", RuntimeWarning)
-            self._hooks[names] = Hook(backward=self._backward)
-        else:
-            for name in names:
-                if name in self._hooks:
-                    warnings.warn(f"Already hooked {name}", RuntimeWarning)
-                self._hooks[name] = Hook(backward=self._backward)
+    def add_hooks(self, *names: str) -> None:
+        for name in names:
+            if name in self._hooks:
+                warnings.warn(f"Already hooked {name!r}", RuntimeWarning)
+            self._hooks[name] = Hook()
 
     def get(self, name: str) -> Hook:
         if name not in self._hooks:
-            raise RuntimeError(f"No hook named {name} found")
+            raise KeyError(f"No hook named {name!r} found")
         return self._hooks[name]
 
     def forward(self, name: str, x: torch.Tensor) -> torch.Tensor:
-        if name not in self._hooks:
-            raise RuntimeError(f"No hook named {name} found")
-        return self._hooks[name](x)
+        return self.get(name)(x)
 
     def release_all(self) -> None:
         for name in self._hooks:

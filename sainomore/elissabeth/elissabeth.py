@@ -1,52 +1,71 @@
 __all__ = ["Elissabeth"]
 
-import warnings
+from enum import IntFlag
+from typing import Any, Literal
 
 import torch
+from pydantic import BaseModel, validator
 from torch import nn
 
 from ..base import SAINoMoreModule
 from ..positional import (LearnablePositionalEncoding,
                           SinusoidalPositionalEncoding)
-from .cliss import CLISS, CLISSConfig
-from .liss import LISS, LISSConfig
+from .liss import LISS
+from .weighting import Weighting, get_weighting
+
+
+class ElissabethConfig(BaseModel):
+    context_length: int
+    input_vocab_size: int
+    input_type: Literal["token", "vector"] = "token"
+    positional_encoding: Literal["learnable", "sinusoidal"] | None = None
+
+    d_hidden: int
+
+    n_layers: int = 4
+    layer_norm: bool = True
+
+    output_vocab_size: int = -1
+
+    @validator("output_vocab_size", always=True)
+    def val_output_size(cls, output_vocab_size, values: dict[str, Any]) -> int:
+        if output_vocab_size == -1 and "input_vocab_size" in values:
+            return values["input_vocab_size"]
+        return output_vocab_size
 
 
 class Elissabeth(SAINoMoreModule):
     """Extended Learnable Iterated Sums Signature Architecture"""
 
-    config: LISSConfig | CLISSConfig
+    _config_class = ElissabethConfig
 
-    def __init__(self, config: LISSConfig | CLISSConfig) -> None:
-        super().__init__(config)
-        if config.input_type == "token":
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        if self.config("input_type") == "token":
             self.embedding = nn.Embedding(
-                config.input_vocab_size, config.d_hidden
+                self.config("input_vocab_size"), self.config("d_hidden")
             )
-        if self.config.positional_encoding == "learnable":
+        if self.config("positional_encoding") == "learnable":
             self.pos_enc = LearnablePositionalEncoding(
-                config.context_length, config.d_hidden
+                self.config("context_length"), self.config("d_hidden")
             )
-        elif self.config.positional_encoding == "sinusoidal":
+        elif self.config("positional_encoding") == "sinusoidal":
             self.pos_enc = SinusoidalPositionalEncoding(
-                config.context_length, config.d_hidden
+                self.config("context_length"), self.config("d_hidden")
             )
 
-        if isinstance(config, LISSConfig):
-            self.layers = nn.ModuleList([
-                LISS(config) for _ in range(config.n_layers)
-            ])
-        elif isinstance(config, CLISSConfig):
-            self.layers = nn.ModuleList([
-                CLISS(config) for _ in range(config.n_layers)
-            ])
-        if config.layer_norm:
+        self.layers = nn.ModuleList([
+            LISS(self, **kwargs) for _ in range(self.config("n_layers"))
+        ])
+
+        if self.config("layer_norm"):
             self.layernorms = nn.ModuleList([
-                nn.LayerNorm(config.d_hidden) for _ in range(config.n_layers+1)
+                nn.LayerNorm(self.config("d_hidden"))
+                for _ in range(self.config("n_layers")+1)
             ])
         self.unembedding = nn.Linear(
-            config.d_hidden, config.output_vocab_size,
-            bias=config.bias,
+            self.config("d_hidden"), self.config("output_vocab_size"),
+            bias=False,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -56,16 +75,29 @@ class Elissabeth(SAINoMoreModule):
         V: vocabulary size
         O: output dimension
         """
-        if self.config.input_type == "token":
+        if self.config("input_type") == "token":
             x = self.embedding(x)
-        if self.config.positional_encoding is not None:
+        if self.config("positional_encoding") is not None:
             x = self.pos_enc(x)
 
         for i in range(len(self.layers)):
             y = x
-            if self.config.layer_norm:
+            if self.config("layer_norm"):
                 y = self.layernorms[i](x)
             x = x + self.layers[i](y)
 
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)
+
+    @staticmethod
+    def build(config: dict[str, Any], *flags: IntFlag) -> "Elissabeth":
+        model = Elissabeth(**config)
+        weightings = []
+        for flag in flags:
+            if isinstance(flag, Weighting):
+                weightings.extend(get_weighting(flag))
+        for layer in model.layers:
+            for weighting in weightings:
+                layer.add_weighting(weighting(layer, **config))
+
+        return model

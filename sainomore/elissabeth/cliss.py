@@ -8,46 +8,37 @@ from typing import Literal, Optional
 import torch
 from torch import nn
 
-from ..base import HookedModule, ModelConfig
+from ..base import HookedModule
 from ..hooks import HookCollection
 from ..positional import RoPE
 
 
-@dataclass
-class CLISSConfig(ModelConfig):
-    sum_normalization: Optional[Literal["same", "independent"]] = "independent"
-    n_is: int = 1
-    length_is: int = 2
-    d_query_key: int = 1
-    d_values: int = None  # type: ignore
-    values_2D: bool = True
+# @dataclass
+# class CLISSConfig(ModelConfig):
+#     sum_normalization: Optional[Literal["same", "independent"]] = "independent"
+#     n_is: int = 1
+#     length_is: int = 2
+#     d_values: int = None  # type: ignore
+#     values_2D: bool = True
 
-    share_queries: bool = False
-    share_keys: bool = False
-    share_values: bool = False
+#     share_values: bool = False
+#     pe_value: bool = False
+#     bias_value: bool = False
 
-    pe_key: bool = True
-    pe_value: bool = False
+#     distance_weighting: bool = False
+#     alpha_multiplier: int = 1
 
-    bias_query_key: bool = False
-    bias_value: bool = False
+#     weighting: bool = True
 
-    distance_weighting: bool = False
-    alpha_multiplier: int = 1
-
-    restrict_query_key: bool = False
-    weighting: bool = True
-    exponent: int = 1
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.d_values is None:
-            self.d_values = self.d_hidden
-        if (isinstance(self.d_values, list)
-                and len(self.d_values) != self.length_is + 1):
-            raise ValueError(
-                "'d_values' has to be a list of length 'length_is'+1"
-            )
+#     def __post_init__(self) -> None:
+#         super().__post_init__()
+#         if self.d_values is None:
+#             self.d_values = self.d_hidden
+#         if (isinstance(self.d_values, list)
+#                 and len(self.d_values) != self.length_is + 1):
+#             raise ValueError(
+#                 "'d_values' has to be a list of length 'length_is'+1"
+#             )
 
 
 class CLISS(HookedModule):
@@ -166,30 +157,6 @@ class CLISS(HookedModule):
 
         self.hooks = HookCollection("Q", "K", "V", "iss")
 
-    def _create_weight_signature(self) -> None:
-        p = self.config.length_is * self.config.d_query_key
-        trig_id = []
-        trig_exp = [self.config.exponent, 0]
-        trig_coeff = 1
-        for k in range(self.config.exponent+1):
-            trig_id.append(f"{trig_coeff}{trig_exp[0]}{trig_exp[1]}")
-            trig_exp[0] -= 1
-            trig_exp[1] += 1
-            trig_coeff = trig_coeff * (self.config.exponent - k) // (k + 1)
-        weightings = torch.zeros(
-            ((self.config.exponent+1)**p, 1, 1, 1, 1, 1, 4*p+1),
-            dtype=torch.int32,
-        )
-        weightings[:, ..., 0] = 1
-        for c, comb in enumerate(itertools.product(trig_id, repeat=p)):
-            for i in range(p):
-                weightings[c, ..., 0] *= int(comb[i][0])
-                weightings[c, ..., 4*i+1] += int(comb[i][1])
-                weightings[c, ..., 4*i+3] += int(comb[i][1])
-                weightings[c, ..., 4*i+2] += int(comb[i][2])
-                weightings[c, ..., 4*i+4] += int(comb[i][2])
-        self.register_buffer("weight_signature", weightings.swapaxes(-1, -3))
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
         sin_K = cos_K = sin_Q = cos_Q = None
@@ -241,7 +208,7 @@ class CLISS(HookedModule):
                 (0, 0, 0, 0, 0, 0, 1, 0)
             )
             iv = 0 if self.config.share_values else l
-            if self.config.values_2D:
+            if V.size(-1) > 1:
                 result = V[:, :, :, :, iv, :, :] @ result
             else:
                 result = V[:, :, :, :, iv, :, :] * result

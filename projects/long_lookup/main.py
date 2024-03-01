@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from typing import Optional
 
@@ -14,10 +15,10 @@ from torchmetrics.classification import MulticlassAccuracy
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data import GivenDataModule, long_lookup
-from sainomore.elissabeth import CLISSConfig, Elissabeth, LISSConfig
+from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
-from sainomore.models import (DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig, ModelConfig)
+# from sainomore.models import (DecoderOnlyTransformer,
+#                               DecoderOnlyTransformerConfig)
 from sainomore.tools import get_attention_matrix, plot_attention_matrix
 
 torch.set_float32_matmul_precision('high')
@@ -26,12 +27,12 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 5000,
-    "context_length": 100,
+    "context_length": 25,
     "characters": 5,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 501,
+    "epochs": 5001,
 
     "batch_size": 64,
     "val_size": 0.2,
@@ -39,46 +40,13 @@ config = {
 
 
 def build_model() -> TokenPredictionModule:
-    # model_config = DecoderOnlyTransformerConfig(
-    #     context_length=config["context_length"],
-    #     input_vocab_size=config["characters"],
-    #     n_layers=2,
-    #     n_heads=4,
-    #     d_hidden=16,
-    #     d_head=16,
-    #     ffn_units=64,
-    #     bias=False,
-    # )
-    # model = DecoderOnlyTransformer(model_config)
+    with open("config.json", "r") as f:
+        model_config = json.load(f)
 
-    model_config = LISSConfig(
-        context_length=config["context_length"],
-        input_vocab_size=config["characters"],
-        n_layers=1,
-        length_is=2,
-        n_is=1,
-        d_values=5,
-        values_2D=False,
-        d_hidden=5,#config["characters"],
-        # exponent=2,
-        # d_query_key=2,
-        bias_query_key=False,
-        bias_value=False,
-        positional_encoding=None,
-        distance_weighting=True,
-        alpha_multiplier=5,
-        pe_key=True,
-        pe_value=False,
-        share_queries=False,
-        share_keys=False,
-        share_values=False,
-        sum_normalization="same",
-        restrict_query_key=False,
-        weighting=True,
-        complex_exponential=False,
-        normalize_weighting=False,
+    model = Elissabeth.build(
+        model_config,
+        Weighting.COSINE | Weighting.RELATIVE_DISTANCE,
     )
-    model = Elissabeth(model_config)
     model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(

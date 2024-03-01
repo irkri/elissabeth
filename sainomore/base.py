@@ -1,48 +1,35 @@
-__all__ = ["ModelConfig", "HookedModule", "SAINoMoreModule"]
+__all__ = ["HookedModule", "SAINoMoreModule"]
 
-from dataclasses import asdict, dataclass
-from typing import Any, Literal, Optional
+from abc import ABC, abstractmethod
+from enum import IntFlag
+from typing import Any, Optional
 
 import torch
+from pydantic import BaseModel
 from torch import nn
 
 from .hooks import Hook, HookCollection
 
 
-@dataclass
-class ModelConfig:
-    context_length: int
-    input_vocab_size: int
-    output_vocab_size: int = None  #type: ignore
-
-    n_layers: int = 4
-    d_hidden: int = 64
-
-    layer_norm: bool = True
-    bias: bool = False
-
-    positional_encoding: Literal["learnable", "sinusoidal"] | None = None
-
-    input_type: Literal["token", "vector"] = "token"
-
-    def __post_init__(self) -> None:
-        if self.output_vocab_size is None:
-            self.output_vocab_size = self.input_vocab_size
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
 class HookedModule(nn.Module):
 
-    hooks: HookCollection
+    _config_class: type[BaseModel]
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
         super().__init__()
-        self.config = config
+        self._config = self._config_class(**kwargs)
+        self.hooks = HookCollection()
+        self._parent: tuple[HookedModule] | None = (
+            (parent, ) if parent is not None else None
+        )
 
-    def release_all_hooks(self) -> None:
-        self.hooks.release_all()
+    @property
+    def parent(self) -> Optional["HookedModule"]:
+        return self._parent[0] if self._parent is not None else None
 
     def attach_all_hooks(
         self, *,
@@ -50,13 +37,56 @@ class HookedModule(nn.Module):
         backward: bool = False,
     ) -> None:
         self.hooks.attach_all(forward=forward, backward=backward)
+        for things in self.children():
+            if isinstance(things, nn.ModuleList):
+                for thing in things:
+                    if isinstance(thing, HookedModule):
+                        thing.attach_all_hooks(
+                            forward=forward,
+                            backward=backward,
+                        )
+            elif isinstance(things, HookedModule):
+                things.attach_all_hooks(
+                    forward=forward,
+                    backward=backward,
+                )
+
+    def release_all_hooks(self) -> None:
+        self.hooks.release_all()
+        for things in self.children():
+            if isinstance(things, nn.ModuleList):
+                for thing in things:
+                    if isinstance(thing, HookedModule):
+                        thing.release_all_hooks()
+            elif isinstance(things, HookedModule):
+                things.release_all_hooks()
+
+    def set_parent(self, parent: "HookedModule") -> None:
+        self._parent = (parent, )
+
+    def config(self, key: str) -> Any:
+        try:
+            return getattr(self._config, key)
+        except AttributeError:
+            if self.parent is not None:
+                return self.parent.config(key)
+            else:
+                raise AttributeError(f"Attribute {key!r} not found")
+
+    def get_hook(self, name: str) -> Hook:
+        try:
+            return self.hooks.get(name)
+        except KeyError:
+            if self.parent is not None:
+                return self.parent.get_hook(name)
+            else:
+                raise KeyError(f"No hook named {name!r} found")
+
+    def hook(self, name: str, x: torch.Tensor) -> torch.Tensor:
+        return self.get_hook(name)(x)
 
 
-class SAINoMoreModule(nn.Module):
-
-    def __init__(self, config: ModelConfig) -> None:
-        super().__init__()
-        self.config = config
+class SAINoMoreModule(ABC, HookedModule):
 
     def attach_all_hooks(
         self, *,
@@ -66,12 +96,12 @@ class SAINoMoreModule(nn.Module):
         for things in self.children():
             if isinstance(things, nn.ModuleList):
                 for thing in things:
-                    if isinstance(thing, (HookedModule, SAINoMoreModule)):
+                    if isinstance(thing, HookedModule):
                         thing.attach_all_hooks(
                             forward=forward,
                             backward=backward,
                         )
-            elif isinstance(things, (HookedModule, SAINoMoreModule)):
+            elif isinstance(things, HookedModule):
                 things.attach_all_hooks(
                     forward=forward,
                     backward=backward,
@@ -81,16 +111,16 @@ class SAINoMoreModule(nn.Module):
         for things in self.children():
             if isinstance(things, nn.ModuleList):
                 for thing in things:
-                    if isinstance(thing, (HookedModule, SAINoMoreModule)):
+                    if isinstance(thing, HookedModule):
                         thing.release_all_hooks()
-            elif isinstance(things, (HookedModule, SAINoMoreModule)):
+            elif isinstance(things, HookedModule):
                 things.release_all_hooks()
 
     def get_hook(self, module_name: str, name: str) -> Hook:
         module = self.get_submodule(module_name)
         if not isinstance(module, HookedModule):
             raise ValueError(
-                f"Module name {module_name} does not point to a HookedModule"
+                f"Module name {module_name!r} does not point to a HookedModule"
             )
         return module.hooks.get(name)
 
@@ -128,3 +158,11 @@ class SAINoMoreModule(nn.Module):
             dims = dims[:-1]
             for i in range(param.size(dim)):
                 SAINoMoreModule._set_eye(param.select(dim, i), dims)
+
+    @staticmethod
+    @abstractmethod
+    def build(
+        config: dict[str, Any],
+        *flags: IntFlag,
+    ) -> "SAINoMoreModule":
+        ...
