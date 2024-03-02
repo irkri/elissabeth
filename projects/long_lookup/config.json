@@ -1,29 +1,22 @@
 {
-    "context_length": 25,
-    "input_vocab_size": 5,
-
     "n_layers": 1,
+    "d_hidden": 32,
+
     "length_is": 2,
-    "n_is": 1,
-    "d_values": 5,
+    "n_is": 8,
+    "d_values": 16,
     "values_2D": "False",
-    "d_hidden": 5,
-
-    "positional_encoding": null,
-    "distance_weighting": "True",
-    "alpha_multiplier": 5,
-    "pe_key": "False",
     "pe_value": "False",
+    "sum_normalization": "True",
 
-    "sum_normalization": null,
-    "restrict_query_key": "True",
-    "weighting": "True",
+    "bias": "False",
 
-    "bias_query_key": "False",
-    "bias_value": "False",
     "share_queries": "False",
     "share_keys": "False",
     "share_values": "False",
+
+    "restrict_query_key": "True",
+    "alpha_multiplier": 5,
 
     "exponent": 1,
     "d_query_key": 1

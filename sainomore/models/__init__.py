@@ -1,2 +1,2 @@
-from .cos import *
+from .mlp import *
 from .transformer import *

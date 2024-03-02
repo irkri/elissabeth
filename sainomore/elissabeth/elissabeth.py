@@ -8,8 +8,7 @@ from pydantic import BaseModel, validator
 from torch import nn
 
 from ..base import SAINoMoreModule
-from ..positional import (LearnablePositionalEncoding,
-                          SinusoidalPositionalEncoding)
+from ..positional import PositionalEncoding, get_pe
 from .liss import LISS
 from .weighting import Weighting, get_weighting
 
@@ -45,24 +44,16 @@ class Elissabeth(SAINoMoreModule):
             self.embedding = nn.Embedding(
                 self.config("input_vocab_size"), self.config("d_hidden")
             )
-        if self.config("positional_encoding") == "learnable":
-            self.pos_enc = LearnablePositionalEncoding(
-                self.config("context_length"), self.config("d_hidden")
-            )
-        elif self.config("positional_encoding") == "sinusoidal":
-            self.pos_enc = SinusoidalPositionalEncoding(
-                self.config("context_length"), self.config("d_hidden")
-            )
 
         self.layers = nn.ModuleList([
             LISS(self, **kwargs) for _ in range(self.config("n_layers"))
         ])
-
         if self.config("layer_norm"):
             self.layernorms = nn.ModuleList([
                 nn.LayerNorm(self.config("d_hidden"))
                 for _ in range(self.config("n_layers")+1)
             ])
+
         self.unembedding = nn.Linear(
             self.config("d_hidden"), self.config("output_vocab_size"),
             bias=False,
@@ -77,15 +68,11 @@ class Elissabeth(SAINoMoreModule):
         """
         if self.config("input_type") == "token":
             x = self.embedding(x)
-        if self.config("positional_encoding") is not None:
-            x = self.pos_enc(x)
-
         for i in range(len(self.layers)):
             y = x
             if self.config("layer_norm"):
                 y = self.layernorms[i](x)
             x = x + self.layers[i](y)
-
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)
 
@@ -93,11 +80,18 @@ class Elissabeth(SAINoMoreModule):
     def build(config: dict[str, Any], *flags: IntFlag) -> "Elissabeth":
         model = Elissabeth(**config)
         weightings = []
+        pos_encs = []
         for flag in flags:
+            if isinstance(flag, PositionalEncoding):
+                pos_encs.extend(get_pe(flag))
             if isinstance(flag, Weighting):
                 weightings.extend(get_weighting(flag))
         for layer in model.layers:
+            for pe in pos_encs:
+                layer.add_pe(pe(**config))
             for weighting in weightings:
-                layer.add_weighting(weighting(layer, **config))
-
+                weighting_module = weighting(layer, **config)
+                for pe in pos_encs:
+                    weighting_module.add_pe(pe(**config))
+                layer.add_weighting(weighting_module)
         return model

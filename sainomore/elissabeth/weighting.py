@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from torch import nn
 
 from ..base import HookedModule
-from ..positional import RoPE
+from ..positional import _PositionalEncoding
 
 
 class Weighting(IntFlag):
@@ -21,6 +21,14 @@ class Weighting(IntFlag):
 
 class _Weighting(ABC, HookedModule):
 
+    def __init__(
+        self,
+        parent: Optional[HookedModule] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent, **kwargs)
+        self.pos_encs = nn.ModuleList()
+
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
         return x
 
@@ -30,6 +38,9 @@ class _Weighting(ABC, HookedModule):
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
         return x
+
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        self.pos_encs.append(pe)
 
 
 class RelativeDistanceConfig(BaseModel):
@@ -85,14 +96,16 @@ class RelativeDistance(_Weighting):
             )
         return x
 
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        pass
+
 
 class ExponentialConfig(BaseModel):
 
     share_queries: bool = False
     share_keys: bool = False
-    bias: bool = False
+    bias: bool = True
     restrict_query_key: bool = False
-    pe_key: bool = True
 
 
 class Exponential(_Weighting):
@@ -144,11 +157,7 @@ class Exponential(_Weighting):
                 ))
             )
             nn.init.zeros_(self.b_K)
-        self.pe = nn.Identity()
-        if self.config("pe_key"):
-            self.pe = RoPE(
-                T=self.config("context_length"), d=self.config("d_hidden")
-            )
+
         self.hooks.add_hooks("Q", "K")
         self._p = self.config("length_is")
 
@@ -156,7 +165,9 @@ class Exponential(_Weighting):
         self._Q = torch.einsum('hld,btd->bthl', self.W_Q, x)
         if self.b_Q is not None:
             self._Q = self._Q + self.b_Q
-        self._K = torch.einsum('hld,btd->bthl', self.W_K, self.pe(x))
+        for pe in self.pos_encs:
+            x = pe(x)
+        self._K = torch.einsum('hld,btd->bthl', self.W_K, x)
         if self.b_K is not None:
             self._K = self._K + self.b_K
         if self.config("restrict_query_key"):
@@ -304,11 +315,6 @@ class Cosine(_Weighting):
                 weightings[c, ..., 4*i+4] += int(comb[i][2])
         self.register_buffer("weight_signature", weightings.swapaxes(-1, -3))
 
-        self.pe = nn.Identity()
-        if self.config("pe_key"):
-            self.pe = RoPE(
-                T=self.config("context_length"), d=self.config("d_hidden")
-            )
         self.hooks.add_hooks("Q", "K")
         self._p = self.config("length_is")
         self._dqk = self.config("d_query_key")
@@ -317,7 +323,9 @@ class Cosine(_Weighting):
         Q = torch.einsum('hldi,btd->bthli', self.W_Q, x)
         if self.b_Q is not None:
             Q = Q + self.b_Q
-        K = torch.einsum('hldi,btd->bthli', self.W_K, self.pe(x))
+        for pe in self.pos_encs:
+            x = pe(x)
+        K = torch.einsum('hldi,btd->bthli', self.W_K, x)
         if self.b_K is not None:
             K = K + self.b_K
         if self.config("restrict_query_key"):

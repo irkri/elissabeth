@@ -17,8 +17,7 @@ from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
 from sainomore.data import GivenDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
-# from sainomore.models import (DecoderOnlyTransformer,
-#                               DecoderOnlyTransformerConfig)
+from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrix, plot_attention_matrix
 
 torch.set_float32_matmul_precision('high')
@@ -27,7 +26,7 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 5000,
-    "context_length": 25,
+    "context_length": 100,
     "characters": 5,
 
     "lr": 5e-3,
@@ -43,11 +42,15 @@ def build_model() -> TokenPredictionModule:
     with open("config.json", "r") as f:
         model_config = json.load(f)
 
+    model_config["context_length"] = config["context_length"]
+    model_config["input_vocab_size"] = config["characters"]
+
     model = Elissabeth.build(
         model_config,
-        Weighting.COSINE | Weighting.RELATIVE_DISTANCE,
+        Weighting.EXPONENTIAL | Weighting.RELATIVE_DISTANCE,
+        PositionalEncoding.ROPE,
     )
-    model.set_eye("embedding.weight")
+    # model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(
         model,

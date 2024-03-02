@@ -8,21 +8,21 @@ from pydantic import BaseModel
 from torch import nn
 
 from ..base import HookedModule
-from ..positional import RoPE
+from ..positional import _PositionalEncoding
 from .weighting import _Weighting
 
 
 class LISSConfig(BaseModel):
     d_values: int
-    sum_normalization: Optional[Literal["same", "independent"]] = None
     n_is: int = 1
     length_is: int = 2
     values_2D: bool = True
+    sum_normalization: bool = True
 
     share_values: bool = False
     pe_value: bool = False
 
-    bias_value: bool = False
+    bias: bool = True
 
     distance_weighting: bool = False
     alpha_multiplier: int = 1
@@ -61,7 +61,7 @@ class LISS(HookedModule):
         )
         nn.init.xavier_normal_(self.W_V)
         self.b_V = None
-        if self.config("bias_value"):
+        if self.config("bias"):
             self.b_V = nn.Parameter(
                 torch.empty((
                     self.config("n_is"),
@@ -82,25 +82,17 @@ class LISS(HookedModule):
         nn.init.xavier_normal_(self.W_O)
 
         self.beta = None
-        if self.config("sum_normalization") is not None:
+        if self.config("sum_normalization"):
             factor_norm = torch.empty((self.config("context_length"), 1, 1, 1))
             factor_norm[:, 0, 0, 0] = torch.arange(
                 1, self.config("context_length") + 1
             )
             self.register_buffer("norm", factor_norm)
-            self.beta = nn.Parameter(torch.empty((
-                1 if self.config("sum_normalization") == "same"
-                    else self.config("length_is"),
-            )))
+            self.beta = nn.Parameter(torch.empty((self.config("length_is"), )))
             nn.init.constant_(self.beta, 5.40988)
 
-        self.pe = nn.Identity()
-        if self.config("pe_value"):
-            self.pe = RoPE(
-                T=self.config("context_length"), d=self.config("d_hidden")
-            )
-
         self.weightings = nn.ModuleList()
+        self.pos_encs = nn.ModuleList()
         self.hooks.add_hooks("V")
         self.hooks.add_hooks(
             *(f"iss.{i}" for i in range(1, self.config("length_is")+1))
@@ -111,12 +103,18 @@ class LISS(HookedModule):
     def add_weighting(self, weighting: _Weighting) -> None:
         self.weightings.append(weighting)
 
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        self.pos_encs.append(pe)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
         for weighting in self.weightings:
             x = weighting.on_forward_start(x)
 
-        V = torch.einsum('hldvw,btd->bthlvw', self.W_V, self.pe(x))
+        if self.config("pe_value"):
+            for pe in self.pos_encs:
+                x = pe(x)
+        V = torch.einsum('hldvw,btd->bthlvw', self.W_V, x)
         if self.b_V is not None:
             V = V + self.b_V
         self.hook("V", V)
@@ -130,8 +128,8 @@ class LISS(HookedModule):
         if self.beta is not None:
             result /= (
                 (0.25*torch.tanh(self.beta[0])+0.75001)**(
-                    torch.log10(self.get_buffer("norm")[:, :T, :, :, :])
-                ) * self.get_buffer("norm")[:, :T, :, :, :]
+                    torch.log10(self.get_buffer("norm")[:T, :, :, :])
+                ) * self.get_buffer("norm")[:T, :, :, :]
             )
 
         for l in range(1, self.p):
@@ -151,9 +149,7 @@ class LISS(HookedModule):
 
             if self.beta is not None:
                 result /= nn.functional.pad(
-                    (0.25*torch.tanh(self.beta[
-                        0 if self.config("sum_normalization") == "same" else l
-                    ])+0.75001)**(
+                    (0.25*torch.tanh(self.beta[l])+0.75001)**(
                         torch.log10(self.get_buffer("norm")[:T, :, :, :])
                     ) * self.get_buffer("norm")[:T, :, :, :],
                     (0, 0, 0, 0, 0, 0, l, 0),
