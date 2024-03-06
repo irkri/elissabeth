@@ -378,12 +378,14 @@ class Cosine(_Weighting):
 
 def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
     weightings: list[type[_Weighting]] = []
-    if Weighting.RELATIVE_DISTANCE in weighting:
-        weightings.append(RelativeDistance)
-    if Weighting.EXPONENTIAL in weighting:
-        weightings.append(Exponential)
-    if Weighting.COMPLEX_EXPONENTIAL in weighting:
-        weightings.append(ComplexExponential)
-    if Weighting.COSINE in weighting:
-        weightings.append(Cosine)
+    for weight in weighting:
+        match weight:
+            case Weighting.RELATIVE_DISTANCE:
+                weightings.append(RelativeDistance)
+            case Weighting.EXPONENTIAL:
+                weightings.append(Exponential)
+            case Weighting.COMPLEX_EXPONENTIAL:
+                weightings.append(ComplexExponential)
+            case Weighting.COSINE:
+                weightings.append(Cosine)
     return weightings

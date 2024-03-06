@@ -4,7 +4,7 @@ import torch
 from sainomore.elissabeth import Elissabeth, Weighting
 
 
-def test_cliss_weights() -> None:
+def test_liss_weights() -> None:
 
     config = {
         "context_length" : "10",
@@ -14,8 +14,6 @@ def test_cliss_weights() -> None:
         "d_values" : "1",
         "length_is" : "3",
         "n_layers" : "1",
-        "d_query_key": "1",
-        "exponent": "3",
         "layer_norm" : "False",
         "input_type" : "vector",
         "restrict_query_key" : "False",
@@ -29,13 +27,13 @@ def test_cliss_weights() -> None:
         "share_queries" : "False",
         "share_keys" : "False",
         "share_values" : "False",
-        "sum_normalization" : None,
+        "sum_normalization" : "False",
         "bias" : "False",
     }
+
     model = Elissabeth.build(
         config,
-        Weighting.RELATIVE_DISTANCE | Weighting.COSINE,
-
+        Weighting.RELATIVE_DISTANCE | Weighting.EXPONENTIAL,
     )
     torch.nn.init.ones_(
         model.get_parameter("layers.0.weightings.1.W_Q")
@@ -68,19 +66,17 @@ def test_cliss_weights() -> None:
                           X[0, t_1]
                         * X[0, t_2]
                         * X[0, t_3]
-                        * torch.cos(X[0, t_2] - X[0, t_1])**3
-                        * torch.cos(X[0, t_3] - X[0, t_2])**3
-                        * torch.cos(X[0,   t] - X[0, t_3])**3
-                        * np.exp(-2*alpha[2] * (  t - t_3)/10)
+                        * torch.exp(X[0, t_2] - X[0, t_1])
+                        * torch.exp(X[0, t_3] - X[0, t_2])
+                        * torch.exp(X[0,   t] - X[0, t_3])
+                        * np.exp(-2*alpha[2] * (t - t_3)/10)
                         * np.exp(-2*alpha[1] * (t_3 - t_2 - 1)/10)
                         * np.exp(-2*alpha[0] * (t_2 - t_1 - 1)/10)
                     )
 
-    model.attach_all_hooks()
     result = model(X.unsqueeze(-1))
-    model.release_all_hooks()
     torch.testing.assert_close(result[0, :, :], the_result+X)
 
 
 if __name__ == "__main__":
-    test_cliss_weights()
+    test_liss_weights()
