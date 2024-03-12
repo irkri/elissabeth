@@ -73,6 +73,18 @@ class HookedModule(nn.Module):
             else:
                 raise AttributeError(f"Attribute {key!r} not found")
 
+    def get_config(self) -> dict[str, Any]:
+        config = {}
+        for child in self.children():
+            if isinstance(child, nn.ModuleList):
+                for thing in child:
+                    if isinstance(thing, HookedModule):
+                        config.update(thing.get_config())
+            elif isinstance(child, HookedModule):
+                config.update(child.get_config())
+        config.update(self._config.model_dump())
+        return config
+
     def get_hook(self, name: str) -> Hook:
         try:
             return self.hooks.get(name)

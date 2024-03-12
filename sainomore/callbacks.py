@@ -68,7 +68,7 @@ class WeightHistory(Callback):
         if self._save_path is not None:
             path = os.path.join(self._save_path, f"epoch{self._epoch:05}")
             os.makedirs(path, exist_ok=True)
-        for k, weight in enumerate(self._weights):
+        for weight in self._weights:
             dim = None
             if isinstance(weight, str):
                 name = weight

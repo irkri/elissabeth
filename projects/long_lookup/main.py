@@ -68,19 +68,19 @@ def build_model() -> TokenPredictionModule:
     state_dict = model.state_dict()
 
     state_dict["embedding.weight"] = torch.eye(5)
-    state_dict["layers.0.W_V"] = torch.Tensor([[
-        [[1, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1]],
+    # state_dict["layers.0.W_V"] = torch.Tensor([[
+    #     [[1, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0],
+    #     [0, 0, 1, 0, 0],
+    #     [0, 0, 0, 1, 0],
+    #     [0, 0, 0, 0, 1]],
 
-        [[1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1]]
-    ]]).unsqueeze(-1)
+    #     [[1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1]]
+    # ]]).unsqueeze(-1)
 
     state_dict["layers.0.W_O"] = torch.Tensor([[
         [1, 0, 0, 0, 0],
@@ -108,7 +108,7 @@ def build_model() -> TokenPredictionModule:
     model.load_state_dict(state_dict)
     # model.get_parameter("layers.0.weightings.1.W_Q").requires_grad = False
     # model.get_parameter("layers.0.weightings.1.W_K").requires_grad = False
-    model.get_parameter("layers.0.W_V").requires_grad = False
+    # model.get_parameter("layers.0.W_V").requires_grad = False
     model.get_parameter("layers.0.W_O").requires_grad = False
     model.get_parameter("embedding.weight").requires_grad = False
     model.get_parameter("unembedding.weight").requires_grad = False
@@ -146,24 +146,20 @@ def train(
         # (no more waiting between epochs)
         persistent_workers=True,
     )
-    # data_module.train_dataloader()
-    # ex = next(iter(data_module.train_dataloader()))
-    # print(ex[0][0, :])
-    # print(ex[1][0, :])
-    # exit()
 
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
             project="Elissabeth Long Lookup",
             checkpoint_name=load_path,
-            tags=[lightning_module.model.layers[0].__class__.__name__, "one key"],
+            tags=[lightning_module.model.layers[0].__class__.__name__,
+                  "one key"],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
 
         wandb_logger.experiment.config.update(
-            lightning_module.model.config.to_dict()
+            lightning_module.model.get_config()
         )
         wandb_logger.experiment.config.update(config, allow_val_change=True)
 
@@ -178,8 +174,6 @@ def train(
         GeneralConfigCallback(max_depth=10),
         WeightHistory((
                 ("model.layers.0.W_Q", (2, 0)),
-                ("model.layers.0.b_Q", (0, )),
-                ("model.layers.0.W_K", (2, 0)),
                 ("model.layers.0.b_K", (0, )),
                 # ("model.layers.0.E_K", (2, 0)),
                 # "model.layers.0.W_V",

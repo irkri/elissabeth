@@ -1,7 +1,7 @@
 __all__ = ["LISS", "LISSConfig"]
 
 import warnings
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 from pydantic import BaseModel
@@ -23,12 +23,6 @@ class LISSConfig(BaseModel):
     pe_value: bool = False
 
     bias: bool = True
-
-    distance_weighting: bool = False
-    alpha_multiplier: int = 1
-
-    weighting: bool = True
-    complex_exponential: bool = False
 
 
 class LISS(HookedModule):
