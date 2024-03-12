@@ -2,7 +2,7 @@ __all__ = ["HookedModule", "SAINoMoreModule"]
 
 from abc import ABC, abstractmethod
 from enum import IntFlag
-from typing import Any, Optional
+from typing import Any, Optional, Self
 
 import torch
 from pydantic import BaseModel
@@ -159,10 +159,11 @@ class SAINoMoreModule(ABC, HookedModule):
             for i in range(param.size(dim)):
                 SAINoMoreModule._set_eye(param.select(dim, i), dims)
 
-    @staticmethod
+    @classmethod
     @abstractmethod
     def build(
+        cls: type[Self],
         config: dict[str, Any],
         *flags: IntFlag,
-    ) -> "SAINoMoreModule":
+    ) -> Self:
         ...

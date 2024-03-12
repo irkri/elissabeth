@@ -25,8 +25,8 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5000,
-    "context_length": 100,
+    "n_samples": 1000,
+    "context_length": 25,
     "characters": 5,
 
     "lr": 5e-3,
@@ -38,6 +38,20 @@ config = {
 }
 
 
+class MyElissabeth(Elissabeth):
+    """Elissabeth without residual stream and the output is
+    subtracted by a shifted version of the input."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.config("input_type") == "token":
+            input_ = self.embedding(x)
+            x = input_
+        for i in range(len(self.layers)):
+            x = self.layers[i](x)
+        logits = x - torch.nn.functional.pad(input_[:, :-1], (0, 0, 1, 0))
+        return torch.swapaxes(logits, 1, 2)
+
+
 def build_model() -> TokenPredictionModule:
     with open("config.json", "r") as f:
         model_config = json.load(f)
@@ -45,12 +59,60 @@ def build_model() -> TokenPredictionModule:
     model_config["context_length"] = config["context_length"]
     model_config["input_vocab_size"] = config["characters"]
 
-    model = Elissabeth.build(
+    model = MyElissabeth.build(
         model_config,
-        Weighting.EXPONENTIAL | Weighting.RELATIVE_DISTANCE,
-        PositionalEncoding.ROPE,
+        Weighting.COSINE | Weighting.RELATIVE_DISTANCE,
+        # PositionalEncoding.ROPE,
     )
-    # model.set_eye("embedding.weight")
+
+    state_dict = model.state_dict()
+
+    state_dict["embedding.weight"] = torch.eye(5)
+    state_dict["layers.0.W_V"] = torch.Tensor([[
+        [[1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1]],
+
+        [[1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1]]
+    ]]).unsqueeze(-1)
+
+    state_dict["layers.0.W_O"] = torch.Tensor([[
+        [1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1],
+    ]]).unsqueeze(2)
+    state_dict["unembedding.weight"] = torch.eye(5)
+
+    state_dict["layers.0.weightings.0.alpha"] = torch.Tensor([[
+        [10_000, 0]
+    ]]).unsqueeze(-1).unsqueeze(-1)
+
+    # d = torch.pi / 2
+    # state_dict["layers.0.weightings.1.W_Q"] = torch.Tensor([[
+    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    # ]])
+    # state_dict["layers.0.weightings.1.W_K"] = torch.Tensor([[
+    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    # ]])
+
+    model.load_state_dict(state_dict)
+    # model.get_parameter("layers.0.weightings.1.W_Q").requires_grad = False
+    # model.get_parameter("layers.0.weightings.1.W_K").requires_grad = False
+    model.get_parameter("layers.0.W_V").requires_grad = False
+    model.get_parameter("layers.0.W_O").requires_grad = False
+    model.get_parameter("embedding.weight").requires_grad = False
+    model.get_parameter("unembedding.weight").requires_grad = False
+    model.get_parameter("layers.0.weightings.0.alpha").requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -75,7 +137,7 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
-            # multiple_keys=False,
+            multiple_keys=False,
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
@@ -84,6 +146,7 @@ def train(
         # (no more waiting between epochs)
         persistent_workers=True,
     )
+    # data_module.train_dataloader()
     # ex = next(iter(data_module.train_dataloader()))
     # print(ex[0][0, :])
     # print(ex[1][0, :])
@@ -106,11 +169,11 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    example = long_lookup(
-        n_samples=1,
-        length=config["context_length"],
-        characters=config["characters"],
-    )[0]
+    # example = long_lookup(
+    #     n_samples=1,
+    #     length=config["context_length"],
+    #     characters=config["characters"],
+    # )[0]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         WeightHistory((
@@ -157,55 +220,62 @@ def train(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    x, y = long_lookup(
-        1,
-        length=config["context_length"],
-        characters=config["characters"],
-    )
+    fig, ax = plt.subplots(2, 2, sharex=True)
+    W_Q = lightning_module.model.get_parameter(
+        "layers.0.weightings.1.W_Q"
+    ).detach().numpy()
+    W_K = lightning_module.model.get_parameter(
+        "layers.0.weightings.1.W_K"
+    ).detach().numpy()
 
-    # b_Q = lightning_module.model.get_parameter("layers.0.b_Q").detach().numpy()
-    # b_K = lightning_module.model.get_parameter("layers.0.b_K").detach().numpy()
-    # fig, ax = plt.subplots(4, 1, sharex=True)
-    # ax[0].matshow(
-    #     b_Q[0,0],
-    #     cmap="seismic",
-    # )
-    # ax[1].matshow(
-    #     b_K[0,0],
-    #     cmap="seismic",
-    # )
+    ax[0, 0].matshow(
+        W_Q[0, 0],
+        cmap="seismic",
+    )
+    ax[0, 1].matshow(
+        W_Q[0, 1],
+        cmap="seismic",
+    )
+    ax[1, 0].matshow(
+        W_K[0, 0],
+        cmap="seismic",
+    )
+    ax[1, 1].matshow(
+        W_K[0, 1],
+        cmap="seismic",
+    )
     # ax[2].matshow(
     #     (b_Q - b_K)[0,0],
     #     cmap="seismic",
     # )
-    # W_O = lightning_module.model.get_parameter("layers.0.W_O").detach().numpy()
-    # ax[3].matshow(
-    #     W_O.T,
+    # W_O = lightning_module.model.get_parameter("embedding.weight").detach().numpy()
+    # ax.matshow(
+    #     W_O,
     #     cmap="seismic",
     # )
     # print(W_O)
-    mat = get_attention_matrix(
-        lightning_module.model,  # type: ignore
-        x,
-        dims=2,
-    )
-    print(mat.shape)
-    y_hat = lightning_module.predict_step(x, 0)
-    print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
-    plot_attention_matrix(
-        mat[0, ..., 0],
-        example=x.numpy()[0],
-        figsize=(50, 10),
-        show_product=True,
-        log_colormap=False,
-        causal_mask=True,
-    )
-    plt.savefig(
-        os.path.join(os.path.dirname(__file__), "plot.pdf"),
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
-    # plt.show()
+    # mat = get_attention_matrix(
+    #     lightning_module.model,  # type: ignore
+    #     x,
+    #     dims=2,
+    # )
+    # print(mat.shape)
+    # y_hat = lightning_module.predict_step(x, 0)
+    # print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
+    # plot_attention_matrix(
+    #     mat[0, ..., 0],
+    #     example=x.numpy()[0],
+    #     figsize=(50, 10),
+    #     show_product=True,
+    #     log_colormap=False,
+    #     causal_mask=True,
+    # )
+    # plt.savefig(
+    #     os.path.join(os.path.dirname(__file__), "plot.pdf"),
+    #     bbox_inches="tight",
+    #     facecolor=(0, 0, 0, 0),
+    # )
+    plt.show()
 
 
 def main() -> None:

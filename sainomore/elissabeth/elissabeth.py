@@ -1,7 +1,7 @@
 __all__ = ["Elissabeth"]
 
 from enum import IntFlag
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import torch
 from pydantic import BaseModel, validator
@@ -76,9 +76,13 @@ class Elissabeth(SAINoMoreModule):
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)
 
-    @staticmethod
-    def build(config: dict[str, Any], *flags: IntFlag) -> "Elissabeth":
-        model = Elissabeth(**config)
+    @classmethod
+    def build(
+        cls: type[Self],
+        config: dict[str, Any],
+        *flags: IntFlag,
+    ) -> Self:
+        model = cls(**config)
         weightings = []
         pos_encs = []
         for flag in flags:

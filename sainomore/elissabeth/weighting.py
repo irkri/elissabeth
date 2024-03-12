@@ -68,7 +68,7 @@ class RelativeDistance(_Weighting):
         self.alpha = nn.Parameter(torch.empty(
             (1, self.config("n_is"), self.config("length_is"), 1, 1)
         ))
-        nn.init.ones_(self.alpha)
+        nn.init.zeros_(self.alpha)
         self._mult = self.config("alpha_multiplier")
         self._p = self.config("length_is")
         self._T = self.config("context_length")
