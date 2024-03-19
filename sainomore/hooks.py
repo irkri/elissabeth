@@ -7,7 +7,12 @@ from torch import nn
 
 class Hook(nn.Module):
 
-    def __init__(self, forward: bool = True, backward: bool = False) -> None:
+    def __init__(
+        self,
+        forward: bool = True,
+        backward: bool = False,
+        hidden: bool = False,
+    ) -> None:
         super().__init__()
         self._handle_fwd = None
         self._handle_bwd = None
@@ -15,10 +20,21 @@ class Hook(nn.Module):
         self._backward = backward
         self._cache_fwd: Optional[torch.Tensor] = None
         self._cache_bwd: Optional[torch.Tensor] = None
+        self._hidden = hidden
 
-    def reset(self, forward: bool = True, backward: bool = False) -> None:
-        self._forward = forward
-        self._backward = backward
+    @property
+    def hidden(self) -> bool:
+        return self._hidden
+
+    def reset(
+        self,
+        forward: Optional[bool] = None,
+        backward: Optional[bool] = None,
+    ) -> None:
+        if forward is not None:
+            self._forward = forward
+        if backward is not None:
+            self._backward = backward
         self._cache_fwd = None
         self._cache_bwd = None
 
@@ -80,11 +96,11 @@ class HookCollection(nn.Module):
     def names(self) -> tuple[str, ...]:
         return tuple(self._hooks.keys())
 
-    def add_hooks(self, *names: str) -> None:
+    def add_hooks(self, *names: str, hidden: bool = False) -> None:
         for name in names:
             if name in self._hooks:
                 warnings.warn(f"Already hooked {name!r}", RuntimeWarning)
-            self._hooks[name] = Hook()
+            self._hooks[name] = Hook(hidden=hidden)
 
     def get(self, name: str) -> Hook:
         if name not in self._hooks:
@@ -96,13 +112,15 @@ class HookCollection(nn.Module):
 
     def release_all(self) -> None:
         for name in self._hooks:
-            self._hooks[name].release()
+            if not self._hooks[name].hidden:
+                self._hooks[name].release()
 
     def attach_all(
         self, *,
-        forward: bool = True,
-        backward: bool = False,
+        forward: Optional[bool] = None,
+        backward: Optional[bool] = None,
     ) -> None:
         for name in self._hooks:
-            self._hooks[name].reset(forward=forward, backward=backward)
-            self._hooks[name].attach()
+            if not self._hooks[name].hidden:
+                self._hooks[name].reset(forward=forward, backward=backward)
+                self._hooks[name].attach()

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Sequence
 
 import lightning.pytorch as L
@@ -41,13 +41,13 @@ class WeightHistory(Callback):
         self,
         weights: Sequence[str | tuple[str, tuple[int, ...]]],
         each_n_epochs: int = 1,
-        save_path: Optional[str] = None,
+        save_path: Optional[Path | str] = None,
     ) -> None:
         super().__init__()
         self._weights = list(weights)
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
-        self._save_path = save_path
+        self._save_path = Path(save_path) if save_path is not None else None
 
     def on_train_start(
         self,
@@ -66,8 +66,8 @@ class WeightHistory(Callback):
             return
         path = None
         if self._save_path is not None:
-            path = os.path.join(self._save_path, f"epoch{self._epoch:05}")
-            os.makedirs(path, exist_ok=True)
+            path = self._save_path / f"epoch{self._epoch:05}"
+            path.mkdir(parents=True, exist_ok=True)
         for weight in self._weights:
             dim = None
             if isinstance(weight, str):
@@ -78,22 +78,48 @@ class WeightHistory(Callback):
                 param = pl_module.get_parameter(name).detach().cpu().numpy()
             except AttributeError:
                 continue
-            if dim is None:
-                log_param = [param]
-            else:
+            if dim is not None:
                 param = np.moveaxis(
                     param, dim, tuple(-i for i in range(1, len(dim)+1))
                 )
-                param = np.reshape(
-                    param,
-                    (-1, param.shape[-2], param.shape[-1])
-                )
-                log_param = [param[i] for i in range(param.shape[0])]
+            self._log_image(
+                trainer,
+                param,
+                name,
+                (),
+                path,
+                is_1d=(len(dim) == 1) if dim is not None else False
+            )
+
+    def _log_image(
+        self,
+        trainer: L.Trainer,
+        image: np.ndarray,
+        name: str,
+        dim: tuple[int, ...],
+        path: Path | None,
+        is_1d: bool,
+    ) -> None:
+        if (image[dim].ndim == 2 and not is_1d) or image[dim].ndim == 1:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
-                    logger.log_image("weights/"+name, log_param)
+                    logger.log_image(
+                        "weights/"+name+"/"+"-".join(map(str, dim)),
+                        [image[dim]] if not is_1d
+                            else [image[dim][np.newaxis, :]],
+                    )
             if path is not None:
-                np.save(os.path.join(path, name+".npy"), np.array(log_param))
+                np.save(path / (name+".npy"), image[dim])
+        else:
+            for i in range(image[dim].shape[0]):
+                self._log_image(
+                    trainer,
+                    image,
+                    name,
+                    (i, ) + dim,
+                    path,
+                    is_1d,
+                )
 
 
 class HookHistory(Callback):
@@ -107,7 +133,7 @@ class HookHistory(Callback):
         backward: bool = False,
         each_n_epochs: int = 1,
         transform: Optional[Callable[[list[list[np.ndarray]]], Any]] = None,
-        save_path: Optional[str] = None,
+        save_path: Optional[Path | str] = None,
     ) -> None:
         super().__init__()
         self._model_name = model_name
@@ -118,7 +144,7 @@ class HookHistory(Callback):
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
         self._transform = transform
-        self._save_path = save_path
+        self._save_path = Path(save_path) if save_path is not None else None
 
     def on_train_start(
         self,
@@ -194,27 +220,27 @@ class HookHistory(Callback):
 
         if self._save_path is not None:
             for s in range(len(data_fwd)):
-                path = os.path.join(
-                    self._save_path,
-                    f"epoch{self._epoch:05}",
-                    f"sample{s:03}",
+                path = (
+                    self._save_path
+                    / f"epoch{self._epoch:05}"
+                    / f"sample{s:03}"
                 )
-                os.makedirs(path, exist_ok=True)
+                path.mkdir(parents=True, exist_ok=True)
                 for i in range(len(data_fwd[s])):
                     np.save(
-                        os.path.join(path, columns[i]+"_fwd.npy"),
+                        path / (columns[i]+"_fwd.npy"),
                         data_fwd[s][i],
                     )
             for s in range(len(data_bwd)):
-                path = os.path.join(
-                    self._save_path,
-                    f"epoch{self._epoch:05}",
-                    f"sample{s:03}",
+                path = (
+                    self._save_path
+                    / f"epoch{self._epoch:05}"
+                    / f"sample{s:03}"
                 )
-                os.makedirs(path, exist_ok=True)
+                path.mkdir(parents=True, exist_ok=True)
                 for i in range(len(data_bwd[s])):
                     np.save(
-                        os.path.join(path, columns[i]+"_bwd.npy"),
+                        path / (columns[i]+"_bwd.npy"),
                         data_bwd[s][i],
                     )
         self._hooks.release_all()
@@ -225,17 +251,15 @@ class ElissabethWeighting(Callback):
     def __init__(
         self,
         x: torch.Tensor,
-        qk_index: int = 0,
         each_n_epochs: int = 1,
-        save_path: Optional[str] = None,
+        save_path: Optional[Path | str] = None,
         use_wandb: bool = False,
     ) -> None:
         super().__init__()
         self._data = x
-        self._qk_index = qk_index
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
-        self._save_path = save_path
+        self._save_path = Path(save_path) if save_path is not None else None
         self._wandb = use_wandb
 
     def on_train_start(
@@ -257,30 +281,37 @@ class ElissabethWeighting(Callback):
 
         model: Elissabeth = pl_module.model  # type: ignore
 
-        model.attach_all_hooks()
-        model(self._data)
-        model.release_all_hooks()
+        for layer in model.layers:
+            for weighting in layer.weightings:
+                weighting.hooks.get("Att").attach()
 
-        n_layers = model.config.n_layers
-        iss_length: int = model.config.length_is
-        att_mat = np.empty(
-            (n_layers, iss_length, self._data.size(1), self._data.size(1))
+        model(self._data)
+
+        for layer in model.layers:
+            for weighting in layer.weightings:
+                weighting.hooks.get("Att").release()
+
+        n_layers = model.config("n_layers")
+        iss_length: int = model.config("length_is")
+        N = model.config("n_is")
+        att_mat = torch.ones(
+            (n_layers, N, iss_length, self._data.size(1), self._data.size(1))
         )
         for l in range(n_layers):
-            for d in range(iss_length):
-                att_mat[l, d] = model.get_hook(
-                    f"layers.{l}", f"weighting.{d}",
-                ).fwd[0, :, :, self._qk_index]
+            for weighting in model.layers[l].weightings:
+                att_mat[l] *= weighting.hooks.get("Att").fwd[0]
 
         if self._wandb:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     columns = [
-                        f"Length {i}" for i in range(1, iss_length+1)
+                        f"N {j} | Length {i}" for i in range(1, iss_length+1)
+                        for j in range(1, N+1)
                     ] + ["Product"]
                     data = [
-                        ([wandb.Image(att_mat[l, d])
-                          for d in range(iss_length)]
+                        ([wandb.Image(att_mat[l, j, d])
+                          for d in range(iss_length)
+                          for j in range(N)]
                         +[wandb.Image(np.prod(att_mat[l], axis=0))])
                         for l in range(n_layers)
                     ]
@@ -292,12 +323,9 @@ class ElissabethWeighting(Callback):
                     )
 
         if self._save_path is not None:
-            path = os.path.join(
-                self._save_path,
-                f"epoch{self._epoch:05}",
-            )
-            os.makedirs(path, exist_ok=True)
-            np.save(os.path.join(path, "elissabeth_weighting.npy"), att_mat)
+            path = self._save_path / f"epoch{self._epoch:05}"
+            path.mkdir(parents=True, exist_ok=True)
+            np.save(path / "elissabeth_weighting.npy", att_mat)
 
 
 class ElissabethISTracker(Callback):
@@ -307,7 +335,7 @@ class ElissabethISTracker(Callback):
         x: torch.Tensor,
         reduce: Literal["norm"] = "norm",
         each_n_epochs: int = 1,
-        save_path: Optional[str] = None,
+        save_path: Optional[Path | str] = None,
         use_wandb: bool = False,
     ) -> None:
         super().__init__()
@@ -315,7 +343,7 @@ class ElissabethISTracker(Callback):
         self._reduce = reduce
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
-        self._save_path = save_path
+        self._save_path = Path(save_path) if save_path is not None else None
         self._wandb = use_wandb
 
     def on_train_start(
@@ -375,9 +403,9 @@ class ElissabethISTracker(Callback):
                     )
 
         if self._save_path is not None:
-            path = os.path.join(
-                self._save_path,
-                f"epoch{self._epoch:05}",
+            path = (
+                self._save_path
+                / f"epoch{self._epoch:05}"
             )
-            os.makedirs(path, exist_ok=True)
-            np.save(os.path.join(path, "elissabeth_iss.npy"), values)
+            path.mkdir(parents=True, exist_ok=True)
+            np.save(path / "elissabeth_iss.npy", values)

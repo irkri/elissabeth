@@ -27,6 +27,7 @@ class _Weighting(ABC, HookedModule):
         **kwargs,
     ) -> None:
         super().__init__(parent, **kwargs)
+        self.hooks.add_hooks("Att", hidden=True)
         self.pos_encs = nn.ModuleList()
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
@@ -78,21 +79,28 @@ class RelativeDistance(_Weighting):
         ik = 0 if self.config("share_keys") else l
         if 0 < l < self._p and self.get_hook(f"iss.{l}").is_attached():
             temp = x * torch.exp(
-                self._mult * (1 - 1 / (self.alpha[:, :, iq]**2 + 1))
+                self._mult * torch.tanh(self.alpha[:, :, iq])
             )
             self.hook(f"iss.{l}", temp)
         alpha_q = torch.tensor(0) if l == 0 else (
-            self._mult * (1 - 1 / (self.alpha[:, :, iq]**2 + 1))
+            self._mult * torch.tanh(self.alpha[:, :, iq])
         )
         alpha_k = torch.tensor(0) if l == self._p else (
-            self._mult * (1 - 1 / (self.alpha[:, :, ik]**2 + 1))
+            self._mult * torch.tanh(self.alpha[:, :, ik])
         )
         x = x * torch.exp(
             (alpha_k - alpha_q) * self.get_buffer("T")[:x.size(2)]
         )
         if l < self._p - 1:
             x = x * torch.exp(
-                self._mult * (1 - 1 / (self.alpha[:, :, l]**2 + 1)) / self._T
+                self._mult * torch.tanh(self.alpha[:, :, l]) / self._T
+            )
+        if self.hooks.get("Att").is_attached():
+            self.hook("Att",
+                ((self.get_buffer("T")[:, :, 0, 0]
+                 - self.get_buffer("T")[:, :, 0, 0].T
+                 ).unsqueeze(0).unsqueeze(0) * self.alpha[0] * self._mult
+                ).unsqueeze(0)
             )
         return x
 
@@ -121,41 +129,30 @@ class Exponential(_Weighting):
 
         self._Q: torch.Tensor | None = None
         self._K: torch.Tensor | None = None
-        self.W_Q = nn.Parameter(
-            torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_queries")
-                    else self.config("length_is"),
-                self.config("d_hidden"),
-            ))
-        )
+        self.W_Q = nn.Parameter(torch.empty((
+            self.config("n_is"),
+            1 if self.config("share_queries") else self.config("length_is"),
+            self.config("d_hidden"),
+        )))
         nn.init.xavier_normal_(self.W_Q)
-        self.W_K = nn.Parameter(
-            torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_keys")
-                    else self.config("length_is"),
-                self.config("d_hidden"),
-            ))
-        )
+        self.W_K = nn.Parameter(torch.empty((
+            self.config("n_is"),
+            1 if self.config("share_keys") else self.config("length_is"),
+            self.config("d_hidden"),
+        )))
         nn.init.xavier_normal_(self.W_K)
         self.b_Q = self.b_K = None
         if self.config("bias"):
-            self.b_Q = nn.Parameter(
-                torch.empty((
-                    self.config("n_is"),
-                    1 if self.config("share_queries")
-                        else self.config("length_is"),
-                ))
-            )
+            self.b_Q = nn.Parameter(torch.empty((
+                self.config("n_is"),
+                1 if self.config("share_queries")
+                    else self.config("length_is"),
+            )))
             nn.init.zeros_(self.b_Q)
-            self.b_K = nn.Parameter(
-                torch.empty((
-                    self.config("n_is"),
-                    1 if self.config("share_keys")
-                        else self.config("length_is"),
-                ))
-            )
+            self.b_K = nn.Parameter(torch.empty((
+                self.config("n_is"),
+                1 if self.config("share_keys") else self.config("length_is"),
+            )))
             nn.init.zeros_(self.b_K)
 
         self.hooks.add_hooks("Q", "K")
@@ -175,6 +172,22 @@ class Exponential(_Weighting):
             self._K = torch.tanh(self._K)
         self._Q = self._Q.unsqueeze(-1).unsqueeze(-1)
         self._K = self._K.unsqueeze(-1).unsqueeze(-1)
+
+        if self.hooks.get("Att").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T))
+            for l in range(p):
+                iq = 0 if self.config("share_queries") else l
+                ik = 0 if self.config("share_keys") else l
+                Q_ = self._Q[..., iq].repeat(1, T, 1).reshape(
+                    B, T, T, N,
+                ).transpose(1, 2)
+                K_ = self._K[..., ik].unsqueeze(1)
+                att_mat[:, :, l, :, :] = torch.exp(Q_ - K_).moveaxis(3, 1)
+            self.hook("Att", att_mat)
+
         return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
@@ -200,23 +213,53 @@ class ComplexExponential(Exponential):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
-        self.W_O_real = nn.Parameter(
-            torch.empty((
-                self.config("n_is"), 1,
-                self.config("d_values"),
-                self.config("d_values") if self.config("values_2D") else 1,
-            ))
-        )
+        self.W_O_real = nn.Parameter(torch.empty((
+            self.config("n_is"), 1,
+            self.config("d_values"),
+            self.config("d_values") if self.config("values_2D") else 1,
+        )))
         nn.init.xavier_normal_(self.W_O_real)
-        self.W_O_imag = nn.Parameter(
-            torch.empty((
-                self.config("n_is"), 1,
-                self.config("d_values"),
-                self.config("d_values") if self.config("values_2D") else 1,
-            ))
-        )
+        self.W_O_imag = nn.Parameter(torch.empty((
+            self.config("n_is"), 1,
+            self.config("d_values"),
+            self.config("d_values") if self.config("values_2D") else 1,
+        )))
         nn.init.xavier_normal_(self.W_O_imag)
         self._p = self.config("length_is")
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        self._Q = torch.einsum('hld,btd->bthl', self.W_Q, x)
+        if self.b_Q is not None:
+            self._Q = self._Q + self.b_Q
+        for pe in self.pos_encs:
+            x = pe(x)
+        self._K = torch.einsum('hld,btd->bthl', self.W_K, x)
+        if self.b_K is not None:
+            self._K = self._K + self.b_K
+        if self.config("restrict_query_key"):
+            self._Q = torch.tanh(self._Q)
+            self._K = torch.tanh(self._K)
+        self._Q = self._Q.unsqueeze(-1).unsqueeze(-1)
+        self._K = self._K.unsqueeze(-1).unsqueeze(-1)
+
+        if self.hooks.get("Att").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T))
+            for l in range(p):
+                iq = 0 if self.config("share_queries") else l
+                ik = 0 if self.config("share_keys") else l
+                Q_ = self._Q[..., iq].repeat(1, T, 1).reshape(
+                    B, T, T, N,
+                ).transpose(1, 2)
+                K_ = self._K[..., ik].unsqueeze(1)
+                att_mat[:, :, l, :, :] = torch.exp(
+                    (Q_ - K_) * 1j
+                ).moveaxis(3, 1)
+            self.hook("Att", att_mat)
+
+        return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
         if self._Q is None or self._K is None:
@@ -252,44 +295,34 @@ class Cosine(_Weighting):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
-        self.W_Q = nn.Parameter(
-            torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_queries")
-                    else self.config("length_is"),
-                self.config("d_hidden"),
-                self.config("d_query_key"),
-            ))
-        )
+        self.W_Q = nn.Parameter(torch.empty((
+            self.config("n_is"),
+            1 if self.config("share_queries") else self.config("length_is"),
+            self.config("d_hidden"),
+            self.config("d_query_key"),
+        )))
         nn.init.xavier_normal_(self.W_Q)
-        self.W_K = nn.Parameter(
-            torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_keys") else self.config("length_is"),
-                self.config("d_hidden"),
-                self.config("d_query_key"),
-            ))
-        )
+        self.W_K = nn.Parameter(torch.empty((
+            self.config("n_is"),
+            1 if self.config("share_keys") else self.config("length_is"),
+            self.config("d_hidden"),
+            self.config("d_query_key"),
+        )))
         nn.init.xavier_normal_(self.W_K)
         self.b_Q = self.b_K = None
         if self.config("bias"):
-            self.b_Q = nn.Parameter(
-                torch.empty((
-                    self.config("n_is"),
-                    1 if self.config("share_queries")
-                        else self.config("length_is"),
-                    self.config("d_query_key"),
-                ))
-            )
+            self.b_Q = nn.Parameter(torch.empty((
+                self.config("n_is"),
+                1 if self.config("share_queries")
+                    else self.config("length_is"),
+                self.config("d_query_key"),
+            )))
             nn.init.zeros_(self.b_Q)
-            self.b_K = nn.Parameter(
-                torch.empty((
-                    self.config("n_is"),
-                    1 if self.config("share_keys")
-                        else self.config("length_is"),
-                    self.config("d_query_key"),
-                ))
-            )
+            self.b_K = nn.Parameter(torch.empty((
+                self.config("n_is"),
+                1 if self.config("share_keys") else self.config("length_is"),
+                self.config("d_query_key"),
+            )))
             nn.init.zeros_(self.b_K)
 
         P = self.config("length_is") * self.config("d_query_key")
@@ -339,6 +372,27 @@ class Cosine(_Weighting):
         self._cos_Q = torch.cos(Q).unsqueeze(0)
         self._sin_K = torch.sin(K).unsqueeze(0)
         self._cos_K = torch.cos(K).unsqueeze(0)
+
+        if self.hooks.get("Att").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            D = self.config("d_query_key")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T))
+            for l in range(p):
+                iq = 0 if self.config("share_queries") else l
+                ik = 0 if self.config("share_keys") else l
+                Q_ = (Q[..., iq, :]
+                    .repeat(1, T, 1, 1).reshape(B, T, T, N, D)
+                    .transpose(1, 2)
+                )
+                K_ = K[..., ik, :].unsqueeze(1)
+                att_mat[:, :, l, :, :] = torch.prod(
+                    torch.cos(Q_ - K_).moveaxis(3, 1),
+                    dim=-1,
+                )
+            self.hook("Att", att_mat)
+
         return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:

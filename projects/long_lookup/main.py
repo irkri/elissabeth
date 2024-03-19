@@ -31,7 +31,7 @@ config = {
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 5001,
+    "epochs": 501,
 
     "batch_size": 64,
     "val_size": 0.2,
@@ -92,7 +92,7 @@ def build_model() -> TokenPredictionModule:
     state_dict["unembedding.weight"] = torch.eye(5)
 
     state_dict["layers.0.weightings.0.alpha"] = torch.Tensor([[
-        [10_000, 0]
+        [0, 0]
     ]]).unsqueeze(-1).unsqueeze(-1)
 
     # d = torch.pi / 2
@@ -112,7 +112,7 @@ def build_model() -> TokenPredictionModule:
     model.get_parameter("layers.0.W_O").requires_grad = False
     model.get_parameter("embedding.weight").requires_grad = False
     model.get_parameter("unembedding.weight").requires_grad = False
-    model.get_parameter("layers.0.weightings.0.alpha").requires_grad = False
+    # model.get_parameter("layers.0.weightings.0.alpha").requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -150,10 +150,9 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth Long Lookup",
+            project="Elissabeth Long Lookup 2",
             checkpoint_name=load_path,
-            tags=[lightning_module.model.layers[0].__class__.__name__,
-                  "one key"],
+            tags=["one key"],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -165,27 +164,23 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    # example = long_lookup(
-    #     n_samples=1,
-    #     length=config["context_length"],
-    #     characters=config["characters"],
-    # )[0]
+    example = long_lookup(
+        n_samples=1,
+        length=config["context_length"],
+        characters=config["characters"],
+    )[0]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         WeightHistory((
-                ("model.layers.0.W_Q", (2, 0)),
-                ("model.layers.0.b_K", (0, )),
-                # ("model.layers.0.E_K", (2, 0)),
-                # "model.layers.0.W_V",
-                # "model.layers.0.b_V",
-                # "model.layers.0.E_V",
-                # "model.layers.0.W_O",
-                # ("model.layers.0.alpha", (1, 2)),
                 "model.embedding.weight",
                 "model.unembedding.weight",
+                "model.layers.0.weightings.0.W_Q",
+                "model.layers.0.weightings.0.W_K",
+                ("model.layers.0.weightings.1.alpha", (2, )),
             ),
             each_n_epochs=100,
         ),
+        ElissabethWeighting(example, each_n_epochs=100, use_wandb=True)
         # ElissabethISTracker(
         #     example,
         #     reduce="norm",

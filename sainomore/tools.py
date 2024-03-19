@@ -19,13 +19,11 @@ def get_attention_matrix(
     model.attach_all_hooks()
     model(x)
     model.release_all_hooks()
-    n_layers = model.config.n_layers
-    iss_length = model.config.length_is
+    n_layers = model.config("n_layers")
+    iss_length = model.config("length_is")
     B = x.size(0)
     T = x.size(1)
-    N = model.config.n_is
-    is_liss = isinstance(model.config, LISSConfig)
-    is_cliss = False
+    N = model.config("n_is")
     if dims == 2:
         att_mat = np.empty((B, n_layers, iss_length, T, T, N))
     elif dims == 3:
