@@ -22,6 +22,5 @@
     "share_keys" : false,
     "share_values" : false,
 
-    "distance_weighting" : true,
     "alpha_multiplier" : 50
 }

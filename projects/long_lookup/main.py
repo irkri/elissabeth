@@ -18,7 +18,7 @@ from sainomore.data import GivenDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
 from sainomore.positional import PositionalEncoding
-from sainomore.tools import get_attention_matrix, plot_attention_matrix
+from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
 torch.set_float32_matmul_precision('high')
 
@@ -68,19 +68,19 @@ def build_model() -> TokenPredictionModule:
     state_dict = model.state_dict()
 
     state_dict["embedding.weight"] = torch.eye(5)
-    # state_dict["layers.0.W_V"] = torch.Tensor([[
-    #     [[1, 0, 0, 0, 0],
-    #     [0, 1, 0, 0, 0],
-    #     [0, 0, 1, 0, 0],
-    #     [0, 0, 0, 1, 0],
-    #     [0, 0, 0, 0, 1]],
+    state_dict["layers.0.W_V"] = torch.Tensor([[
+        [[1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1]],
 
-    #     [[1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1]]
-    # ]]).unsqueeze(-1)
+        [[1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1]]
+    ]]).unsqueeze(-1)
 
     state_dict["layers.0.W_O"] = torch.Tensor([[
         [1, 0, 0, 0, 0],
@@ -92,18 +92,18 @@ def build_model() -> TokenPredictionModule:
     state_dict["unembedding.weight"] = torch.eye(5)
 
     state_dict["layers.0.weightings.0.alpha"] = torch.Tensor([[
-        [0, 0]
+        [100, 0]
     ]]).unsqueeze(-1).unsqueeze(-1)
 
-    # d = torch.pi / 2
-    # state_dict["layers.0.weightings.1.W_Q"] = torch.Tensor([[
-    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    # ]])
-    # state_dict["layers.0.weightings.1.W_K"] = torch.Tensor([[
-    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    # ]])
+    d = torch.pi / 2
+    state_dict["layers.0.weightings.1.W_Q"] = torch.Tensor([[
+        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    ]])
+    state_dict["layers.0.weightings.1.W_K"] = torch.Tensor([[
+        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    ]])
 
     model.load_state_dict(state_dict)
     # model.get_parameter("layers.0.weightings.1.W_Q").requires_grad = False
@@ -209,30 +209,47 @@ def train(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    fig, ax = plt.subplots(2, 2, sharex=True)
-    W_Q = lightning_module.model.get_parameter(
-        "layers.0.weightings.1.W_Q"
-    ).detach().numpy()
-    W_K = lightning_module.model.get_parameter(
-        "layers.0.weightings.1.W_K"
-    ).detach().numpy()
+    example = long_lookup(
+        n_samples=1,
+        length=config["context_length"],
+        characters=config["characters"],
+        multiple_keys=False,
+    )[0]
 
-    ax[0, 0].matshow(
-        W_Q[0, 0],
-        cmap="seismic",
-    )
-    ax[0, 1].matshow(
-        W_Q[0, 1],
-        cmap="seismic",
-    )
-    ax[1, 0].matshow(
-        W_K[0, 0],
-        cmap="seismic",
-    )
-    ax[1, 1].matshow(
-        W_K[0, 1],
-        cmap="seismic",
-    )
+    att = get_attention_matrices(lightning_module.model, example[0])
+    figatt, axatt = plot_attention_matrix(att[0], example[0], share_cmap=True)
+    # figatt, axatt = plt.subplots(1, 2)
+    # axatt[0].matshow(
+    #     att[0, 0, 0],
+    # )
+    # axatt[1].matshow(
+    #     att[0, 0, 1],
+    # )
+
+    # fig, ax = plt.subplots(2, 2, sharex=True)
+    # W_Q = lightning_module.model.get_parameter(
+    #     "layers.0.weightings.1.W_Q"
+    # ).detach().numpy()
+    # W_K = lightning_module.model.get_parameter(
+    #     "layers.0.weightings.1.W_K"
+    # ).detach().numpy()
+
+    # ax[0, 0].matshow(
+    #     W_Q[0, 0],
+    #     cmap="seismic",
+    # )
+    # ax[0, 1].matshow(
+    #     W_Q[0, 1],
+    #     cmap="seismic",
+    # )
+    # ax[1, 0].matshow(
+    #     W_K[0, 0],
+    #     cmap="seismic",
+    # )
+    # ax[1, 1].matshow(
+    #     W_K[0, 1],
+    #     cmap="seismic",
+    # )
     # ax[2].matshow(
     #     (b_Q - b_K)[0,0],
     #     cmap="seismic",

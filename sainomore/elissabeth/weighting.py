@@ -97,9 +97,10 @@ class RelativeDistance(_Weighting):
             )
         if self.hooks.get("Att").is_attached():
             self.hook("Att",
-                ((self.get_buffer("T")[:, :, 0, 0]
+                torch.exp((self.get_buffer("T")[:, :, 0, 0]
                  - self.get_buffer("T")[:, :, 0, 0].T
-                 ).unsqueeze(0).unsqueeze(0) * self.alpha[0] * self._mult
+                 ).unsqueeze(0).unsqueeze(0)
+                 * torch.tanh(self.alpha[0]) * self._mult
                 ).unsqueeze(0)
             )
         return x
@@ -382,11 +383,11 @@ class Cosine(_Weighting):
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
-                Q_ = (Q[..., iq, :]
+                Q_ = (Q[..., iq, :, 0, 0]
                     .repeat(1, T, 1, 1).reshape(B, T, T, N, D)
                     .transpose(1, 2)
                 )
-                K_ = K[..., ik, :].unsqueeze(1)
+                K_ = K[..., ik, :, 0, 0].unsqueeze(1)
                 att_mat[:, :, l, :, :] = torch.prod(
                     torch.cos(Q_ - K_).moveaxis(3, 1),
                     dim=-1,
