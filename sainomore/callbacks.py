@@ -104,7 +104,7 @@ class WeightHistory(Callback):
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     logger.log_image(
-                        "weights/"+name+"/"+"-".join(map(str, dim)),
+                        "weights/"+name+"_"+"-".join(map(str, dim)),
                         [image[dim]] if not is_1d
                             else [image[dim][np.newaxis, :]],
                     )
@@ -116,7 +116,7 @@ class WeightHistory(Callback):
                     trainer,
                     image,
                     name,
-                    (i, ) + dim,
+                    dim + (i, ),
                     path,
                     is_1d,
                 )

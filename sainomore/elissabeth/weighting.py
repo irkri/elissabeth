@@ -99,8 +99,8 @@ class RelativeDistance(_Weighting):
         if (self.hooks.get("Att").is_attached()
                 and l == self.config("length_is")):
             T = self.config("context_length")
-            T_1 = torch.arange(T).unsqueeze(0)
-            T_2 = torch.arange(1, T+1).unsqueeze(0)
+            T_1 = torch.arange(T).unsqueeze(0).to(self.alpha.device)
+            T_2 = torch.arange(1, T+1).unsqueeze(0).to(self.alpha.device)
             self.hook("Att", torch.cat((
                 torch.exp(
                     ((T_1.T - T_2) / T).unsqueeze(0).unsqueeze(0)
@@ -115,8 +115,12 @@ class RelativeDistance(_Weighting):
                 and self.config("length_is") >= 2
                 and l == self.config("length_is")):
             T = self.config("context_length")
-            T_1 = torch.arange(T).unsqueeze(0).unsqueeze(0)
-            T_2 = torch.arange(1, T+1).unsqueeze(0).unsqueeze(0)
+            T_1 = torch.arange(T).unsqueeze(0).unsqueeze(0).to(
+                self.alpha.device
+            )
+            T_2 = torch.arange(1, T+1).unsqueeze(0).unsqueeze(0).to(
+                self.alpha.device
+            )
             att = torch.empty(
                 (self.config("n_is"), self.config("length_is") - 1, T, T, T)
             )
@@ -205,7 +209,7 @@ class Exponential(_Weighting):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T))
+            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
@@ -220,7 +224,7 @@ class Exponential(_Weighting):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T))
+            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
             for l in range(p-1):
                 iq1 = 0 if self.config("share_queries") else l
                 ik1 = 0 if self.config("share_keys") else l
@@ -300,7 +304,7 @@ class ComplexExponential(Exponential):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T))
+            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
@@ -317,7 +321,7 @@ class ComplexExponential(Exponential):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T))
+            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
             for l in range(p-1):
                 iq1 = 0 if self.config("share_queries") else l
                 ik1 = 0 if self.config("share_keys") else l
@@ -460,7 +464,7 @@ class Cosine(_Weighting):
             N = self.config("n_is")
             D = self.config("d_query_key")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T))
+            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
@@ -480,7 +484,7 @@ class Cosine(_Weighting):
             N = self.config("n_is")
             D = self.config("d_query_key")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T))
+            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
             for l in range(p-1):
                 iq1 = 0 if self.config("share_queries") else l
                 ik1 = 0 if self.config("share_keys") else l

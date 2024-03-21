@@ -61,7 +61,8 @@ def build_model() -> TokenPredictionModule:
 
     model = MyElissabeth.build(
         model_config,
-        Weighting.COSINE | Weighting.RELATIVE_DISTANCE,
+        Weighting.COSINE,
+        Weighting.RELATIVE_DISTANCE,
         # PositionalEncoding.ROPE,
     )
 
@@ -91,16 +92,16 @@ def build_model() -> TokenPredictionModule:
     ]]).unsqueeze(2)
     state_dict["unembedding.weight"] = torch.eye(5)
 
-    state_dict["layers.0.weightings.0.alpha"] = torch.Tensor([[
+    state_dict["layers.0.weightings.1.alpha"] = torch.Tensor([[
         [100, 0]
     ]]).unsqueeze(-1).unsqueeze(-1)
 
     d = torch.pi / 2
-    state_dict["layers.0.weightings.1.W_Q"] = torch.Tensor([[
+    state_dict["layers.0.weightings.0.W_Q"] = torch.Tensor([[
         [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
         [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
     ]])
-    state_dict["layers.0.weightings.1.W_K"] = torch.Tensor([[
+    state_dict["layers.0.weightings.0.W_K"] = torch.Tensor([[
         [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
         [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
     ]])
@@ -180,7 +181,7 @@ def train(
             ),
             each_n_epochs=100,
         ),
-        ElissabethWeighting(example, each_n_epochs=100, use_wandb=True)
+        # ElissabethWeighting(example, each_n_epochs=100, use_wandb=True)
         # ElissabethISTracker(
         #     example,
         #     reduce="norm",
