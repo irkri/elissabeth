@@ -1,6 +1,6 @@
 import argparse
 import json
-import os
+from pathlib import Path
 from typing import Optional
 
 import lightning.pytorch as L
@@ -216,71 +216,24 @@ def plot(lightning_module: TokenPredictionModule) -> None:
         multiple_keys=False,
     )[0]
 
-    att = get_attention_matrices(lightning_module.model, example[0])
-    figatt, axatt = plot_attention_matrix(att[0], example[0], share_cmap=True)
-    # figatt, axatt = plt.subplots(1, 2)
-    # axatt[0].matshow(
-    #     att[0, 0, 0],
-    # )
-    # axatt[1].matshow(
-    #     att[0, 0, 1],
-    # )
+    att = get_attention_matrices(
+        lightning_module.model,  # type: ignore
+        example[0],
+    )
+    print(att.shape)
+    att[0, 0, 0] = torch.log(att[0, 0, 0])
+    figatt, axatt = plot_attention_matrix(
+        att[0], example[0],
+        cmap="RdPu",
+        share_cmap=False,
+        log_cmap=False,
+    )
 
-    # fig, ax = plt.subplots(2, 2, sharex=True)
-    # W_Q = lightning_module.model.get_parameter(
-    #     "layers.0.weightings.1.W_Q"
-    # ).detach().numpy()
-    # W_K = lightning_module.model.get_parameter(
-    #     "layers.0.weightings.1.W_K"
-    # ).detach().numpy()
-
-    # ax[0, 0].matshow(
-    #     W_Q[0, 0],
-    #     cmap="seismic",
-    # )
-    # ax[0, 1].matshow(
-    #     W_Q[0, 1],
-    #     cmap="seismic",
-    # )
-    # ax[1, 0].matshow(
-    #     W_K[0, 0],
-    #     cmap="seismic",
-    # )
-    # ax[1, 1].matshow(
-    #     W_K[0, 1],
-    #     cmap="seismic",
-    # )
-    # ax[2].matshow(
-    #     (b_Q - b_K)[0,0],
-    #     cmap="seismic",
-    # )
-    # W_O = lightning_module.model.get_parameter("embedding.weight").detach().numpy()
-    # ax.matshow(
-    #     W_O,
-    #     cmap="seismic",
-    # )
-    # print(W_O)
-    # mat = get_attention_matrix(
-    #     lightning_module.model,  # type: ignore
-    #     x,
-    #     dims=2,
-    # )
-    # print(mat.shape)
-    # y_hat = lightning_module.predict_step(x, 0)
-    # print(f"Input     : {x}\nTarget    : {y}\nPrediction: {y_hat}")
-    # plot_attention_matrix(
-    #     mat[0, ..., 0],
-    #     example=x.numpy()[0],
-    #     figsize=(50, 10),
-    #     show_product=True,
-    #     log_colormap=False,
-    #     causal_mask=True,
-    # )
-    # plt.savefig(
-    #     os.path.join(os.path.dirname(__file__), "plot.pdf"),
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
+    plt.savefig(
+        Path.cwd() / "plot.pdf",
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
     plt.show()
 
 
@@ -295,20 +248,16 @@ def main() -> None:
 
     lightning_module = build_model()
 
-    load = None
+    load_path = None
     if args.load is not None:
-        directory = os.path.dirname(__file__)
-        for folder in os.listdir(directory):
-            path = os.path.join(directory, folder)
-            if not (os.path.isdir(path)
-                        and os.path.isdir(os.path.join(path, args.load))):
+        directory = Path.cwd()
+        for folder in directory.iterdir():
+            if not (folder.is_dir() and (folder / args.load).is_dir()):
                 continue
-            if os.path.join(path, args.load, "checkpoints"):
-                chckpt_path = os.path.join(path, args.load, "checkpoints")
-                load = os.path.join(chckpt_path, os.listdir(chckpt_path)[0])
-                saved_ = torch.load(load)
+            if (load_path := (folder / args.load / "checkpoints")).exists():
+                saved_ = torch.load(next(load_path.iterdir()))
                 lightning_module.load_state_dict(saved_["state_dict"])
-    if args.load is not None and load is None:
+    if args.load is not None and load_path is None:
         raise FileExistsError(
             "Load specification does not point to a saved model"
         )
@@ -316,7 +265,7 @@ def main() -> None:
     if args.mode == "train":
         train(
             lightning_module,
-            load_path=load,
+            load_path=load_path,
             use_wandb=args.online,
             progress_bar=not args.online,
         )

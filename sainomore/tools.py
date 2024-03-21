@@ -29,26 +29,37 @@ def get_attention_matrices(
         torch.Tensor: Attention matrix of shape
             ``(n_is, n_layers, length_is, T, T)``
     """
+    hook_key = "Att" if dims == 2 else "Att 3d"
     for layer in model.layers:
         for weighting in layer.weightings:
-            weighting.hooks.get("Att").attach()
+            weighting.hooks.get(hook_key).attach()
 
     model(x.to(next(model.parameters()).device).unsqueeze(0))
 
     for layer in model.layers:
         for weighting in layer.weightings:
-            weighting.hooks.get("Att").release()
+            weighting.hooks.get(hook_key).release()
 
     n_layers = model.config("n_layers")
     iss_length = model.layers[0].config("length_is")
     N = model.layers[0].config("n_is")
-    att_mat = torch.ones((N, n_layers, iss_length, x.size(0), x.size(0)))
+    att_mat = torch.ones(
+        (N, n_layers, iss_length, x.size(0), x.size(0)) if dims == 2 else
+        (N, n_layers, iss_length, x.size(0), x.size(0), x.size(0))
+    )
 
     for l in range(n_layers):
         for weighting in model.layers[l].weightings:
-            att_mat[l] *= weighting.hooks.get("Att").fwd[0]
+            att_mat[l] *= weighting.hooks.get(hook_key).fwd[0]
 
     return att_mat
+
+
+def _get_plot_cmap_norm(vmin: float, vmax: float, log: bool) -> Normalize:
+    if log and vmin > 0:
+        return LogNorm(vmin=vmin, vmax=vmax)
+    else:
+        return Normalize(vmin=vmin, vmax=vmax)
 
 
 def plot_attention_matrix(
@@ -102,7 +113,6 @@ def plot_attention_matrix(
         ax = np.array(ax)[:, np.newaxis]
 
     if not is_3d:
-        Norm = LogNorm if log_cmap else Normalize
         mat = None
         if causal_mask:
             triu_indices = np.triu_indices(matrix.shape[2])
@@ -120,12 +130,14 @@ def plot_attention_matrix(
             max_ = np.nanmax(matrix[l])
             min_ = np.nanmin(matrix[l])
             for d in range(iss_length):
-                mat_show = ax[l, d].matshow(
+                if not share_cmap:
+                    max_ = np.nanmax(matrix[l, d])
+                    min_ = np.nanmin(matrix[l, d])
+                content[-1].append(ax[l, d].matshow(
                     matrix[l, d],
                     cmap=cmap,
-                    norm=Norm(vmin=min_, vmax=max_) if share_cmap else None,
-                )
-                content[-1].append(mat_show)
+                    norm=_get_plot_cmap_norm(min_, max_, log_cmap),
+                ))
                 if mat is not None:
                     ax[l, d].matshow(mat, cmap=cmap_example)
                 ax[l, d].tick_params(
@@ -135,8 +147,9 @@ def plot_attention_matrix(
                 )
                 if l == 0:
                     ax[l, d].set_title(
-                        "$t" + ("_{"+f"{d+2}"+"}" if d+1 < iss_length else "")
-                        + "-t_{"+f"{d+1}"+"}$"
+                        "$K("
+                        + "t" + ("_{"+f"{d+2}"+"}" if d+1 < iss_length else "")
+                        + ", t_{"+f"{d+1}"+"})$"
                     )
                 if example is None:
                     ax[l, d].set_ylabel("$t"
@@ -144,10 +157,13 @@ def plot_attention_matrix(
                     )
                     ax[l, d].set_xlabel("$t_{"+f"{d+1}"+"}$")
             if show_product:
+                if not share_cmap:
+                    max_ = np.nanmax(matrix[l, d])
+                    min_ = np.nanmin(matrix[l, d])
                 content[-1].append(ax[l, iss_length].matshow(
                     np.prod(matrix[l], 0),
                     cmap=cmap,
-                    norm=Norm(vmin=min_, vmax=max_) if share_cmap else None,
+                    norm=_get_plot_cmap_norm(min_, max_, log_cmap),
                 ))
                 if mat is not None:
                     ax[l, iss_length].matshow(mat, cmap=cmap_example)
@@ -186,7 +202,6 @@ def plot_attention_matrix(
                     )
                     axb.set_xlabel("$t_{"+f"{d+1}"+"}$")
                 if (share_cmap and d == cols-1) or not share_cmap:
-                    print(l, d)
                     fig.colorbar(content[l][d], cax=axc)
                 else:
                     axc.remove()

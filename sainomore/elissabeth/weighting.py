@@ -28,6 +28,7 @@ class _Weighting(ABC, HookedModule):
     ) -> None:
         super().__init__(parent, **kwargs)
         self.hooks.add_hooks("Att", hidden=True)
+        self.hooks.add_hooks("Att 3d", hidden=True)
         self.pos_encs = nn.ModuleList()
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
@@ -95,14 +96,40 @@ class RelativeDistance(_Weighting):
             x = x * torch.exp(
                 self._mult * torch.tanh(self.alpha[:, :, l]) / self._T
             )
-        if self.hooks.get("Att").is_attached():
-            self.hook("Att",
-                torch.exp((self.get_buffer("T")[:, :, 0, 0]
-                 - self.get_buffer("T")[:, :, 0, 0].T
-                 ).unsqueeze(0).unsqueeze(0)
-                 * torch.tanh(self.alpha[0]) * self._mult
-                ).unsqueeze(0)
+        if (self.hooks.get("Att").is_attached()
+                and l == self.config("length_is")):
+            T = self.config("context_length")
+            T_1 = torch.arange(T).unsqueeze(0)
+            T_2 = torch.arange(1, T+1).unsqueeze(0)
+            self.hook("Att", torch.cat((
+                torch.exp(
+                    ((T_1.T - T_2) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, :-1]) * self._mult
+                ),
+                torch.exp(
+                    ((T_1.T - T_1) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, -1:]) * self._mult
+                )), dim=1).unsqueeze(0)
             )
+        if (self.hooks.get("Att 3d").is_attached()
+                and self.config("length_is") >= 2
+                and l == self.config("length_is")):
+            T = self.config("context_length")
+            T_1 = torch.arange(T).unsqueeze(0).unsqueeze(0)
+            T_2 = torch.arange(1, T+1).unsqueeze(0).unsqueeze(0)
+            att = torch.empty(
+                (self.config("n_is"), self.config("length_is") - 1, T, T, T)
+            )
+            for l in range(att.shape[1]):
+                one = T_1.transpose(0, 2) - T_2
+                two = T_1.transpose(0, 1) - (T_2 if l<att.shape[1]-1 else T_1)
+                att[:, l] = torch.exp(
+                    ((one / T).unsqueeze(0)
+                       * torch.tanh(self.alpha[0, :, l]) * self._mult)
+                    + ((two / T).unsqueeze(0)
+                      * torch.tanh(self.alpha[0, :, l+1]) * self._mult)
+                ).unsqueeze(0)
+            self.hook("Att 3d", att)
         return x
 
     def add_pe(self, pe: _PositionalEncoding) -> None:
@@ -189,6 +216,32 @@ class Exponential(_Weighting):
                 att_mat[:, :, l, :, :] = torch.exp(Q_ - K_).moveaxis(3, 1)
             self.hook("Att", att_mat)
 
+        if self.hooks.get("Att 3d").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T, T))
+            for l in range(p-1):
+                iq1 = 0 if self.config("share_queries") else l
+                ik1 = 0 if self.config("share_keys") else l
+                iq2 = 0 if self.config("share_queries") else l+1
+                ik2 = 0 if self.config("share_keys") else l+1
+                Q1 = (self._Q[..., iq1]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                    .transpose(1, 2)
+                )
+                K1 = (self._K[..., ik1]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                )
+                Q2 = (self._Q[..., iq2]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                )
+                K2 = (self._K[..., ik2]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(1)
+                )
+                att_mat[:, :, l] = torch.exp(Q1 - K1 + Q2 - K2).moveaxis(4, 1)
+            self.hook("Att 3d", att_mat)
+
         return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
@@ -259,6 +312,34 @@ class ComplexExponential(Exponential):
                     (Q_ - K_) * 1j
                 ).moveaxis(3, 1)
             self.hook("Att", att_mat)
+
+        if self.hooks.get("Att 3d").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T, T))
+            for l in range(p-1):
+                iq1 = 0 if self.config("share_queries") else l
+                ik1 = 0 if self.config("share_keys") else l
+                iq2 = 0 if self.config("share_queries") else l+1
+                ik2 = 0 if self.config("share_keys") else l+1
+                Q1 = (self._Q[..., iq1]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                    .transpose(1, 2)
+                )
+                K1 = (self._K[..., ik1]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                )
+                Q2 = (self._Q[..., iq2]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
+                )
+                K2 = (self._K[..., ik2]
+                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(1)
+                )
+                att_mat[:, :, l] = torch.exp(
+                    (Q1 - K1 + Q2 - K2) * 1j
+                ).moveaxis(4, 1)
+            self.hook("Att 3d", att_mat)
 
         return x
 
@@ -388,11 +469,47 @@ class Cosine(_Weighting):
                     .transpose(1, 2)
                 )
                 K_ = K[..., ik, :, 0, 0].unsqueeze(1)
-                att_mat[:, :, l, :, :] = torch.prod(
+                att_mat[:, :, l] = torch.prod(
                     torch.cos(Q_ - K_).moveaxis(3, 1),
                     dim=-1,
                 )
             self.hook("Att", att_mat)
+
+        if self.hooks.get("Att 3d").is_attached():
+            B, T = x.shape[0], x.shape[1]
+            N = self.config("n_is")
+            D = self.config("d_query_key")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T, T))
+            for l in range(p-1):
+                iq1 = 0 if self.config("share_queries") else l
+                ik1 = 0 if self.config("share_keys") else l
+                iq2 = 0 if self.config("share_queries") else l+1
+                ik2 = 0 if self.config("share_keys") else l+1
+                Q1 = (Q[..., iq1, :, 0, 0]
+                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                    .unsqueeze(3).transpose(1, 2)
+                )
+                K1 = (K[..., ik1, :, 0, 0]
+                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                    .unsqueeze(3)
+                )
+                Q2 = (Q[..., iq2, :, 0, 0]
+                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                    .unsqueeze(3)
+                )
+                K2 = (K[..., ik2, :, 0, 0]
+                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
+                    .unsqueeze(1)
+                )
+                att_mat[:, :, l] = (torch.prod(
+                    torch.cos(Q1 - K1), # type: ignore
+                    dim=-1,
+                ) * torch.prod(
+                    torch.cos(Q2 - K2), # type: ignore
+                    dim=-1,
+                )).moveaxis(4, 0)
+            self.hook("Att 3d", att_mat)
 
         return x
 
