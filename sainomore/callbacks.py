@@ -103,8 +103,10 @@ class WeightHistory(Callback):
         if (image[dim].ndim == 2 and not is_1d) or image[dim].ndim == 1:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
-                    logger.log_image(
-                        "weights/"+name+"_"+"-".join(map(str, dim)),
+                    name_ = f"weights/{name}"
+                    if dim:
+                        name_ += " ("+",".join(map(str, dim))+")"
+                    logger.log_image(name_,
                         [image[dim]] if not is_1d
                             else [image[dim][np.newaxis, :]],
                     )
@@ -309,12 +311,11 @@ class ElissabethWeighting(Callback):
                     columns = [
                         f"N {j} | Length {i}" for i in range(1, length_is+1)
                         for j in range(1, N+1)
-                    ] + ["Product"]
+                    ]
                     data = [
-                        ([wandb.Image(att_mat[l, j, d])
+                        [wandb.Image(att_mat[l, j, d])
                           for d in range(length_is)
                           for j in range(N)]
-                        +[wandb.Image(np.prod(att_mat[l], axis=0))])
                         for l in range(n_layers)
                     ]
                     logger.log_table(

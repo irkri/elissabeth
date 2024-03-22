@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import lightning.pytorch as L
+import numpy as np
 import torch
 import wandb
 from lightning.pytorch.callbacks import Callback
@@ -174,24 +175,25 @@ def train(
         WeightHistory((
                 "model.embedding.weight",
                 "model.unembedding.weight",
+                ("model.layers.0.W_V", (2, 3)),
                 "model.layers.0.weightings.0.W_Q",
                 "model.layers.0.weightings.0.W_K",
                 ("model.layers.0.weightings.1.alpha", (2, )),
             ),
             each_n_epochs=100,
-            save_path=".",
+            # save_path=".",
         ),
         ElissabethWeighting(
             example,
             each_n_epochs=100,
             use_wandb=True,
-            save_path=".",
+            # save_path=".",
         ),
         ElissabethISTracker(
             example,
             each_n_epochs=100,
             use_wandb=True,
-            save_path=".",
+            # save_path=".",
         ),
     ]
 
@@ -215,31 +217,41 @@ def train(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    example = long_lookup(
-        n_samples=1,
-        length=config["context_length"],
-        characters=config["characters"],
-        multiple_keys=False,
-    )[0]
+    # torch.random.manual_seed(662)
+    # np.random.seed(662)
 
-    att = get_attention_matrices(
-        lightning_module.model,  # type: ignore
-        example[0],
-    )
-    print(att.shape)
-    att[0, 0, 0] = torch.log(att[0, 0, 0])
-    figatt, axatt = plot_attention_matrix(
-        att[0], example[0],
-        cmap="RdPu",
-        share_cmap=False,
-        log_cmap=False,
-    )
+    # example = long_lookup(
+    #     n_samples=1,
+    #     length=config["context_length"],
+    #     characters=config["characters"],
+    #     multiple_keys=False,
+    # )[0]
 
-    plt.savefig(
-        Path.cwd() / "plot.pdf",
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
+    # att = get_attention_matrices(
+    #     lightning_module.model,  # type: ignore
+    #     example[0],
+    # )
+    # att[0, 0, 0] = torch.log(att[0, 0, 0])
+    # figatt, axatt = plot_attention_matrix(
+    #     att[0], example[0],
+    #     cmap="RdPu",
+    #     share_cmap=False,
+    #     log_cmap=False,
+    # )
+    W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
+
+    fig, ax = plt.subplots(1, 2)
+
+    mat1 = ax[0].matshow(W_V[0, 0, :, :, 0])
+    mat2 = ax[1].matshow(W_V[0, 1, :, :, 0])
+    fig.colorbar(mat1)
+    fig.colorbar(mat2)
+
+    # plt.savefig(
+    #     Path.cwd() / "plot.pdf",
+    #     bbox_inches="tight",
+    #     facecolor=(0, 0, 0, 0),
+    # )
     plt.show()
 
 
@@ -261,7 +273,10 @@ def main() -> None:
             if not (folder.is_dir() and (folder / args.load).is_dir()):
                 continue
             if (load_path := (folder / args.load / "checkpoints")).exists():
-                saved_ = torch.load(next(load_path.iterdir()))
+                saved_ = torch.load(
+                    next(load_path.iterdir()),
+                    # map_location=torch.device("cpu"),
+                )
                 lightning_module.load_state_dict(saved_["state_dict"])
     if args.load is not None and load_path is None:
         raise FileExistsError(
