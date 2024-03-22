@@ -23,6 +23,7 @@ class ElissabethConfig(BaseModel):
 
     n_layers: int = 4
     layer_norm: bool = True
+    residual_stream: bool = True
 
     output_vocab_size: int = -1
 
@@ -42,12 +43,19 @@ class Elissabeth(SAINoMoreModule):
         super().__init__(**kwargs)
         if self.config("input_type") == "token":
             self.embedding = nn.Embedding(
-                self.config("input_vocab_size"), self.config("d_hidden")
+                self.config("input_vocab_size"), self.config("d_hidden"),
             )
+        else:
+            self.embedding = nn.Linear(
+                self.config("input_vocab_size"), self.config("d_hidden"),
+                bias=False,
+            )
+            nn.init.xavier_normal_(self.embedding.weight)
 
         self.layers = nn.ModuleList([
             LISS(self, **kwargs) for _ in range(self.config("n_layers"))
         ])
+        self.layernorms = None
         if self.config("layer_norm"):
             self.layernorms = nn.ModuleList([
                 nn.LayerNorm(self.config("d_hidden"))
@@ -58,6 +66,8 @@ class Elissabeth(SAINoMoreModule):
             self.config("d_hidden"), self.config("output_vocab_size"),
             bias=False,
         )
+        nn.init.xavier_normal_(self.unembedding.weight)
+        self._residual_stream = self.config("residual_stream")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, V) -> (B, O, T)
@@ -66,13 +76,15 @@ class Elissabeth(SAINoMoreModule):
         V: vocabulary size
         O: output dimension
         """
-        if self.config("input_type") == "token":
-            x = self.embedding(x)
+        x = self.embedding(x)
         for i in range(len(self.layers)):
             y = x
-            if self.config("layer_norm"):
+            if self.layernorms is not None:
                 y = self.layernorms[i](x)
-            x = x + self.layers[i](y)
+            if self._residual_stream:
+                x = x + self.layers[i](y)
+            else:
+                x = self.layers[i](y)
         logits = self.unembedding(x)
         return torch.swapaxes(logits, 1, 2)
 

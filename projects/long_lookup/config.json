@@ -4,6 +4,7 @@
     "d_hidden" : 5,
     "n_layers" : 1,
     "layer_norm" : false,
+    "residual_stream": false,
 
     "n_is" : 1,
     "length_is" : 2,

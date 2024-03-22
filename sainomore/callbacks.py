@@ -254,6 +254,7 @@ class ElissabethWeighting(Callback):
         each_n_epochs: int = 1,
         save_path: Optional[Path | str] = None,
         use_wandb: bool = False,
+        name: str = "weighting",
     ) -> None:
         super().__init__()
         self._data = x
@@ -261,6 +262,7 @@ class ElissabethWeighting(Callback):
         self._epoch = -1
         self._save_path = Path(save_path) if save_path is not None else None
         self._wandb = use_wandb
+        self._name = name
 
     def on_train_start(
         self,
@@ -292,10 +294,10 @@ class ElissabethWeighting(Callback):
                 weighting.hooks.get("Att").release()
 
         n_layers = model.config("n_layers")
-        iss_length: int = model.config("length_is")
-        N = model.config("n_is")
+        N = model.layers[0].config("n_is")
+        length_is = model.layers[0].config("length_is")
         att_mat = torch.ones(
-            (n_layers, N, iss_length, self._data.size(1), self._data.size(1))
+            (n_layers, N, length_is, self._data.size(1), self._data.size(1))
         )
         for l in range(n_layers):
             for weighting in model.layers[l].weightings:
@@ -305,18 +307,18 @@ class ElissabethWeighting(Callback):
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     columns = [
-                        f"N {j} | Length {i}" for i in range(1, iss_length+1)
+                        f"N {j} | Length {i}" for i in range(1, length_is+1)
                         for j in range(1, N+1)
                     ] + ["Product"]
                     data = [
                         ([wandb.Image(att_mat[l, j, d])
-                          for d in range(iss_length)
+                          for d in range(length_is)
                           for j in range(N)]
                         +[wandb.Image(np.prod(att_mat[l], axis=0))])
                         for l in range(n_layers)
                     ]
                     logger.log_table(
-                        "hooks/weighting",
+                        f"hooks/{self._name}",
                         columns=columns,
                         data=data,
                         step=self._epoch,
@@ -325,7 +327,7 @@ class ElissabethWeighting(Callback):
         if self._save_path is not None:
             path = self._save_path / f"epoch{self._epoch:05}"
             path.mkdir(parents=True, exist_ok=True)
-            np.save(path / "elissabeth_weighting.npy", att_mat)
+            np.save(path / f"{self._name}.npy", att_mat)
 
 
 class ElissabethISTracker(Callback):
@@ -333,18 +335,18 @@ class ElissabethISTracker(Callback):
     def __init__(
         self,
         x: torch.Tensor,
-        reduce: Literal["norm"] = "norm",
         each_n_epochs: int = 1,
         save_path: Optional[Path | str] = None,
         use_wandb: bool = False,
+        name: str = "iterated_sums",
     ) -> None:
         super().__init__()
         self._data = x
-        self._reduce = reduce
         self._each_n_epochs = each_n_epochs
         self._epoch = -1
         self._save_path = Path(save_path) if save_path is not None else None
         self._wandb = use_wandb
+        self._name = name
 
     def on_train_start(
         self,
@@ -365,39 +367,41 @@ class ElissabethISTracker(Callback):
 
         model: Elissabeth = pl_module.model  # type: ignore
 
-        n_layers = model.config.n_layers
-        iss_length: int = model.config.length_is
+        n_layers = model.config("n_layers")
+        length_is = model.layers[0].config("length_is")
+        n_is = model.layers[0].config("n_is")
 
         for l in range(n_layers):
-            for d in range(iss_length):
-                model.get_hook(f"layers.{l}", f"iss.{d+1}").attach()
+            for d in range(1, length_is+1):
+                model.get_hook(f"layers.{l}", f"iss.{d}").attach()
         model(self._data)
         model.release_all_hooks()
 
-        values = np.empty((n_layers, iss_length, self._data.size(1)))
+        values = np.empty((n_layers, length_is, n_is, self._data.size(1)))
         for l in range(n_layers):
-            for d in range(iss_length):
-                if self._reduce == "norm":
-                    values[l, d, :] = np.mean(np.linalg.norm(
-                        model.get_hook(
-                            f"layers.{l}", f"iss.{d+1}",
-                        ).fwd[:, :, :, :, :],
-                    axis=(3, 4)), axis=(0, 2))
+            for d in range(length_is):
+                values[l, d, :, :] = np.swapaxes(np.mean(np.linalg.norm(
+                    model.get_hook(
+                        f"layers.{l}", f"iss.{d+1}",
+                    ).fwd[0, :, :, :, :, :],
+                axis=(3, 4)), axis=0), 0, 1)
         if self._wandb:
             for logger in trainer.loggers:
                 if isinstance(logger, WandbLogger):
                     columns = ["Time"] + [
-                        f"Layer {i}, ISS {j}"
+                        f"IS {n}, Layer {i}, Depth {j}"
+                        for n in range(1, n_is+1)
                         for i in range(1, n_layers+1)
-                        for j in range(1, iss_length+1)
+                        for j in range(1, length_is+1)
                     ]
                     content = [list(range(1, self._data.size(1)))]
-                    for l in range(n_layers):
-                        for d in range(iss_length):
-                            content.append(list(values[l, d]))
+                    for n in range(n_is):
+                        for l in range(n_layers):
+                            for d in range(length_is):
+                                content.append(list(values[l, d, n]))
                     content = list(map(list, zip(*content)))
                     logger.log_table(
-                        "hooks/iss",
+                        f"hooks/{self._name}",
                         columns=columns,
                         data=content,
                     )
@@ -408,4 +412,4 @@ class ElissabethISTracker(Callback):
                 / f"epoch{self._epoch:05}"
             )
             path.mkdir(parents=True, exist_ok=True)
-            np.save(path / "elissabeth_iss.npy", values)
+            np.save(path / f"{self._name}.npy", values)
