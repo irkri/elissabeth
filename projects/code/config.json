@@ -1,0 +1,23 @@
+{
+    "context_length": 100,
+    "input_vocab_size": 2,
+    "input_type": "vector",
+    "output_vocab_size": 3,
+    "d_hidden": 3,
+    "n_layers": 1,
+    "layer_norm": false,
+    "residual_stream": false,
+
+    "n_is": 32,
+    "length_is": 5,
+    "d_values": 3,
+    "values_2D": false,
+    "pe_value": false,
+    "sum_normalization": false,
+
+    "bias": false,
+
+    "share_queries": false,
+    "share_keys": false,
+    "share_values": false
+}

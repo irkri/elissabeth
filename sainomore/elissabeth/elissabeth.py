@@ -85,8 +85,9 @@ class Elissabeth(SAINoMoreModule):
                 x = x + self.layers[i](y)
             else:
                 x = self.layers[i](y)
-        logits = self.unembedding(x)
-        return torch.swapaxes(logits, 1, 2)
+        if self.layernorms is not None:
+            x = self.layernorms[-1](x)
+        return self.unembedding(x)
 
     @classmethod
     def build(

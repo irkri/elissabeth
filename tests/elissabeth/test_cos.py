@@ -30,7 +30,6 @@ def test_cliss_weights() -> None:
         "share_keys" : "False",
         "share_values" : "False",
 
-        "distance_weighting" : "True",
         "alpha_multiplier" : "2",
         "sum_normalization" : "False",
     }
@@ -60,7 +59,7 @@ def test_cliss_weights() -> None:
     state_dict["layers.0.weightings.0.alpha"] = (
         alpha.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     )
-    alpha = 1 - 1 / (alpha**2 + 1)
+    alpha = torch.tanh(alpha)
 
     state_dict["layers.0.weightings.1.W_Q"] = torch.stack((
         torch.stack((q11, q12, q13)).T,
@@ -113,7 +112,7 @@ def test_cliss_weights() -> None:
 
     result = model(X.unsqueeze(0))
     torch.testing.assert_close(
-        result[0, :, :].T,
+        result[0, :, :],
         the_result + torch.nn.functional.one_hot(X, 5),
     )
 

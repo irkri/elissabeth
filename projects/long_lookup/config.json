@@ -6,9 +6,9 @@
     "layer_norm" : false,
     "residual_stream": false,
 
-    "n_is" : 1,
+    "n_is" : 10,
     "length_is" : 2,
-    "d_values" : 5,
+    "d_values" : 25,
     "values_2D" : false,
     "pe_value" : false,
     "sum_normalization" : false,

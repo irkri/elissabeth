@@ -25,13 +25,13 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 1000,
-    "context_length": 25,
+    "n_samples": 5000,
+    "context_length": 100,
     "characters": 5,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 501,
+    "epochs": 1001,
 
     "batch_size": 64,
     "val_size": 0.2,
@@ -47,7 +47,7 @@ class LookUpElissabeth(Elissabeth):
         logits = (logits
             - torch.nn.functional.pad(
                 self.embedding(x)[:, :-1], (0, 0, 1, 0)
-            ).swapaxes(1, 2)
+            )
         )
         return logits
 
@@ -169,6 +169,7 @@ def train(
         n_samples=1,
         length=config["context_length"],
         characters=config["characters"],
+        multiple_keys=False,
     )[0]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
@@ -217,42 +218,44 @@ def train(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    # torch.random.manual_seed(662)
-    # np.random.seed(662)
+    torch.random.manual_seed(662)
+    np.random.seed(662)
 
-    # example = long_lookup(
-    #     n_samples=1,
-    #     length=config["context_length"],
-    #     characters=config["characters"],
-    #     multiple_keys=False,
-    # )[0]
+    example = long_lookup(
+        n_samples=1,
+        length=config["context_length"],
+        characters=config["characters"],
+        multiple_keys=False,
+    )[0]
 
-    # att = get_attention_matrices(
-    #     lightning_module.model,  # type: ignore
-    #     example[0],
-    # )
-    # att[0, 0, 0] = torch.log(att[0, 0, 0])
-    # figatt, axatt = plot_attention_matrix(
-    #     att[0], example[0],
-    #     cmap="RdPu",
-    #     share_cmap=False,
-    #     log_cmap=False,
-    # )
-    W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
+    att = get_attention_matrices(
+        lightning_module.model,  # type: ignore
+        example[0],
+    )
+    att[:, 0, 0] = torch.log(att[:, 0, 0])
+    att[:, 0, 1] = torch.log(att[:, 0, 1])
+    figatt, axatt = plot_attention_matrix(
+        att[:, 0], example[0],
+        cmap="RdPu",
+        share_cmap=False,
+        log_cmap=False,
+        figsize=(10, 100)
+    )
+    # W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
 
-    fig, ax = plt.subplots(1, 2)
+    # fig, ax = plt.subplots(1, 2)
 
-    mat1 = ax[0].matshow(W_V[0, 0, :, :, 0])
-    mat2 = ax[1].matshow(W_V[0, 1, :, :, 0])
-    fig.colorbar(mat1)
-    fig.colorbar(mat2)
+    # mat1 = ax[0].matshow(W_V[0, 0, :, :, 0])
+    # mat2 = ax[1].matshow(W_V[0, 1, :, :, 0])
+    # fig.colorbar(mat1)
+    # fig.colorbar(mat2)
 
-    # plt.savefig(
-    #     Path.cwd() / "plot.pdf",
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
-    plt.show()
+    plt.savefig(
+        Path.cwd() / "plot.pdf",
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
+    # plt.show()
 
 
 def main() -> None:

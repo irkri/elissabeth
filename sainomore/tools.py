@@ -50,7 +50,7 @@ def get_attention_matrices(
 
     for l in range(n_layers):
         for weighting in model.layers[l].weightings:
-            att_mat[l] *= weighting.hooks.get(hook_key).fwd[0]
+            att_mat[:, l, ...] *= weighting.hooks.get(hook_key).fwd[0]
 
     return att_mat
 

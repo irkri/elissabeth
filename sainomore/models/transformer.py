@@ -170,8 +170,7 @@ class Transformer(SAINoMoreModule):
             x = self.layers[i](x)
         if self.final_norm is not None:
             x = self.final_norm(x)
-        logits = self.unembedding(x)
-        return torch.swapaxes(logits, 1, 2)
+        return self.unembedding(x)
 
     @staticmethod
     def build(config: dict[str, Any], *flags: IntFlag) -> "Transformer":
