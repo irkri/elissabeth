@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from pydantic import BaseModel
 from torch import nn
@@ -23,8 +25,12 @@ class MLP(HookedModule):
 
     _config_class = MLPConfig
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
 
         self.seq = nn.Sequential(
             nn.Linear(

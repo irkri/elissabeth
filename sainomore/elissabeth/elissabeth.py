@@ -8,6 +8,7 @@ from pydantic import BaseModel, validator
 from torch import nn
 
 from ..base import SAINoMoreModule
+from ..models.mlp import MLP
 from ..positional import PositionalEncoding, get_pe
 from .liss import LISS
 from .weighting import Weighting, get_weighting
@@ -17,13 +18,14 @@ class ElissabethConfig(BaseModel):
     context_length: int
     input_vocab_size: int
     input_type: Literal["token", "vector"] = "token"
-    positional_encoding: Literal["learnable", "sinusoidal"] | None = None
 
     d_hidden: int
 
     n_layers: int = 4
     layer_norm: bool = True
     residual_stream: bool = True
+
+    mlp_size: int | None = None
 
     output_vocab_size: int = -1
 
@@ -62,6 +64,18 @@ class Elissabeth(SAINoMoreModule):
                 for _ in range(self.config("n_layers")+1)
             ])
 
+        self.mlps = None
+        self.mlpnorms = None
+        if self.config("mlp_size") is not None:
+            self.mlps = nn.ModuleList([
+                MLP(self, **kwargs) for _ in range(self.config("n_layers"))
+            ])
+            if self.config("layer_norm"):
+                self.mlpnorms = nn.ModuleList([
+                    nn.LayerNorm(self.config("d_hidden"))
+                    for _ in range(self.config("n_layers"))
+                ])
+
         self.unembedding = nn.Linear(
             self.config("d_hidden"), self.config("output_vocab_size"),
             bias=False,
@@ -85,6 +99,16 @@ class Elissabeth(SAINoMoreModule):
                 x = x + self.layers[i](y)
             else:
                 x = self.layers[i](y)
+
+            if self.mlps is not None:
+                y = x
+                if self.mlpnorms is not None:
+                    y = self.mlpnorms[i](x)
+                if self._residual_stream:
+                    x = x + self.mlps[i](y)
+                else:
+                    x = self.mlps[i](y)
+
         if self.layernorms is not None:
             x = self.layernorms[-1](x)
         return self.unembedding(x)

@@ -17,6 +17,7 @@ from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
 from sainomore.data import GivenDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
+from sainomore.models import Transformer
 from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
@@ -25,9 +26,9 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "lr": 5e-4,
-    "weight_decay": 0,
-    "epochs": 2001,
+    "lr": 5e-3,
+    "weight_decay": 1e-4,
+    "epochs": 501,
 
     "batch_size": 32,
     "val_size": 0.2,
@@ -40,8 +41,16 @@ def build_model() -> TokenPredictionModule:
 
     model = Elissabeth.build(
         model_config,
-        PositionalEncoding.ROPE
+        # Weighting.RELATIVE_DISTANCE,
+        # PositionalEncoding.SINUSOIDAL,
     )
+
+    # model = Transformer.build(
+    #     model_config,
+    #     # PositionalEncoding.SINUSOIDAL,
+    # )
+
+    # model.set_eye("layers.0.W_V", requires_grad=False, dims=(2, 3))
 
     lightning_module = TokenPredictionModule(
         model,
@@ -62,6 +71,7 @@ def train(
 ) -> None:
     u = torch.load("code_u.pt")
     x = torch.load("code_x.pt")
+    x = torch.nn.functional.normalize(x, dim=2)
     data_module = GivenDataModule(
         (u, x),
         val_size=config["val_size"],
@@ -75,7 +85,7 @@ def train(
         wandb_logger = WandbLogger(
             project="Elissabeth CODE",
             checkpoint_name=load_path,
-            tags=[],
+            tags=["normalized output"],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -93,15 +103,15 @@ def train(
         WeightHistory((
                 "model.embedding.weight",
                 "model.unembedding.weight",
-                ("model.layers.0.W_V", (2, 3)),
+                # ("model.layers.0.W_V", (2, 3)),
                 ("model.layers.0.W_O", (1, 3)),
             ),
-            each_n_epochs=200,
+            each_n_epochs=100,
             # save_path=".",
         ),
         # ElissabethISTracker(
         #     example,
-        #     each_n_epochs=5000,
+        #     each_n_epochs=100,
         #     use_wandb=True,
         #     # save_path=".",
         # ),
@@ -127,23 +137,22 @@ def train(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    example = torch.load("code_u.pt")[0:32]
-    example_result = torch.load("code_x.pt")[0:32]
+    u = torch.load("code_u.pt")[0:1]
+    x = torch.load("code_x.pt")[0:1]
+    x = torch.nn.functional.normalize(x, dim=2)
+    out = lightning_module(u).detach()
 
-    optimizer = torch.optim.AdamW(lightning_module.model.parameters(), lr=1e-2)
+    fig = plt.figure()
 
-    for _ in range(100):
-        optimizer.zero_grad()
-        out = lightning_module(example)
-        loss = torch.nn.functional.mse_loss(out, example_result)
-        print(out[0, -1])
-        print(example_result[0, -1])
-        print(f"{loss = }")
-        loss.backward()
-        print(lightning_module.get_parameter("model.layers.0.W_V").grad.norm())
-        print(lightning_module.get_parameter("model.layers.0.W_O").grad.norm())
-        optimizer.step()
+    ax1 = fig.add_subplot(121)
+    ax1.plot(u[0, :, 0], u[0, :, 1])
 
+    ax2 = fig.add_subplot(122, projection="3d")
+    ax2.plot(x[0, :, 0], x[0, :, 1], x[0, :, 2])
+    ax2.plot(out[0, :, 0], out[0, :, 1], out[0, :, 2])
+    print(x)
+    print(out)
+    # print(torch.mean((x[0] - out[0])**2))
 
     # print(out)
 
@@ -169,11 +178,11 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     # # fig.colorbar(mat1)
     # # fig.colorbar(mat2)
 
-    # plt.savefig(
-    #     Path.cwd() / "plot.pdf",
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
+    plt.savefig(
+        Path.cwd() / "plot.png",
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
     # plt.show()
 
 

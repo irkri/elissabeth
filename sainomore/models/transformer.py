@@ -25,7 +25,8 @@ class MHA(HookedModule):
     _config_class = MHAConfig
 
     def __init__(
-        self, parent: Optional[HookedModule] = None,
+        self,
+        parent: Optional["HookedModule"] = None,
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
@@ -92,19 +93,22 @@ class MHA(HookedModule):
 
 
 class TransformerLayerConfig(BaseModel):
-    d_hidden: int
-    layer_norm: bool = True
+    pass
 
 
 class TransformerLayer(HookedModule):
 
     _config_class = TransformerLayerConfig
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
         self._normalize = self.config("layer_norm")
-        self.mha = MHA(**kwargs)
-        self.mlp = MLP(**kwargs)
+        self.mha = MHA(self, **kwargs)
+        self.mlp = MLP(self, **kwargs)
         if self._normalize:
             self.layer_norm_att = nn.LayerNorm(self.config("d_hidden"))
             self.layer_norm_mlp = nn.LayerNorm(self.config("d_hidden"))
@@ -125,11 +129,11 @@ class TransformerConfig(BaseModel):
     context_length: int
     input_vocab_size: int
     input_type: Literal["token", "vector"] = "token"
-    positional_encoding: Literal["learnable", "sinusoidal"] | None = None
 
     d_hidden: int
 
     n_layers: int = 4
+    layer_norm: bool = True
 
     output_vocab_size: int = -1
 
@@ -145,27 +149,36 @@ class Transformer(SAINoMoreModule):
 
     _config_class = TransformerConfig
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        d_hidden = self.config("d_hidden")
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
         if self.config("input_type") == "token":
             self.embedding = nn.Embedding(
-                self.config("input_vocab_size"), d_hidden
+                self.config("input_vocab_size"), self.config("d_hidden"),
             )
+        else:
+            self.embedding = nn.Linear(
+                self.config("input_vocab_size"), self.config("d_hidden"),
+                bias=False,
+            )
+            nn.init.xavier_normal_(self.embedding.weight)
         self.layers = nn.ModuleList([
-            TransformerLayer(**kwargs) for _ in range(self.config("n_layers"))
+            TransformerLayer(self, **kwargs)
+            for _ in range(self.config("n_layers"))
         ])
         self.final_norm = None
         if self.config("layer_norm"):
-            self.final_norm = nn.LayerNorm(d_hidden)
+            self.final_norm = nn.LayerNorm(self.config("d_hidden"))
         self.unembedding = nn.Linear(
-            d_hidden, self.config("output_vocab_size"),
-            bias=self.config("bias"),
+            self.config("d_hidden"), self.config("output_vocab_size"),
+            bias=False,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.config("input_type") == "token":
-            x = self.embedding(x)
+        x = self.embedding(x)
         for i in range(len(self.layers)):
             x = self.layers[i](x)
         if self.final_norm is not None:
