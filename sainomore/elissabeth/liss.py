@@ -140,6 +140,7 @@ class LISS(HookedModule):
             for weighting in self.weightings:
                 result = weighting.on_weighting(result, l)
             result = torch.cumsum(result, dim=2)
+            self.hook(f"iss.{l}", result)
 
             if self.beta is not None:
                 result /= nn.functional.pad(
@@ -154,8 +155,7 @@ class LISS(HookedModule):
             result = weighting.on_weighting(result, self.p)
             result = weighting.on_forward_end(result)
 
-        if self.hooks.get(f"iss.{self.p}").is_attached():
-            self.hook(f"iss.{self.p}", result)
+        self.hook(f"iss.{self.p}", result)
         result = torch.einsum("hvwd,bthvw->btd", self.W_O, result[0])
 
         return result

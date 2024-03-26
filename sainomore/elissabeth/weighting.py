@@ -78,11 +78,6 @@ class RelativeDistance(_Weighting):
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
         iq = 0 if self.config("share_queries") else l-1
         ik = 0 if self.config("share_keys") else l
-        if 0 < l < self._p and self.get_hook(f"iss.{l}").is_attached():
-            temp = x * torch.exp(
-                self._mult * torch.tanh(self.alpha[:, :, iq])
-            )
-            self.hook(f"iss.{l}", temp)
         alpha_q = torch.tensor(0) if l == 0 else (
             self._mult * torch.tanh(self.alpha[:, :, iq])
         )
@@ -253,9 +248,6 @@ class Exponential(_Weighting):
             raise RuntimeError("Did not calculate query or key")
         iq = 0 if self.config("share_queries") else l-1
         ik = 0 if self.config("share_keys") else l
-        if 0 < l < self._p and self.get_hook(f"iss.{l}").is_attached():
-            temp = x * torch.exp(self._Q[:, :, :, iq])
-            self.hook(f"iss.{l}", temp)
         x = x * torch.exp(
             (0 if l == 0 else self._Q[:, :, :, iq])
             - (0 if l == self._p else self._K[:, :, :, ik])  # type: ignore
@@ -352,9 +344,6 @@ class ComplexExponential(Exponential):
             raise RuntimeError("Did not calculate query or key")
         iq = 0 if self.config("share_queries") else l-1
         ik = 0 if self.config("share_keys") else l
-        if 0 < l < self._p and self.hooks.get(f"iss.{l}").is_attached():
-            temp = x * torch.exp(self._Q[:, :, :, iq, :, :] * 1j)
-            self.hooks(f"iss.{l}", temp)
         x = x * torch.exp((
             (0 if l == 0 else self._Q[:, :, :, iq])
             - (0 if l == self._p else self._K[:, :, :, ik])  # type: ignore
