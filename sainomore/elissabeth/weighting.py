@@ -13,10 +13,11 @@ from ..positional import _PositionalEncoding
 
 class Weighting(IntFlag):
 
-    RELATIVE_DISTANCE = auto()
-    EXPONENTIAL = auto()
-    COMPLEX_EXPONENTIAL = auto()
-    COSINE = auto()
+    ExponentialDecay = auto()
+    Exponential = auto()
+    ComplexExponential = auto()
+    CosineDecay = auto()
+    Cosine = auto()
 
 
 class _Weighting(ABC, HookedModule):
@@ -28,7 +29,6 @@ class _Weighting(ABC, HookedModule):
     ) -> None:
         super().__init__(parent, **kwargs)
         self.hooks.add_hooks("Att", hidden=True)
-        self.hooks.add_hooks("Att 3d", hidden=True)
         self.pos_encs = nn.ModuleList()
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
@@ -45,16 +45,16 @@ class _Weighting(ABC, HookedModule):
         self.pos_encs.append(pe)
 
 
-class RelativeDistanceConfig(BaseModel):
+class ExponentialDecayConfig(BaseModel):
 
     share_queries: bool = False
     share_keys: bool = False
     alpha_multiplier: int = 1
 
 
-class RelativeDistance(_Weighting):
+class ExponentialDecay(_Weighting):
 
-    _config_class = RelativeDistanceConfig
+    _config_class = ExponentialDecayConfig
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class RelativeDistance(_Weighting):
             self._mult * torch.tanh(self.alpha[:, :, ik])
         )
         x = x * torch.exp(
-            (alpha_k - alpha_q) * self.get_buffer("T")[:x.size(2)]
+            (alpha_k - alpha_q) * self.get_buffer("T")[:x.size(-4)]
         )
         if l < self._p - 1:
             x = x * torch.exp(
@@ -104,31 +104,9 @@ class RelativeDistance(_Weighting):
                 torch.exp(
                     ((T_1.T - T_1) / T).unsqueeze(0).unsqueeze(0)
                     * torch.tanh(self.alpha[0, :, -1:]) * self._mult
-                )), dim=1).unsqueeze(0)
-            )
-        if (self.hooks.get("Att 3d").is_attached()
-                and self.config("length_is") >= 2
-                and l == self.config("length_is")):
-            T = self.config("context_length")
-            T_1 = torch.arange(T).unsqueeze(0).unsqueeze(0).to(
-                self.alpha.device
-            )
-            T_2 = torch.arange(1, T+1).unsqueeze(0).unsqueeze(0).to(
-                self.alpha.device
-            )
-            att = torch.empty(
-                (self.config("n_is"), self.config("length_is") - 1, T, T, T)
-            )
-            for l in range(att.shape[1]):
-                one = T_1.transpose(0, 2) - T_2
-                two = T_1.transpose(0, 1) - (T_2 if l<att.shape[1]-1 else T_1)
-                att[:, l] = torch.exp(
-                    ((one / T).unsqueeze(0)
-                       * torch.tanh(self.alpha[0, :, l]) * self._mult)
-                    + ((two / T).unsqueeze(0)
-                      * torch.tanh(self.alpha[0, :, l+1]) * self._mult)
-                ).unsqueeze(0)
-            self.hook("Att 3d", att)
+                )
+            ), dim=1).unsqueeze(0))
+
         return x
 
     def add_pe(self, pe: _PositionalEncoding) -> None:
@@ -215,32 +193,6 @@ class Exponential(_Weighting):
                 att_mat[:, :, l, :, :] = torch.exp(Q_ - K_).moveaxis(3, 1)
             self.hook("Att", att_mat)
 
-        if self.hooks.get("Att 3d").is_attached():
-            B, T = x.shape[0], x.shape[1]
-            N = self.config("n_is")
-            p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
-            for l in range(p-1):
-                iq1 = 0 if self.config("share_queries") else l
-                ik1 = 0 if self.config("share_keys") else l
-                iq2 = 0 if self.config("share_queries") else l+1
-                ik2 = 0 if self.config("share_keys") else l+1
-                Q1 = (self._Q[..., iq1]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                    .transpose(1, 2)
-                )
-                K1 = (self._K[..., ik1]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                )
-                Q2 = (self._Q[..., iq2]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                )
-                K2 = (self._K[..., ik2]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(1)
-                )
-                att_mat[:, :, l] = torch.exp(Q1 - K1 + Q2 - K2).moveaxis(4, 1)
-            self.hook("Att 3d", att_mat)
-
         return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
@@ -309,34 +261,6 @@ class ComplexExponential(Exponential):
                 ).moveaxis(3, 1)
             self.hook("Att", att_mat)
 
-        if self.hooks.get("Att 3d").is_attached():
-            B, T = x.shape[0], x.shape[1]
-            N = self.config("n_is")
-            p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
-            for l in range(p-1):
-                iq1 = 0 if self.config("share_queries") else l
-                ik1 = 0 if self.config("share_keys") else l
-                iq2 = 0 if self.config("share_queries") else l+1
-                ik2 = 0 if self.config("share_keys") else l+1
-                Q1 = (self._Q[..., iq1]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                    .transpose(1, 2)
-                )
-                K1 = (self._K[..., ik1]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                )
-                Q2 = (self._Q[..., iq2]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(3)
-                )
-                K2 = (self._K[..., ik2]
-                    .repeat(1, T, 1).reshape((B, T, T, N)).unsqueeze(1)
-                )
-                att_mat[:, :, l] = torch.exp(
-                    (Q1 - K1 + Q2 - K2) * 1j
-                ).moveaxis(4, 1)
-            self.hook("Att 3d", att_mat)
-
         return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
@@ -352,6 +276,118 @@ class ComplexExponential(Exponential):
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
         return x.real * self.W_O_real + x.imag * self.W_O_imag
+
+
+class CosineDecayConfig(ExponentialDecayConfig):
+
+    d_query_key: int = 1
+    exponent: int = 1
+
+
+class CosineDecay(_Weighting):
+
+    _config_class = CosineDecayConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
+        self._dqk = self.config("d_query_key")
+        self._dim = 0
+        indices = torch.empty((self.config("context_length") + 1, 1, 1, 1, 1))
+        indices[:, 0, 0, 0, 0] = torch.linspace(
+            0, 1, self.config("context_length") + 1
+        )
+        self.register_buffer("T", indices)
+        self.alpha = nn.Parameter(torch.empty(
+            (self.config("length_is"), 1, self.config("n_is"), self._dqk, 1, 1)
+        ))
+        nn.init.zeros_(self.alpha)
+        self._mult = self.config("alpha_multiplier")
+        self._p = self.config("length_is")
+        self._T = self.config("context_length")
+
+        P = self.config("length_is") * self._dqk
+        trig_id = []
+        trig_exp = [self.config("exponent"), 0]
+        trig_coeff = 1
+        for k in range(self.config("exponent")+1):
+            trig_id.append(f"{trig_coeff}{trig_exp[0]}{trig_exp[1]}")
+            trig_exp[0] -= 1
+            trig_exp[1] += 1
+            trig_coeff = trig_coeff * (self.config("exponent") - k) // (k + 1)
+        weightings = torch.zeros(
+            ((self.config("exponent")+1)**P, 1, 1, 1, 1, 1, 4*P+1),
+            dtype=torch.int32,
+        )
+        weightings[:, ..., 0] = 1
+        for c, comb in enumerate(itertools.product(trig_id, repeat=P)):
+            for i in range(P):
+                weightings[c, ..., 0] *= int(comb[i][0])
+                weightings[c, ..., 4*i+1] += int(comb[i][1])
+                weightings[c, ..., 4*i+3] += int(comb[i][1])
+                weightings[c, ..., 4*i+2] += int(comb[i][2])
+                weightings[c, ..., 4*i+4] += int(comb[i][2])
+        self.register_buffer("weight_signature", weightings.swapaxes(-1, -3))
+
+        self._p = self.config("length_is")
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        self._dim = - x.ndim - 3
+        x = x.unsqueeze(0)
+        return x
+
+    def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
+        iq = 0 if self.config("share_queries") else l-1
+        ik = 0 if self.config("share_keys") else l
+        W = self.get_buffer("weight_signature")
+        for _ in range(-self._dim-6):
+            W = W.unsqueeze(0)
+        if l > 0:
+            ind = torch.arange(
+                W.size(-3)-4*(l-1)*self._dqk, W.size(-3)-4*l*self._dqk, -4
+            ).to(W.device)
+            x = x * torch.prod(
+                torch.cos(
+                    self._mult * torch.tanh(self.alpha[iq])
+                    * self.get_buffer("T")[1:x.size(-4)+1]
+                ).pow(W.index_select(-3, ind-4)),
+                dim=-3,
+            )
+            x = x * torch.prod(
+                torch.sin(
+                    self._mult * torch.tanh(self.alpha[iq])
+                    * self.get_buffer("T")[:x.size(-4)]
+                ).pow(W.index_select(-3, ind-4)),
+                dim=-3,
+            )
+        if l < self._p:
+            ind = torch.arange(
+                W.size(-3)-4*l*self._dqk, W.size(-3)-4*(l+1)*self._dqk, -4
+            ).to(W.device)
+            x = x * torch.prod(
+                torch.cos(
+                    self._mult * torch.tanh(self.alpha[ik])
+                    * self.get_buffer("T")[:x.size(-4)]
+                ).pow(W.index_select(-3, ind-4)),
+                dim=-3,
+            )
+            x = x * torch.prod(
+                torch.sin(
+                    self._mult * torch.tanh(self.alpha[ik])
+                    * self.get_buffer("T")[1:x.size(-4)+1]
+                ).pow(W.index_select(-3, ind-4)),
+                dim=-3,
+            )
+        return x
+
+    def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
+        x = (
+            x * self.get_buffer("weight_signature")[..., 0, :, :]
+        ).sum(dim=self._dim)
+        return x
 
 
 class CosineConfig(ExponentialConfig):
@@ -426,14 +462,15 @@ class Cosine(_Weighting):
         self.hooks.add_hooks("Q", "K")
         self._p = self.config("length_is")
         self._dqk = self.config("d_query_key")
+        self._dim = 0
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        Q = torch.einsum('hldi,btd->bthli', self.W_Q, x)
+        Q = torch.einsum('hldi,...btd->...bthli', self.W_Q, x)
         if self.b_Q is not None:
             Q = Q + self.b_Q
         for pe in self.pos_encs:
             x = pe(x)
-        K = torch.einsum('hldi,btd->bthli', self.W_K, x)
+        K = torch.einsum('hldi,...btd->...bthli', self.W_K, x)
         if self.b_K is not None:
             K = K + self.b_K
         if self.config("restrict_query_key"):
@@ -443,13 +480,15 @@ class Cosine(_Weighting):
         self.hooks("K", K)
         Q = Q.unsqueeze(-1).unsqueeze(-1)
         K = K.unsqueeze(-1).unsqueeze(-1)
-        self._sin_Q = torch.sin(Q).unsqueeze(0)
-        self._cos_Q = torch.cos(Q).unsqueeze(0)
-        self._sin_K = torch.sin(K).unsqueeze(0)
-        self._cos_K = torch.cos(K).unsqueeze(0)
+        self._sin_Q = torch.sin(Q)
+        self._cos_Q = torch.cos(Q)
+        self._sin_K = torch.sin(K)
+        self._cos_K = torch.cos(K)
+        self._dim = - x.ndim - 3
+        x = x.unsqueeze(0)
 
         if self.hooks.get("Att").is_attached():
-            B, T = x.shape[0], x.shape[1]
+            B, T = x.size(-3), x.size(-2)
             N = self.config("n_is")
             D = self.config("d_query_key")
             p = self.config("length_is")
@@ -457,52 +496,17 @@ class Cosine(_Weighting):
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
-                Q_ = (Q[..., iq, :, 0, 0]
+                ind = (0, ) * (x.ndim - 3)
+                Q_ = (Q[*ind, ..., iq, :, 0, 0]
                     .repeat(1, T, 1, 1).reshape(B, T, T, N, D)
                     .transpose(1, 2)
                 )
-                K_ = K[..., ik, :, 0, 0].unsqueeze(1)
+                K_ = K[*ind, ..., ik, :, 0, 0].unsqueeze(1)
                 att_mat[:, :, l] = torch.prod(
                     torch.cos(Q_ - K_).moveaxis(3, 1),
                     dim=-1,
                 )
             self.hook("Att", att_mat)
-
-        if self.hooks.get("Att 3d").is_attached():
-            B, T = x.shape[0], x.shape[1]
-            N = self.config("n_is")
-            D = self.config("d_query_key")
-            p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T, T)).to(self.W_Q.device)
-            for l in range(p-1):
-                iq1 = 0 if self.config("share_queries") else l
-                ik1 = 0 if self.config("share_keys") else l
-                iq2 = 0 if self.config("share_queries") else l+1
-                ik2 = 0 if self.config("share_keys") else l+1
-                Q1 = (Q[..., iq1, :, 0, 0]
-                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
-                    .unsqueeze(3).transpose(1, 2)
-                )
-                K1 = (K[..., ik1, :, 0, 0]
-                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
-                    .unsqueeze(3)
-                )
-                Q2 = (Q[..., iq2, :, 0, 0]
-                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
-                    .unsqueeze(3)
-                )
-                K2 = (K[..., ik2, :, 0, 0]
-                    .repeat(1, T, 1, 1).reshape((B, T, T, N, D))
-                    .unsqueeze(1)
-                )
-                att_mat[:, :, l] = (torch.prod(
-                    torch.cos(Q1 - K1), # type: ignore
-                    dim=-1,
-                ) * torch.prod(
-                    torch.cos(Q2 - K2), # type: ignore
-                    dim=-1,
-                )).moveaxis(4, 0)
-            self.hook("Att 3d", att_mat)
 
         return x
 
@@ -510,6 +514,8 @@ class Cosine(_Weighting):
         iq = 0 if self.config("share_queries") else l-1
         ik = 0 if self.config("share_keys") else l
         W = self.get_buffer("weight_signature")
+        for _ in range(-self._dim-6):
+            W = W.unsqueeze(0)
         if self._cos_Q is not None and self._sin_Q is not None and l > 0:
             ind = torch.arange(
                 W.size(-3)-4*(l-1)*self._dqk, W.size(-3)-4*l*self._dqk, -4
@@ -537,20 +543,24 @@ class Cosine(_Weighting):
         return x
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
-        x = (x * self.get_buffer("weight_signature")[..., 0, :, :]).sum(dim=0)
-        return x.unsqueeze(0)
+        x = (
+            x * self.get_buffer("weight_signature")[..., 0, :, :]
+        ).sum(dim=self._dim)
+        return x
 
 
 def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
     weightings: list[type[_Weighting]] = []
     for weight in weighting:
         match weight:
-            case Weighting.RELATIVE_DISTANCE:
-                weightings.append(RelativeDistance)
-            case Weighting.EXPONENTIAL:
+            case Weighting.ExponentialDecay:
+                weightings.append(ExponentialDecay)
+            case Weighting.Exponential:
                 weightings.append(Exponential)
-            case Weighting.COMPLEX_EXPONENTIAL:
+            case Weighting.ComplexExponential:
                 weightings.append(ComplexExponential)
-            case Weighting.COSINE:
+            case Weighting.CosineDecay:
+                weightings.append(CosineDecay)
+            case Weighting.Cosine:
                 weightings.append(Cosine)
     return weightings

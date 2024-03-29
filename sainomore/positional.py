@@ -11,9 +11,9 @@ from .base import HookedModule
 
 class PositionalEncoding(IntFlag):
 
-    ROPE = auto()
-    LEARNABLE = auto()
-    SINUSOIDAL = auto()
+    RoPE = auto()
+    Learnable = auto()
+    Sinusoidal = auto()
     APES = auto()
 
 
@@ -45,23 +45,23 @@ class RoPE(_PositionalEncoding):
         self.register_buffer("cos", torch.cos(emb))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        T = x.size(1)
+        T = x.size(-2)
         flag = x.size(-1) % 2 == 1
         if flag:
-            x = torch.concat((x, torch.zeros_like(x[:, :, :1])), dim=-1)
+            x = torch.concat((x, torch.zeros_like(x[..., :, :1])), dim=-1)
         first = (
-            x[:, :, ::2] * self.get_buffer("cos")[:T, :]
-            - x[:, :, 1::2] * self.get_buffer("sin")[:T, :]
+            x[..., :, ::2] * self.get_buffer("cos")[:T, :]
+            - x[..., :, 1::2] * self.get_buffer("sin")[:T, :]
         )
         second = (
-            x[:, :, 1::2] * self.get_buffer("cos")[:T, :]
-            + x[:, :, ::2] * self.get_buffer("sin")[:T, :]
+            x[..., :, 1::2] * self.get_buffer("cos")[:T, :]
+            + x[..., :, ::2] * self.get_buffer("sin")[:T, :]
         )
         result = torch.empty_like(x, dtype=torch.float)
-        result[:, :, ::2] = first
-        result[:, :, 1::2] = second
+        result[..., :, ::2] = first
+        result[..., :, 1::2] = second
         if flag:
-            result = result[:, :, :-1]
+            result = result[..., :, :-1]
         return result
 
 
@@ -82,7 +82,7 @@ class Learnable(_PositionalEncoding):
         nn.init.xavier_normal_(self.pos_embedding)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pos_embedding[:x.size(1), :]
+        return x + self.pos_embedding[:x.size(-2), :]
 
 
 class SinusoidalConfig(RoPEConfig):
@@ -108,7 +108,7 @@ class Sinusoidal(_PositionalEncoding):
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.get_buffer("pe")[:x.size(1), :]
+        x = x + self.get_buffer("pe")[:x.size(-2), :]
         return x
 
 
@@ -150,11 +150,11 @@ class APES(_PositionalEncoding):
 
 def get_pe(pe: PositionalEncoding) -> list[type[_PositionalEncoding]]:
     pos_encs: list[type[_PositionalEncoding]] = []
-    if PositionalEncoding.ROPE in pe:
+    if PositionalEncoding.RoPE in pe:
         pos_encs.append(RoPE)
-    if PositionalEncoding.LEARNABLE in pe:
+    if PositionalEncoding.Learnable in pe:
         pos_encs.append(Learnable)
-    if PositionalEncoding.SINUSOIDAL in pe:
+    if PositionalEncoding.Sinusoidal in pe:
         pos_encs.append(Sinusoidal)
     if PositionalEncoding.APES in pe:
         pos_encs.append(APES)

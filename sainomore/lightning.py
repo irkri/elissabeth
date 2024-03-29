@@ -65,8 +65,7 @@ class TokenPredictionModule(SAILearningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
         x, y = batch
-        outputs = self(x)
-        outputs, y = outputs.swapaxes(1, 2), y.swapaxes(1, 2)
+        outputs = self(x).swapaxes(1, 2)
         if self._only_last:
             y = y[..., -1]
             outputs = outputs[..., -1]
@@ -96,8 +95,7 @@ class TokenPredictionModule(SAILearningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
         x, y = batch
-        outputs = self(x)
-        outputs, y = outputs.swapaxes(1, 2), y.swapaxes(1, 2)
+        outputs = self(x).swapaxes(1, 2)
         if self._only_last:
             y = y[..., -1]
             outputs = outputs[..., -1]

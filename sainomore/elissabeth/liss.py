@@ -108,16 +108,15 @@ class LISS(HookedModule):
         if self.config("pe_value"):
             for pe in self.pos_encs:
                 x = pe(x)
-        V = torch.einsum('hldvw,btd->bthlvw', self.W_V, x)
+        V = torch.einsum('hldvw,...btd->...bthlvw', self.W_V, x)
         if self.b_V is not None:
             V = V + self.b_V
         self.hook("V", V)
-        V = V.unsqueeze(0)
 
-        result = V[:, :, :, :, 0, :, :]
+        result = V[..., :, :, :, 0, :, :]
         for weighting in self.weightings:
             result = weighting.on_weighting(result, 0)
-        result = torch.cumsum(result, dim=2)
+        result = torch.cumsum(result, dim=-4)
 
         if self.beta is not None:
             result /= (
@@ -128,18 +127,18 @@ class LISS(HookedModule):
 
         for l in range(1, self.p):
             result = nn.functional.pad(
-                result[:, :, :-1, :, :, :],
+                result[..., :, :-1, :, :, :],
                 (0, 0, 0, 0, 0, 0, 1, 0)
             )
             iv = 0 if self.config("share_values") else l
             if V.size(-1) > 1:
-                result = V[:, :, :, :, iv, :, :] @ result
+                result = result @ V[..., :, :, :, iv, :, :]
             else:
-                result = V[:, :, :, :, iv, :, :] * result
+                result = result * V[..., :, :, :, iv, :, :]
 
             for weighting in self.weightings:
                 result = weighting.on_weighting(result, l)
-            result = torch.cumsum(result, dim=2)
+            result = torch.cumsum(result, dim=-4)
             self.hook(f"iss.{l}", result)
 
             if self.beta is not None:
@@ -156,6 +155,6 @@ class LISS(HookedModule):
             result = weighting.on_forward_end(result)
 
         self.hook(f"iss.{self.p}", result)
-        result = torch.einsum("hvwd,bthvw->btd", self.W_O, result[0])
+        result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
 
         return result
