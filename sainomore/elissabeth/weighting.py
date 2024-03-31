@@ -280,8 +280,8 @@ class ComplexExponential(Exponential):
 
 class CosineDecayConfig(ExponentialDecayConfig):
 
-    d_query_key: int = 1
-    exponent: int = 1
+    d_alpha: int = 1
+    decay_exponent: int = 1
 
 
 class CosineDecay(_Weighting):
@@ -294,7 +294,7 @@ class CosineDecay(_Weighting):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
-        self._dqk = self.config("d_query_key")
+        self._da = self.config("d_alpha")
         self._dim = 0
         indices = torch.empty((self.config("context_length") + 1, 1, 1, 1, 1))
         indices[:, 0, 0, 0, 0] = torch.linspace(
@@ -302,24 +302,25 @@ class CosineDecay(_Weighting):
         )
         self.register_buffer("T", indices)
         self.alpha = nn.Parameter(torch.empty(
-            (self.config("length_is"), 1, self.config("n_is"), self._dqk, 1, 1)
+            (self.config("length_is"), 1, self.config("n_is"), self._da, 1, 1)
         ))
         nn.init.zeros_(self.alpha)
         self._mult = self.config("alpha_multiplier")
         self._p = self.config("length_is")
         self._T = self.config("context_length")
 
-        P = self.config("length_is") * self._dqk
+        P = self.config("length_is") * self._da
         trig_id = []
-        trig_exp = [self.config("exponent"), 0]
+        exp = self.config("decay_exponent")
+        trig_exp = [exp, 0]
         trig_coeff = 1
-        for k in range(self.config("exponent")+1):
+        for k in range(exp+1):
             trig_id.append(f"{trig_coeff}{trig_exp[0]}{trig_exp[1]}")
             trig_exp[0] -= 1
             trig_exp[1] += 1
-            trig_coeff = trig_coeff * (self.config("exponent") - k) // (k + 1)
+            trig_coeff = trig_coeff * (exp - k) // (k + 1)
         weightings = torch.zeros(
-            ((self.config("exponent")+1)**P, 1, 1, 1, 1, 1, 4*P+1),
+            ((exp+1)**P, 1, 1, 1, 1, 1, 4*P+1),
             dtype=torch.int32,
         )
         weightings[:, ..., 0] = 1
@@ -344,49 +345,46 @@ class CosineDecay(_Weighting):
         ik = 0 if self.config("share_keys") else l
         W = self.get_buffer("weight_signature")
         for _ in range(-self._dim-6):
-            W = W.unsqueeze(0)
+            W = W.unsqueeze(1)
         if l > 0:
+            T = (
+                self._mult * torch.tanh(self.alpha[iq])
+                * self.get_buffer("T")[:x.size(-4)]
+            )
             ind = torch.arange(
-                W.size(-3)-4*(l-1)*self._dqk, W.size(-3)-4*l*self._dqk, -4
+                W.size(-3)-4*(l-1)*self._da, W.size(-3)-4*l*self._da, -4
             ).to(W.device)
             x = x * torch.prod(
-                torch.cos(
-                    self._mult * torch.tanh(self.alpha[iq])
-                    * self.get_buffer("T")[1:x.size(-4)+1]
-                ).pow(W.index_select(-3, ind-4)),
+                torch.cos(T).pow(W.index_select(-3, ind-4)),
                 dim=-3,
             )
             x = x * torch.prod(
-                torch.sin(
-                    self._mult * torch.tanh(self.alpha[iq])
-                    * self.get_buffer("T")[:x.size(-4)]
-                ).pow(W.index_select(-3, ind-4)),
+                torch.sin(T).pow(W.index_select(-3, ind-3)),
                 dim=-3,
             )
         if l < self._p:
+            T_slice = slice(1, x.size(-4)+1) if l < self._p - 1 else (
+                slice(0, x.size(-4))
+            )
+            T = (
+                self._mult * torch.tanh(self.alpha[ik])
+                * self.get_buffer("T")[T_slice]
+            )
             ind = torch.arange(
-                W.size(-3)-4*l*self._dqk, W.size(-3)-4*(l+1)*self._dqk, -4
+                W.size(-3)-4*l*self._da, W.size(-3)-4*(l+1)*self._da, -4
             ).to(W.device)
             x = x * torch.prod(
-                torch.cos(
-                    self._mult * torch.tanh(self.alpha[ik])
-                    * self.get_buffer("T")[:x.size(-4)]
-                ).pow(W.index_select(-3, ind-4)),
+                torch.cos(T).pow(W.index_select(-3, ind-2)),
                 dim=-3,
             )
             x = x * torch.prod(
-                torch.sin(
-                    self._mult * torch.tanh(self.alpha[ik])
-                    * self.get_buffer("T")[1:x.size(-4)+1]
-                ).pow(W.index_select(-3, ind-4)),
+                torch.sin(T).pow(W.index_select(-3, ind-1)),
                 dim=-3,
             )
         return x
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
-        x = (
-            x * self.get_buffer("weight_signature")[..., 0, :, :]
-        ).sum(dim=self._dim)
+        x = (x * self.get_buffer("weight_signature")[..., 0, :, :]).sum(dim=-6)
         return x
 
 
@@ -515,7 +513,7 @@ class Cosine(_Weighting):
         ik = 0 if self.config("share_keys") else l
         W = self.get_buffer("weight_signature")
         for _ in range(-self._dim-6):
-            W = W.unsqueeze(0)
+            W = W.unsqueeze(1)
         if self._cos_Q is not None and self._sin_Q is not None and l > 0:
             ind = torch.arange(
                 W.size(-3)-4*(l-1)*self._dqk, W.size(-3)-4*l*self._dqk, -4
@@ -543,9 +541,7 @@ class Cosine(_Weighting):
         return x
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
-        x = (
-            x * self.get_buffer("weight_signature")[..., 0, :, :]
-        ).sum(dim=self._dim)
+        x = (x * self.get_buffer("weight_signature")[..., 0, :, :]).sum(dim=-6)
         return x
 
 

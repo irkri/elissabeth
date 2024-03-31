@@ -152,6 +152,7 @@ class LISS(HookedModule):
 
         for weighting in self.weightings:
             result = weighting.on_weighting(result, self.p)
+        for weighting in self.weightings:
             result = weighting.on_forward_end(result)
 
         self.hook(f"iss.{self.p}", result)
