@@ -20,7 +20,6 @@ class SAILearningModule(L.LightningModule):
         **optim_kwargs,
     ) -> None:
         super().__init__()
-        self.save_hyperparameters(ignore=["model", "loss"])
         self.learning_rate = learning_rate
         self.model = model
         self.criterion = loss
@@ -60,6 +59,7 @@ class TokenPredictionModule(SAILearningModule):
             optimizer=optimizer,
             **optim_kwargs,
         )
+        self.save_hyperparameters(ignore=["model", "loss", "accuracy"])
         self.acc_metric = accuracy
         self._only_last = only_last
 
@@ -153,6 +153,7 @@ class VectorApproximationModule(SAILearningModule):
             optimizer=optimizer,
             **optim_kwargs,
         )
+        self.save_hyperparameters(ignore=["model", "loss"])
         self._only_last = only_last
 
     def predict_step(

@@ -3,21 +3,24 @@
     "input_vocab_size": 2,
     "input_type": "vector",
     "output_vocab_size": 3,
-    "d_hidden": 2,
-    "n_layers": 1,
+    "d_hidden": 16,
+    "n_layers": 2,
     "layer_norm": true,
     "residual_stream": true,
 
-    "n_is": 32,
-    "length_is": 10,
-    "d_values": 2,
+    "n_is": 16,
+    "length_is": 5,
+    "d_values": 1,
     "values_2D": false,
     "pe_value": false,
     "sum_normalization": true,
 
     "bias": true,
 
-    "mlp_size": 32,
+    "mlp_size": null,
+
+    "restrict_query_key": true,
+    "alpha_multiplier": 10,
 
     "share_queries": false,
     "share_keys": false,

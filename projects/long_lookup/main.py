@@ -61,8 +61,8 @@ def build_model() -> TokenPredictionModule:
 
     model = LookUpElissabeth.build(
         model_config,
-        Weighting.COSINE,
-        Weighting.RELATIVE_DISTANCE,
+        Weighting.Cosine,
+        Weighting.ExponentialDecay,
     )
 
     # state_dict = model.state_dict()

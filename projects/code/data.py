@@ -10,14 +10,12 @@ class CODEDataset:
     def __init__(
         self,
         fs: Callable[[np.ndarray], np.ndarray],
-        dfs: Callable[[np.ndarray], np.ndarray],
         T: int = 100,
         d_u: int = 2,
         d_x: int = 3,
         std: float = 1,
     ) -> None:
         self.fs = fs
-        self.dfs = dfs
         self.T = T
         self.d_u = d_u
         self.d_x = d_x
@@ -29,15 +27,12 @@ class CODEDataset:
         return u
 
     def _solve_ode(self, u: np.ndarray) -> np.ndarray:
-        u = np.pad(u, ((1, 0), (0, 0)))
-        du = u[1:] - u[:-1]
+        du = np.zeros((u.shape[0], u.shape[1]+1))
+        du[1:, :2] = u[1:] - u[:-1]
+        du[:, 2] = np.arange(self.T)
         def fun(t, x):
             t = int(np.ceil(t))
             return np.sum(self.fs(x) * du[t], axis=-1)
-
-        # def d_fun(t, x):
-        #     t = int(np.ceil(t))
-        #     return np.sum(self.dfs(x) * du[t], axis=-1)
 
         ex = solve_ivp(
             fun,
@@ -45,7 +40,6 @@ class CODEDataset:
             y0=np.array([0, 0, 0], dtype=np.double),
             t_eval=np.arange(0, self.T),
             method="RK45",
-            # jac=d_fun,
         )
         return np.swapaxes(ex.y, 0, 1)
 
@@ -70,57 +64,24 @@ if __name__ == "__main__":
     def f(x):
         return np.stack((
             np.stack((
-                np.cos(x[..., 0]) - 0.2*x[..., 2],
-                0.1*x[..., 2],
-                0.3*x[..., 1] - 0.5*x[..., 0],
+                np.cos(x[..., 0]),
+                0.05*x[..., 2],
+                0.1*x[..., 1] - 0.25*x[..., 0],
             ), axis=-1),
             np.stack((
-                np.sin(x[..., 0]) + np.cos(x[..., 1]),
-                0.4*x[..., 0] + np.sin(x[..., 2]),
-                0.2*x[..., 1],
+                np.sin(x[..., 0]) - np.cos(x[..., 1]),
+                0.1*x[..., 0] - np.sin(x[..., 2]),
+                -0.05*x[..., 1],
+            ), axis=-1),
+            np.stack((
+                -0.005*x[..., 0],
+                -0.005*x[..., 1],
+                -0.005*x[..., 2],
             ), axis=-1),
         ), axis=-1)
 
-    def df(x):
-        return np.stack((
-            np.stack((
-                np.stack((
-                    -np.sin(x[..., 0]),
-                    0,
-                    -0.2,
-                ), axis=-1),
-                np.stack((
-                    0,
-                    0,
-                    0.1,
-                ), axis=-1),
-                np.stack((
-                    -0.5,
-                    0.3,
-                    0,
-                ), axis=-1),
-            ), axis=-1),
-            np.stack((
-                np.stack((
-                    np.cos(x[..., 0]),
-                    -np.sin(x[..., 1]),
-                    0,
-                ), axis=-1),
-                np.stack((
-                    0.4,
-                    0,
-                    np.cos(x[..., 2]),
-                ), axis=-1),
-                np.stack((
-                    0,
-                    0.2,
-                    0,
-                ), axis=-1),
-            ), axis=-1),
-        ), axis=-1).swapaxes(0, 1)
-
     np.random.seed(62)
-    code_ds = CODEDataset(f, df, T=100, d_u=2, d_x=3, std=1)
+    code_ds = CODEDataset(f, T=100, d_u=2, d_x=3, std=1)
     dataset = code_ds.get_dataset(1000, verbose=50)
 
     torch.save(dataset[0], "code_u.pt")

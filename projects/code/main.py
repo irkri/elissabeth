@@ -16,7 +16,7 @@ from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data import GivenDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
-from sainomore.lightning import TokenPredictionModule
+from sainomore.lightning import SAILearningModule, VectorApproximationModule
 from sainomore.models import Transformer
 from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrices, plot_attention_matrix
@@ -26,7 +26,7 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "lr": 5e-3,
+    "lr": 5e-4,
     "weight_decay": 1e-4,
     "epochs": 501,
 
@@ -35,14 +35,14 @@ config = {
 }
 
 
-def build_model() -> TokenPredictionModule:
+def build_model() -> SAILearningModule:
     with open("config.json", "r") as f:
         model_config = json.load(f)
 
     model = Elissabeth.build(
         model_config,
-        # Weighting.RELATIVE_DISTANCE,
-        # PositionalEncoding.SINUSOIDAL,
+        # Weighting.COSINE,
+        # PositionalEncoding.ROPE,
     )
 
     # model = Transformer.build(
@@ -52,7 +52,7 @@ def build_model() -> TokenPredictionModule:
 
     # model.set_eye("layers.0.W_V", requires_grad=False, dims=(2, 3))
 
-    lightning_module = TokenPredictionModule(
+    lightning_module = VectorApproximationModule(
         model,
         learning_rate=config["lr"],
         weight_decay=config["weight_decay"],
@@ -63,7 +63,7 @@ def build_model() -> TokenPredictionModule:
 
 
 def train(
-    lightning_module: TokenPredictionModule,
+    lightning_module: SAILearningModule,
     use_wandb: bool = False,
     load_path: Optional[str] = None,
     progress_bar: bool = False,
@@ -136,10 +136,10 @@ def train(
         wandb.finish()
 
 
-def plot(lightning_module: TokenPredictionModule) -> None:
+def plot(lightning_module: SAILearningModule) -> None:
     u = torch.load("code_u.pt")[0:1]
     x = torch.load("code_x.pt")[0:1]
-    x = torch.nn.functional.normalize(x, dim=2)
+    # x = torch.nn.functional.normalize(x, dim=2)
     out = lightning_module(u).detach()
 
     fig = plt.figure()
