@@ -49,7 +49,7 @@ class ExponentialDecayConfig(BaseModel):
 
     share_queries: bool = False
     share_keys: bool = False
-    alpha_multiplier: int = 1
+    exp_alpha_0: float = 1.0
 
 
 class ExponentialDecay(_Weighting):
@@ -71,9 +71,26 @@ class ExponentialDecay(_Weighting):
             (1, self.config("n_is"), self.config("length_is"), 1, 1)
         ))
         nn.init.zeros_(self.alpha)
-        self._mult = self.config("alpha_multiplier")
+        self._mult = self.config("exp_alpha_0")
         self._p = self.config("length_is")
         self._T = self.config("context_length")
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        if self.hooks.get("Att").is_attached():
+            T = self.config("context_length")
+            T_1 = torch.arange(T).unsqueeze(0).to(self.alpha.device)
+            T_2 = torch.arange(1, T+1).unsqueeze(0).to(self.alpha.device)
+            self.hook("Att", torch.cat((
+                torch.exp(
+                    ((T_1 - T_2.T) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, :-1]) * self._mult
+                ),
+                torch.exp(
+                    ((T_1 - T_1.T) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, -1:]) * self._mult
+                ),
+            ), dim=1).unsqueeze(0))
+        return x
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
         iq = 0 if self.config("share_queries") else l-1
@@ -91,22 +108,6 @@ class ExponentialDecay(_Weighting):
             x = x * torch.exp(
                 self._mult * torch.tanh(self.alpha[:, :, l]) / self._T
             )
-        if (self.hooks.get("Att").is_attached()
-                and l == self.config("length_is")):
-            T = self.config("context_length")
-            T_1 = torch.arange(T).unsqueeze(0).to(self.alpha.device)
-            T_2 = torch.arange(1, T+1).unsqueeze(0).to(self.alpha.device)
-            self.hook("Att", torch.cat((
-                torch.exp(
-                    ((T_1.T - T_2) / T).unsqueeze(0).unsqueeze(0)
-                    * torch.tanh(self.alpha[0, :, :-1]) * self._mult
-                ),
-                torch.exp(
-                    ((T_1.T - T_1) / T).unsqueeze(0).unsqueeze(0)
-                    * torch.tanh(self.alpha[0, :, -1:]) * self._mult
-                )
-            ), dim=1).unsqueeze(0))
-
         return x
 
     def add_pe(self, pe: _PositionalEncoding) -> None:
@@ -278,10 +279,13 @@ class ComplexExponential(Exponential):
         return x.real * self.W_O_real + x.imag * self.W_O_imag
 
 
-class CosineDecayConfig(ExponentialDecayConfig):
+class CosineDecayConfig(BaseModel):
 
+    share_queries: bool = False
+    share_keys: bool = False
     d_alpha: int = 1
     decay_exponent: int = 1
+    cos_alpha_0: float = 1.0
 
 
 class CosineDecay(_Weighting):
@@ -305,7 +309,7 @@ class CosineDecay(_Weighting):
             (self.config("length_is"), 1, self.config("n_is"), self._da, 1, 1)
         ))
         nn.init.zeros_(self.alpha)
-        self._mult = self.config("alpha_multiplier")
+        self._mult = self.config("cos_alpha_0")
         self._p = self.config("length_is")
         self._T = self.config("context_length")
 
@@ -336,9 +340,25 @@ class CosineDecay(_Weighting):
         self._p = self.config("length_is")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        if self.hooks.get("Att").is_attached():
+            T = self.config("context_length")
+            ind = self.get_buffer("T")[..., 0]
+            alpha = torch.tanh(
+                self.alpha[:, :, :, :, 0, 0].unsqueeze(1)
+            ) * self._mult
+            self.hook("Att", torch.cat((
+                torch.prod(torch.cos(
+                    ((ind[:-1] - ind[1:].transpose(0, 1)) / T).unsqueeze(0)
+                    * alpha[:-1]
+                )**self.config("decay_exponent"), dim=-1),
+                torch.prod(torch.cos(
+                    ((ind[:-1] - ind[:-1].transpose(0, 1)) / T).unsqueeze(0)
+                    * alpha[-1:]
+                )**self.config("decay_exponent"), dim=-1),
+            ), dim=0).unsqueeze(0).moveaxis(-1, 1))
+
         self._dim = - x.ndim - 3
-        x = x.unsqueeze(0)
-        return x
+        return x.unsqueeze(0)
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
         iq = 0 if self.config("share_queries") else l-1
@@ -483,7 +503,6 @@ class Cosine(_Weighting):
         self._sin_K = torch.sin(K)
         self._cos_K = torch.cos(K)
         self._dim = - x.ndim - 3
-        x = x.unsqueeze(0)
 
         if self.hooks.get("Att").is_attached():
             B, T = x.size(-3), x.size(-2)
@@ -506,7 +525,7 @@ class Cosine(_Weighting):
                 )
             self.hook("Att", att_mat)
 
-        return x
+        return x.unsqueeze(0)
 
     def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
         iq = 0 if self.config("share_queries") else l-1

@@ -26,7 +26,7 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 5000,
-    "context_length": 100,
+    "context_length": 25,
     "characters": 5,
 
     "lr": 5e-3,
@@ -107,13 +107,13 @@ def build_model() -> TokenPredictionModule:
 
     # model.load_state_dict(state_dict)
 
-    # model.get_parameter("layers.0.weightings.1.W_Q").requires_grad = False
-    # model.get_parameter("layers.0.weightings.1.W_K").requires_grad = False
+    # model.get_parameter("layers.0.weightings.0.W_Q").requires_grad = False
+    # model.get_parameter("layers.0.weightings.0.W_K").requires_grad = False
     # model.get_parameter("layers.0.W_V").requires_grad = False
     # model.get_parameter("layers.0.W_O").requires_grad = False
     # model.get_parameter("embedding.weight").requires_grad = False
     # model.get_parameter("unembedding.weight").requires_grad = False
-    # model.get_parameter("layers.0.weightings.0.alpha").requires_grad = False
+    # model.get_parameter("layers.0.weightings.1.alpha").requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -231,15 +231,20 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     att = get_attention_matrices(
         lightning_module.model,  # type: ignore
         example[0],
+        # total=True,
     )
-    att[:, 0, 0] = torch.log(att[:, 0, 0])
-    att[:, 0, 1] = torch.log(att[:, 0, 1])
+    # idx = att[:, 0, 0] < 0
+    # att[:, 0, 0, *idx] = 1e-20
+    # att[:, 0, 0] = torch.log(att[:, 0, 0])
     figatt, axatt = plot_attention_matrix(
-        att[:, 0], example[0],
+        att[:, 0],
+        example[0],
         cmap="RdPu",
         share_cmap=False,
         log_cmap=False,
-        figsize=(10, 100)
+        causal_mask=True,
+        # contains_total=True,
+        figsize=(10, 5)
     )
     # W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
 

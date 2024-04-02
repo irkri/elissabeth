@@ -13,7 +13,7 @@ from .elissabeth import Elissabeth
 def get_attention_matrices(
     model: Elissabeth,
     x: torch.Tensor,
-    dims: Literal[2, 3] = 2,
+    total: bool = False,
 ) -> torch.Tensor:
     """Returns the attention matrices in an Elissabeth model generated
     by the input ``x``.
@@ -23,34 +23,46 @@ def get_attention_matrices(
         x (torch.Tensor): Example to generate the attention matrix for.
             Has to be of shape ``(T, )`` for token input or ``(T, d)``
             for vector input.
-        dims (Literal[2, 3], optional): _description_. Defaults to 2.
+        total (bool, optional): If set to True, also calculates the
+            attention matrix for the whole iterated sum ``Att_{t_1,t}``
+            by calculating the iterated sum of all weightings. Defaults
+            to False.
 
     Returns:
         torch.Tensor: Attention matrix of shape
-            ``(n_is, n_layers, length_is, T, T)``
+            ``(n_is, n_layers, length_is, T, T)``.
     """
-    hook_key = "Att" if dims == 2 else "Att 3d"
     for layer in model.layers:
         for weighting in layer.weightings:
-            weighting.hooks.get(hook_key).attach()
+            weighting.hooks.get("Att").attach()
 
     model(x.to(next(model.parameters()).device).unsqueeze(0))
 
     for layer in model.layers:
         for weighting in layer.weightings:
-            weighting.hooks.get(hook_key).release()
+            weighting.hooks.get("Att").release()
 
     n_layers = model.config("n_layers")
     iss_length = model.layers[0].config("length_is")
     N = model.layers[0].config("n_is")
-    att_mat = torch.ones(
-        (N, n_layers, iss_length, x.size(0), x.size(0)) if dims == 2 else
-        (N, n_layers, iss_length, x.size(0), x.size(0), x.size(0))
-    )
+    att_mat = torch.ones((N, n_layers, iss_length, x.size(0), x.size(0)))
 
     for l in range(n_layers):
         for weighting in model.layers[l].weightings:
-            att_mat[:, l, ...] *= weighting.hooks.get(hook_key).fwd[0]
+            att_mat[:, l, :, :, :] *= weighting.hooks.get("Att").fwd[0]
+
+    if total:
+        total_att = torch.zeros((N, n_layers, x.size(0), x.size(0)))
+        ind = torch.triu_indices(x.size(0), x.size(0), offset=0)
+        total_att[:, :] = att_mat[:, :, 0]
+        total_att[:, :, *ind] = 0
+        for p in range(1, iss_length):
+            if p == iss_length - 1:
+                ind = torch.triu_indices(x.size(0), x.size(0), offset=1)
+            mat = torch.clone(att_mat[:, :, p, :, :])
+            mat[:, :, *ind] = 0
+            total_att[:, :, :, :] = mat @ total_att
+        att_mat = torch.cat((att_mat, total_att.unsqueeze(2)), dim=2)
 
     return att_mat
 
@@ -65,7 +77,7 @@ def _get_plot_cmap_norm(vmin: float, vmax: float, log: bool) -> Normalize:
 def plot_attention_matrix(
     matrix: torch.Tensor,
     example: Optional[torch.Tensor] = None,
-    show_product: bool = False,
+    contains_total: bool = False,
     cmap: str = "seismic",
     cmap_example: str = "Set1",
     causal_mask: bool = True,
@@ -80,8 +92,9 @@ def plot_attention_matrix(
             ``(n_layers, length_is, T, T)``.
         example (Optional[torch.Tensor], optional): The example the
             attention matrix was generated for. Defaults to None.
-        show_product (bool, optional): Whether to also show the product
-            of all attention matrices in one layer. Defaults to False.
+        contains_total (bool, optional): Whether the last attention
+            matrix in the ``length_is`` axis actually is the total
+            weighting of the iterated sum. Defaults to False.
         cmap (str, optional): Colormap for the attention matrix.
             Defaults to "seismic".
         cmap_example (str, optional): Colormap for the example that is
@@ -98,148 +111,96 @@ def plot_attention_matrix(
         tuple[Figure, np.ndarray]: Figure and array of axes from
             matplotlib.
     """
-    n_layers, iss_length, T, *_ = matrix.shape
-    is_3d = matrix.ndim == 5
+    matrix = torch.clone(matrix)
+    n_layers, iss_length, *_ = matrix.shape
 
-    cols = iss_length+1 if show_product and not is_3d else iss_length
-    fig, ax = plt.subplots(
-        n_layers, cols,
-        subplot_kw=dict(projection='3d') if is_3d else None,
-        **kwargs,
-    )
+    fig, ax = plt.subplots(n_layers, iss_length, **kwargs)
     if n_layers == 1:
         ax = np.array([ax])
-    if cols == 1:
+    if iss_length == 1:
         ax = np.array(ax)[:, np.newaxis]
 
-    if not is_3d:
-        mat = None
-        if causal_mask:
-            triu_indices = np.triu_indices(matrix.shape[2])
-            for l in range(n_layers):
-                for d in range(iss_length):
-                    matrix[l, d][triu_indices] = np.nan
-            if example is not None:
-                mat = np.empty_like(matrix[0, 0])
-                mat.fill(np.nan)
-                for i in range(mat.shape[0]):
-                    mat[i, i:] = example[i]
-        content = []
+    mat = None
+    if causal_mask:
+        triu_indices = np.triu_indices(matrix.shape[2])
         for l in range(n_layers):
-            content.append([])
-            max_ = np.nanmax(matrix[l])
-            min_ = np.nanmin(matrix[l])
             for d in range(iss_length):
-                if not share_cmap:
-                    max_ = np.nanmax(matrix[l, d])
-                    min_ = np.nanmin(matrix[l, d])
-                content[-1].append(ax[l, d].matshow(
-                    matrix[l, d],
-                    cmap=cmap,
-                    norm=_get_plot_cmap_norm(min_, max_, log_cmap),
-                ))
-                if mat is not None:
-                    ax[l, d].matshow(mat, cmap=cmap_example)
-                ax[l, d].tick_params(
-                    top=False, left=False, bottom=False, right=False,
-                    labeltop=False, labelleft=False, labelbottom=False,
-                    labelright=False,
-                )
-                if l == 0:
-                    ax[l, d].set_title(
-                        "$K("
-                        + "t" + ("_{"+f"{d+2}"+"}" if d+1 < iss_length else "")
-                        + ", t_{"+f"{d+1}"+"})$"
-                    )
-                if example is None:
-                    ax[l, d].set_ylabel("$t"
-                        + ("_{"+f"{d+2}"+"}$" if d+1 < iss_length else "$")
-                    )
-                    ax[l, d].set_xlabel("$t_{"+f"{d+1}"+"}$")
-            if show_product:
-                if not share_cmap:
-                    max_ = np.nanmax(matrix[l, d])
-                    min_ = np.nanmin(matrix[l, d])
-                content[-1].append(ax[l, iss_length].matshow(
-                    np.prod(matrix[l], 0),
-                    cmap=cmap,
-                    norm=_get_plot_cmap_norm(min_, max_, log_cmap),
-                ))
-                if mat is not None:
-                    ax[l, iss_length].matshow(mat, cmap=cmap_example)
-                ax[l, iss_length].set_title("Product")
-                ax[l, iss_length].tick_params(
-                    top=False, left=False, bottom=False, right=False,
-                    labeltop=False, labelleft=False, labelbottom=False,
-                    labelright=False,
-                )
-
-        for l in range(n_layers):
-            for d in range(cols):
-                divider = make_axes_locatable(ax[l, d])
-                axc = divider.append_axes("right", size="5%", pad=0.1)
-                if example is not None:
-                    axb = divider.append_axes(
-                        "bottom", size="6%", pad=0.05, sharex=ax[l, d],
-                    )
-                    axl = divider.append_axes(
-                        "left", size="6%", pad=0.05, sharey=ax[l, d],
-                    )
-                    axb.matshow(np.expand_dims(example, 0), cmap=cmap_example)
-                    axb.tick_params(
-                        top=False, left=False, bottom=False, right=False,
-                        labeltop=False, labelleft=False, labelbottom=False,
-                        labelright=False,
-                    )
-                    axl.matshow(np.expand_dims(example, 1), cmap=cmap_example)
-                    axl.tick_params(
-                        top=False, left=False, bottom=False, right=False,
-                        labeltop=False, labelleft=False, labelbottom=False,
-                        labelright=False,
-                    )
-                    axl.set_ylabel("$t"
-                        + ("_{"+f"{d+2}"+"}$" if d+1 < iss_length else "$")
-                    )
-                    axb.set_xlabel("$t_{"+f"{d+1}"+"}$")
-                if (share_cmap and d == cols-1) or not share_cmap:
-                    fig.colorbar(content[l][d], cax=axc)
+                matrix[l, d][triu_indices] = np.nan
+        if example is not None:
+            mat = np.empty_like(matrix[0, 0])
+            mat.fill(np.nan)
+            for i in range(mat.shape[0]):
+                mat[i, i:] = example[i]
+    content = []
+    for l in range(n_layers):
+        content.append([])
+        max_ = np.nanmax(matrix[l])
+        min_ = np.nanmin(matrix[l])
+        for d in range(iss_length):
+            if not share_cmap:
+                max_ = np.nanmax(matrix[l, d])
+                min_ = np.nanmin(matrix[l, d])
+            if mat is not None:
+                ax[l, d].matshow(mat, cmap=cmap_example)
+            content[-1].append(ax[l, d].matshow(
+                matrix[l, d],
+                cmap=cmap,
+                norm=_get_plot_cmap_norm(min_, max_, log_cmap),
+            ))
+            ax[l, d].tick_params(
+                top=False, left=False, bottom=False, right=False,
+                labeltop=False, labelleft=False, labelbottom=False,
+                labelright=False,
+            )
+            if l == 0:
+                t_r = "t_{" + f"{d+1}" + "}"
+                if d == iss_length-1 and contains_total:
+                    t_r = "t_1"
+                if d == iss_length-1 or (d == iss_length-2 and contains_total):
+                    t_l = "t"
                 else:
-                    axc.remove()
-    else:
-        def explode(data):
-            size = np.array(data.shape)
-            size[:3] = 2*size[:3] - 1
-            data_e = np.zeros(size, dtype=data.dtype)
-            data_e[::2, ::2, ::2] = data
-            return data_e
+                    t_l = "t_{" + f"{d+2}" + "}"
+                ax[l, d].set_title(f"$K({t_l}, {t_r})$")
+            if example is None:
+                ax[l, d].set_ylabel(f"${t_l}$")
+                ax[l, d].set_xlabel(f"${t_r}$")
 
-        filled = np.ones((T, T, T))
-        if causal_mask:
-            triu_indices = np.triu_indices(T)
-            filled[triu_indices[0], triu_indices[1], :] = 0
-            filled[:, triu_indices[0], triu_indices[1]] = 0
-        filled = explode(filled)
-        x, y, z = np.indices(
-            tuple(np.array(filled.shape) + 1)
-        ).astype(float) // 2
-        x[0::2, :, :] += 0.01
-        y[:, 0::2, :] += 0.01
-        z[:, :, 0::2] += 0.01
-        x[1::2, :, :] += 0.99
-        y[:, 1::2, :] += 0.99
-        z[:, :, 1::2] += 0.99
-        for l in range(n_layers):
-            for d in range(iss_length):
-                fc = np.moveaxis(np.array(
-                    np.vectorize(plt.get_cmap(cmap))(matrix[l, d])
-                ), 0, -1)
-                ec = fc.copy()
-                fc[..., 3] = 0.8
-                ax[l, d].voxels(
-                    filled,
-                    facecolors=explode(fc),
-                    edgecolors=explode(ec),
+    for l in range(n_layers):
+        for d in range(iss_length):
+            divider = make_axes_locatable(ax[l, d])
+            axc = divider.append_axes("right", size="5%", pad=0.1)
+            if example is not None:
+                axb = divider.append_axes(
+                    "bottom", size="6%", pad=0.05, sharex=ax[l, d],
                 )
+                axl = divider.append_axes(
+                    "left", size="6%", pad=0.05, sharey=ax[l, d],
+                )
+                axb.matshow(np.expand_dims(example, 0), cmap=cmap_example)
+                axb.tick_params(
+                    top=False, left=False, bottom=False, right=False,
+                    labeltop=False, labelleft=False, labelbottom=False,
+                    labelright=False,
+                )
+                axl.matshow(np.expand_dims(example, 1), cmap=cmap_example)
+                axl.tick_params(
+                    top=False, left=False, bottom=False, right=False,
+                    labeltop=False, labelleft=False, labelbottom=False,
+                    labelright=False,
+                )
+                t_r = "t_{" + f"{d+1}" + "}"
+                if d == iss_length-1 and contains_total:
+                    t_r = "t_1"
+                if d == iss_length-1 or (d == iss_length-2 and contains_total):
+                    t_l = "t"
+                else:
+                    t_l = "t_{" + f"{d+2}" + "}"
+                axl.set_ylabel(f"${t_l}$")
+                axb.set_xlabel(f"${t_r}$")
+            if (share_cmap and d == iss_length-1) or not share_cmap:
+                fig.colorbar(content[l][d], cax=axc)
+            else:
+                axc.remove()
 
     fig.tight_layout()
 
