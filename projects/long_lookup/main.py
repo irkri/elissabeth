@@ -68,55 +68,55 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
         Weighting.ExponentialDecay,
     )
 
-    state_dict = model.state_dict()
+    # state_dict = model.state_dict()
 
-    state_dict["embedding.weight"] = torch.eye(5)
-    state_dict["layers.0.W_V"] = torch.Tensor([[
-        [[1, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1]],
+    # state_dict["embedding.weight"] = torch.eye(5)
+    # state_dict["layers.0.W_V"] = torch.Tensor([[
+    #     [[1, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0],
+    #     [0, 0, 1, 0, 0],
+    #     [0, 0, 0, 1, 0],
+    #     [0, 0, 0, 0, 1]],
 
-        [[1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1]]
-    ]]).unsqueeze(-1)
+    #     [[1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1]]
+    # ]]).unsqueeze(-1)
 
-    state_dict["layers.0.W_O"] = torch.Tensor([[
-        [1, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1],
-    ]]).unsqueeze(2)
-    state_dict["unembedding.weight"] = torch.eye(5)
+    # state_dict["layers.0.W_O"] = torch.Tensor([[
+    #     [1, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0],
+    #     [0, 0, 1, 0, 0],
+    #     [0, 0, 0, 1, 0],
+    #     [0, 0, 0, 0, 1],
+    # ]]).unsqueeze(2)
+    # state_dict["unembedding.weight"] = torch.eye(5)
 
-    state_dict["layers.0.weightings.1.alpha"] = torch.Tensor([[
-        [100, -100]
-    ]]).unsqueeze(-1).unsqueeze(-1)
+    # state_dict["layers.0.weightings.1.alpha"] = torch.Tensor([[
+    #     [100, 0]
+    # ]]).unsqueeze(-1).unsqueeze(-1)
 
-    d = torch.pi / 2
-    state_dict["layers.0.weightings.0.W_Q"] = torch.Tensor([[
-        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    ]])
-    state_dict["layers.0.weightings.0.W_K"] = torch.Tensor([[
-        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    ]])
+    # d = torch.pi / 2
+    # state_dict["layers.0.weightings.0.W_Q"] = torch.Tensor([[
+    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    # ]])
+    # state_dict["layers.0.weightings.0.W_K"] = torch.Tensor([[
+    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    # ]])
 
-    model.load_state_dict(state_dict)
+    # model.load_state_dict(state_dict)
 
-    model.get_parameter("layers.0.weightings.0.W_Q").requires_grad = False
-    model.get_parameter("layers.0.weightings.0.W_K").requires_grad = False
-    model.get_parameter("layers.0.W_V").requires_grad = False
-    model.get_parameter("layers.0.W_O").requires_grad = False
-    model.get_parameter("embedding.weight").requires_grad = False
-    model.get_parameter("unembedding.weight").requires_grad = False
-    model.get_parameter("layers.0.weightings.1.alpha").requires_grad = False
+    # model.get_parameter("layers.0.weightings.0.W_Q").requires_grad = False
+    # model.get_parameter("layers.0.weightings.0.W_K").requires_grad = False
+    # model.get_parameter("layers.0.W_V").requires_grad = False
+    # model.get_parameter("layers.0.W_O").requires_grad = False
+    # model.get_parameter("embedding.weight").requires_grad = False
+    # model.get_parameter("unembedding.weight").requires_grad = False
+    # model.get_parameter("layers.0.weightings.1.alpha").requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -269,20 +269,41 @@ def plot(lightning_module: TokenPredictionModule) -> None:
 def battery(lightning_module: TokenPredictionModule) -> None:
     lengths = [10, 25, 100, 150, 200, 250, 500, 750, 1000, 10_000]
     samples = 5
+    trainit = True
+    multiple_keys = False
 
     accuracy = np.zeros((len(lengths), samples, 2))
-    trainer = L.Trainer()
+    trainer = L.Trainer(max_epochs=500)
     for l in range(len(lengths)):
         print(f"Starting Length {lengths[l]}", end="", flush=True)
+        lightning_module = build_model(lengths[l])
+        if trainit:
+            data_module = GivenDataModule(
+                long_lookup(
+                    n_samples=1000,
+                    length=lengths[l],
+                    characters=config["characters"],
+                    multiple_keys=multiple_keys,
+                ),
+                val_size=0.0,
+                batch_size=config["batch_size"],
+                num_workers=5,
+                # somehow this option is important, atleast on CPU
+                # (no more waiting between epochs)
+                persistent_workers=True,
+            )
+            trainer.fit(
+                lightning_module,
+                train_dataloaders=data_module,
+            )
         for i in range(samples):
             print(".", end="", flush=True)
-            lightning_module = build_model(lengths[l])
             data_module = GivenDataModule(
                 long_lookup(
                     n_samples=100,
                     length=lengths[l],
                     characters=config["characters"],
-                    multiple_keys=True,
+                    multiple_keys=multiple_keys,
                 ),
                 val_size=1.0,
                 batch_size=config["batch_size"],

@@ -156,6 +156,44 @@ class VectorApproximationModule(SAILearningModule):
         self.save_hyperparameters(ignore=["model", "loss"])
         self._only_last = only_last
 
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
+        x, y = batch
+        outputs = self(x)
+        if self._only_last:
+            y = y[:, -1, :]
+            outputs = outputs[:, -1, :]
+
+        loss = self.criterion(outputs, y)
+        self.log(
+            'train/loss',
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+        )
+        metrics = {"loss": loss}
+
+        return metrics
+
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> dict:
+        x, y = batch
+        outputs = self(x)
+        if self._only_last:
+            y = y[:, -1, :]
+            outputs = outputs[:, -1, :]
+
+        loss = self.criterion(outputs, y)
+        self.log(
+            'validation/loss',
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+        )
+        metrics = {"loss": loss}
+
+        return metrics
+
     def predict_step(
         self,
         batch: Any,

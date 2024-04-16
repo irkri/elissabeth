@@ -1,0 +1,36 @@
+{
+    "context_length" : null,
+    "input_vocab_size" : null,
+    "input_type" : "vector",
+    "d_hidden" : 5,
+    "n_layers" : 1,
+    "layer_norm" : true,
+    "residual_stream": true,
+
+    "n_is" : 32,
+    "length_is" : 5,
+    "d_values" : 1,
+    "values_2D" : false,
+    "pe_value" : true,
+    "sum_normalization" : true,
+
+    "bias" : false,
+
+    "restrict_query_key" : false,
+    "exponent": 1,
+    "d_query_key": 3,
+
+    "exp_alpha_0" : 1,
+
+    "cos_alpha_0": 1,
+    "d_alpha": 1,
+    "decay_exponent": 1,
+
+    "share_control": false,
+    "activation": "sin",
+    "control_mlp_size": 16,
+
+    "share_queries" : false,
+    "share_keys" : false,
+    "share_values" : false
+}

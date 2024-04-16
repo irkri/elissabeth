@@ -8,9 +8,9 @@
     "layer_norm": true,
     "residual_stream": true,
 
-    "n_is": 16,
+    "n_is": 4,
     "length_is": 5,
-    "d_values": 1,
+    "d_values": 16,
     "values_2D": false,
     "pe_value": false,
     "sum_normalization": true,
@@ -18,6 +18,10 @@
     "bias": true,
 
     "mlp_size": null,
+
+    "share_control": false,
+    "activation": "relu",
+    "control_mlp_size": 32,
 
     "restrict_query_key": true,
     "alpha_multiplier": 10,

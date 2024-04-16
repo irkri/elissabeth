@@ -1,7 +1,7 @@
 import itertools
 from abc import ABC, abstractmethod
 from enum import IntFlag, auto
-from typing import Optional
+from typing import Optional, Literal
 
 import torch
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ class Weighting(IntFlag):
 
     ExponentialDecay = auto()
     Exponential = auto()
+    ControlledExponential = auto()
     ComplexExponential = auto()
     CosineDecay = auto()
     Cosine = auto()
@@ -277,6 +278,75 @@ class ComplexExponential(Exponential):
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:
         return x.real * self.W_O_real + x.imag * self.W_O_imag
+
+
+class Sin(nn.Module):
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.sin(input)
+
+
+class ControlledExponentialConfig(BaseModel):
+
+    share_control: bool = False
+    activation: Literal["sin", "relu"] = "sin"
+    control_mlp_size: int = 16
+
+
+class ControlledExponential(_Weighting):
+
+    _config_class = ControlledExponentialConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
+        indices = torch.linspace(
+            1/self.config("context_length"), 1, self.config("context_length")
+        )
+        self.register_buffer("T", indices)
+
+        out = self.config("n_is") * (
+            1 if self.config("share_control") else self.config("length_is")
+        )
+        mlp_size = self.config("control_mlp_size")
+        self.mlp = nn.Sequential(
+            nn.Linear(1, mlp_size),
+            Sin() if self.config("activation") == "sin" else nn.ReLU(),
+            nn.Linear(mlp_size, out, bias=False),
+        )
+
+        self._p = self.config("length_is")
+        self._N = self.config("n_is")
+        self._T = self.config("context_length")
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        self._mlp_pass = self.mlp(self.get_buffer("T").unsqueeze(-1)).reshape(
+            (self._T, self._p, self._N)
+        )
+        if self.hooks.get("Att").is_attached():
+            T = self._mlp_pass.unsqueeze(0)
+            self.hook("Att", torch.exp(
+                ((T - T.transpose(0, 1))).unsqueeze(0).unsqueeze(0)
+            ).unsqueeze(0))
+        return x
+
+    def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
+        iq = 0 if self.config("share_control") else l-1
+        ik = 0 if self.config("share_control") else l
+        alpha_q = torch.tensor(0) if l == 0 else (
+            self._mlp_pass[:x.size(-4), iq, :]
+        )
+        alpha_k = torch.tensor(0) if l == self._p else (
+            self._mlp_pass[:x.size(-4), ik, :]
+        )
+        x = x * torch.exp(alpha_k - alpha_q).unsqueeze(-1).unsqueeze(-1)
+        return x
+
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        pass
 
 
 class CosineDecayConfig(BaseModel):
@@ -574,6 +644,8 @@ def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
                 weightings.append(Exponential)
             case Weighting.ComplexExponential:
                 weightings.append(ComplexExponential)
+            case Weighting.ControlledExponential:
+                weightings.append(ControlledExponential)
             case Weighting.CosineDecay:
                 weightings.append(CosineDecay)
             case Weighting.Cosine:

@@ -14,24 +14,25 @@ from torchmetrics.classification import MulticlassAccuracy
 
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
-from sainomore.data import GivenDataModule, long_lookup
+from sainomore.data import SplitDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
-from sainomore.lightning import SAILearningModule, VectorApproximationModule
+from sainomore.lightning import SAILearningModule, TokenPredictionModule
 from sainomore.models import Transformer
 from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
+from data import UCRLoader
+
 torch.set_float32_matmul_precision('high')
 
-SAVE_PATH: Optional[str] = None
+dataloader = UCRLoader("CinCECGTorso")
 
 config = {
-    "lr": 5e-4,
-    "weight_decay": 1e-4,
+    "lr": 5e-3,
+    "weight_decay": 1e-2,
     "epochs": 501,
 
-    "batch_size": 32,
-    "val_size": 0.2,
+    "batch_size": 16,
 }
 
 
@@ -39,25 +40,26 @@ def build_model() -> SAILearningModule:
     with open("config.json", "r") as f:
         model_config = json.load(f)
 
+    nlabels = dataloader.nlabels
+    model_config["context_length"] = dataloader.context_length
+    model_config["input_vocab_size"] = 1
+    model_config["output_vocab_size"] = nlabels
+
     model = Elissabeth.build(
         model_config,
-        Weighting.ControlledExponential,
-        # PositionalEncoding.ROPE,
+        Weighting.ControlledExponential
     )
 
-    # model = Transformer.build(
-    #     model_config,
-    #     # PositionalEncoding.SINUSOIDAL,
-    # )
+    # W_V = model.get_parameter("layers.0.W_V")
+    # torch.nn.init.ones_(W_V)
+    # W_V.requires_grad = False
 
-    # model.set_eye("layers.0.W_V", requires_grad=False, dims=(2, 3))
-
-    lightning_module = VectorApproximationModule(
+    lightning_module = TokenPredictionModule(
         model,
         learning_rate=config["lr"],
         weight_decay=config["weight_decay"],
-        loss=torch.nn.MSELoss(),
-        only_last=False,
+        only_last=True,
+        accuracy=MulticlassAccuracy(num_classes=nlabels),
     )
     return lightning_module
 
@@ -69,12 +71,9 @@ def train(
     progress_bar: bool = False,
     only_test: bool = False,
 ) -> None:
-    u = torch.load("code_u.pt")
-    x = torch.load("code_x.pt")
-    x = torch.nn.functional.normalize(x, dim=2)
-    data_module = GivenDataModule(
-        (u, x),
-        val_size=config["val_size"],
+    data_module = SplitDataModule(
+        dataloader.get_train(),
+        dataloader.get_test(),
         batch_size=config["batch_size"],
         num_workers=5,
         persistent_workers=True,
@@ -83,9 +82,9 @@ def train(
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
-            project="Elissabeth CODE",
+            project="Elissabeth UCR",
             checkpoint_name=load_path,
-            tags=["normalized output"],
+            tags=[config["dataset"]],
             id=load_path.split("/")[1] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -97,7 +96,6 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    example = u[0:1]
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
         WeightHistory((
@@ -122,7 +120,6 @@ def train(
         accelerator="auto",
         callbacks=callbacks if not only_test else None,
         logger=wandb_logger if not only_test else None,
-        default_root_dir=SAVE_PATH,
         enable_progress_bar=progress_bar,
         # overfit_batches=10,
     )
@@ -137,20 +134,9 @@ def train(
 
 
 def plot(lightning_module: SAILearningModule) -> None:
-    u = torch.load("code_u.pt")[0:1]
-    x = torch.load("code_x.pt")[0:1]
-    # x = torch.nn.functional.normalize(x, dim=2)
-    out = lightning_module(u).detach()
+    x, y = dataloader.get_test()
 
-    fig = plt.figure()
-
-    ax1 = fig.add_subplot(121)
-    ax1.plot(u[0, :, 0], u[0, :, 1])
-
-    ax2 = fig.add_subplot(122, projection="3d")
-    ax2.plot(x[0, :, 0], x[0, :, 1], x[0, :, 2])
-    ax2.plot(out[0, :, 0], out[0, :, 1], out[0, :, 2])
-    print(x)
+    out = lightning_module(x)
     print(out)
     # print(torch.mean((x[0] - out[0])**2))
 
@@ -178,11 +164,11 @@ def plot(lightning_module: SAILearningModule) -> None:
     # # fig.colorbar(mat1)
     # # fig.colorbar(mat2)
 
-    plt.savefig(
-        Path.cwd() / "plot.png",
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
+    # plt.savefig(
+    #     Path.cwd() / "plot.png",
+    #     bbox_inches="tight",
+    #     facecolor=(0, 0, 0, 0),
+    # )
     # plt.show()
 
 

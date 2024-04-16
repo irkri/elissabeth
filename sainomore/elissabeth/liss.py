@@ -36,14 +36,6 @@ class LISS(HookedModule):
         **kwargs,
     ) -> None:
         super().__init__(parent, **kwargs)
-        if self.config("context_length") < self.config("length_is"):
-            warnings.warn(
-                f"ISS length ({self.config('length_is')}) "
-                f"exceeds context length ({self.config('context_length')}), "
-                "which probably leads to unsuccessful training",
-                RuntimeWarning,
-            )
-
         self.W_V = nn.Parameter(
             torch.empty((
                 self.config("n_is"),
