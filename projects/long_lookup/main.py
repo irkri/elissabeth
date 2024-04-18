@@ -27,7 +27,7 @@ SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 500,
-    "context_length": 100,
+    "context_length": 25,
     "characters": 5,
 
     "lr": 5e-3,
@@ -68,55 +68,61 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
         Weighting.ExponentialDecay,
     )
 
-    # state_dict = model.state_dict()
+    state_dict = model.state_dict()
 
-    # state_dict["embedding.weight"] = torch.eye(5)
-    # state_dict["layers.0.W_V"] = torch.Tensor([[
-    #     [[1, 0, 0, 0, 0],
-    #     [0, 1, 0, 0, 0],
-    #     [0, 0, 1, 0, 0],
-    #     [0, 0, 0, 1, 0],
-    #     [0, 0, 0, 0, 1]],
+    state_dict["embedding.weight"] = torch.eye(5)
+    state_dict["layers.0.levels.0.W_V"] = torch.Tensor([[
+        [[1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1]],
 
-    #     [[1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1],
-    #     [1, 1, 1, 1, 1]]
-    # ]]).unsqueeze(-1)
+        [[1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1]]
+    ]]).unsqueeze(-1)
 
-    # state_dict["layers.0.W_O"] = torch.Tensor([[
-    #     [1, 0, 0, 0, 0],
-    #     [0, 1, 0, 0, 0],
-    #     [0, 0, 1, 0, 0],
-    #     [0, 0, 0, 1, 0],
-    #     [0, 0, 0, 0, 1],
-    # ]]).unsqueeze(2)
-    # state_dict["unembedding.weight"] = torch.eye(5)
+    state_dict["layers.0.W_O"] = torch.Tensor([[[
+        [1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1],
+    ]]]).unsqueeze(3)
+    state_dict["unembedding.weight"] = torch.eye(5)
 
-    # state_dict["layers.0.weightings.1.alpha"] = torch.Tensor([[
-    #     [100, 0]
-    # ]]).unsqueeze(-1).unsqueeze(-1)
+    state_dict["layers.0.levels.0.weightings.1.alpha"] = torch.Tensor([[
+        [100, 0]
+    ]]).unsqueeze(-1).unsqueeze(-1)
 
-    # d = torch.pi / 2
-    # state_dict["layers.0.weightings.0.W_Q"] = torch.Tensor([[
-    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    # ]])
-    # state_dict["layers.0.weightings.0.W_K"] = torch.Tensor([[
-    #     [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    #     [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    # ]])
+    d = torch.pi / 2
+    state_dict["layers.0.levels.0.weightings.0.W_Q"] = torch.Tensor([[
+        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    ]])
+    state_dict["layers.0.levels.0.weightings.0.W_K"] = torch.Tensor([[
+        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
+    ]])
 
-    # model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict)
 
-    # model.get_parameter("layers.0.weightings.0.W_Q").requires_grad = False
-    # model.get_parameter("layers.0.weightings.0.W_K").requires_grad = False
-    # model.get_parameter("layers.0.W_V").requires_grad = False
-    # model.get_parameter("layers.0.W_O").requires_grad = False
-    # model.get_parameter("embedding.weight").requires_grad = False
-    # model.get_parameter("unembedding.weight").requires_grad = False
-    # model.get_parameter("layers.0.weightings.1.alpha").requires_grad = False
+    model.get_parameter(
+        "layers.0.levels.0.weightings.0.W_Q"
+    ).requires_grad = False
+    model.get_parameter(
+        "layers.0.levels.0.weightings.0.W_K"
+    ).requires_grad = False
+    model.get_parameter("layers.0.levels.0.W_V").requires_grad = False
+    model.get_parameter("layers.0.W_O").requires_grad = False
+    model.get_parameter("embedding.weight").requires_grad = False
+    model.get_parameter("unembedding.weight").requires_grad = False
+    model.get_parameter(
+        "layers.0.levels.0.weightings.1.alpha"
+    ).requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -141,7 +147,7 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
-            multiple_keys=True,
+            multiple_keys=False,
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],

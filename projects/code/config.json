@@ -9,13 +9,15 @@
     "residual_stream": true,
 
     "n_is": 4,
-    "length_is": 5,
-    "d_values": 16,
+    "max_length_is": 5,
+    "d_values": 1,
     "values_2D": false,
-    "pe_value": false,
-    "sum_normalization": true,
+    "pe_value": true,
+    "sum_normalization": false,
 
     "bias": true,
+
+    "apes_latent": 32,
 
     "mlp_size": null,
 
@@ -24,9 +26,6 @@
     "control_mlp_size": 32,
 
     "restrict_query_key": true,
-    "alpha_multiplier": 10,
 
-    "share_queries": false,
-    "share_keys": false,
-    "share_values": false
+    "exp_alpha_0": 1
 }

@@ -7,8 +7,8 @@
     "layer_norm" : true,
     "residual_stream": true,
 
-    "n_is" : 32,
-    "length_is" : 5,
+    "n_is" : 1,
+    "max_length_is" : 5,
     "d_values" : 1,
     "values_2D" : false,
     "pe_value" : true,

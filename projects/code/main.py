@@ -41,8 +41,9 @@ def build_model() -> SAILearningModule:
 
     model = Elissabeth.build(
         model_config,
-        Weighting.ControlledExponential,
-        # PositionalEncoding.ROPE,
+        Weighting.ExponentialDecay,
+        # Weighting.ControlledExponential,
+        # PositionalEncoding.Learnable
     )
 
     # model = Transformer.build(
@@ -71,6 +72,7 @@ def train(
 ) -> None:
     u = torch.load("code_u.pt")
     x = torch.load("code_x.pt")
+    # u = torch.nn.functional.normalize(u, dim=2)
     x = torch.nn.functional.normalize(x, dim=2)
     data_module = GivenDataModule(
         (u, x),
@@ -139,7 +141,7 @@ def train(
 def plot(lightning_module: SAILearningModule) -> None:
     u = torch.load("code_u.pt")[0:1]
     x = torch.load("code_x.pt")[0:1]
-    # x = torch.nn.functional.normalize(x, dim=2)
+    x = torch.nn.functional.normalize(x, dim=2)
     out = lightning_module(u).detach()
 
     fig = plt.figure()
@@ -178,12 +180,12 @@ def plot(lightning_module: SAILearningModule) -> None:
     # # fig.colorbar(mat1)
     # # fig.colorbar(mat2)
 
-    plt.savefig(
-        Path.cwd() / "plot.png",
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
-    # plt.show()
+    # plt.savefig(
+    #     Path.cwd() / "plot.png",
+    #     bbox_inches="tight",
+    #     facecolor=(0, 0, 0, 0),
+    # )
+    plt.show()
 
 
 def main() -> None:

@@ -114,7 +114,7 @@ class Sinusoidal(_PositionalEncoding):
 
 class APESConfig(RoPEConfig):
 
-    apes_latent: tuple[int, ...]
+    apes_latent: int = 32
 
 
 class APES(_PositionalEncoding):
@@ -128,20 +128,22 @@ class APES(_PositionalEncoding):
         d = self.config("d_hidden")
         latent = self.config("apes_latent")
         position = torch.arange(T).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d, 2) * (-np.log(10000.0) / d))
-        pe = torch.zeros(T, d)
+        div_term = torch.exp(
+            torch.arange(0, latent, 2) * (-np.log(10000.0) / latent)
+        )
+        pe = torch.zeros(T, latent)
         pe[:, 0::2] = torch.sin(position * div_term)
-        if d % 2 != 0:
+        if latent % 2 != 0:
             pe[:, 1::2] = torch.cos(position * div_term[:-1])
         else:
             pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe)
-        self.weight = nn.Parameter(torch.empty(latent + (d, )))
+        self.weight = nn.Parameter(torch.empty((latent, d)))
         nn.init.xavier_normal_(self.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         encoding = torch.einsum(
-            "...d,td->t...",
+            "ld,tl->td",
             self.weight,
             self.get_buffer("pe"),
         )

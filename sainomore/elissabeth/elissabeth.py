@@ -128,11 +128,12 @@ class Elissabeth(SAINoMoreModule):
             if isinstance(flag, Weighting):
                 weightings.extend(get_weighting(flag))
         for layer in model.layers:
-            for pe in pos_encs:
-                layer.add_pe(pe(**config))
-            for weighting in weightings:
-                weighting_module = weighting(layer, **config)
+            for level in layer.levels:
                 for pe in pos_encs:
-                    weighting_module.add_pe(pe(**config))
-                layer.add_weighting(weighting_module)
+                    level.add_pe(pe(**config))
+                for weighting in weightings:
+                    weighting_module = weighting(level, **config)
+                    for pe in pos_encs:
+                        weighting_module.add_pe(pe(**config))
+                    level.add_weighting(weighting_module)
         return model

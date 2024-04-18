@@ -7,7 +7,7 @@
     "residual_stream": false,
 
     "n_is" : 1,
-    "length_is" : 2,
+    "levels" : [2],
     "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,

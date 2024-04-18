@@ -1,7 +1,6 @@
 __all__ = ["LISS", "LISSConfig"]
 
-import warnings
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 from pydantic import BaseModel
@@ -12,7 +11,7 @@ from ..positional import _PositionalEncoding
 from .weighting import _Weighting
 
 
-class LISSConfig(BaseModel):
+class LISSLevelConfig(BaseModel):
     d_values: int
     n_is: int = 1
     length_is: int = 2
@@ -25,10 +24,10 @@ class LISSConfig(BaseModel):
     bias: bool = True
 
 
-class LISS(HookedModule):
-    "Learnable Iterated Sums Signature"
+class LISSLevel(HookedModule):
+    "One level of the learnable iterated sum signature"
 
-    _config_class = LISSConfig
+    _config_class = LISSLevelConfig
 
     def __init__(
         self,
@@ -59,14 +58,6 @@ class LISS(HookedModule):
             )
             nn.init.zeros_(self.b_V)
 
-        self.W_O = nn.Parameter(torch.empty((
-            self.config("n_is"),
-            self.config("d_values"),
-            self.config("d_values") if self.config("values_2D") else 1,
-            self.config("d_hidden"),
-        )))
-        nn.init.xavier_normal_(self.W_O)
-
         self.beta = None
         if self.config("sum_normalization"):
             factor_norm = torch.empty((self.config("context_length"), 1, 1, 1))
@@ -79,11 +70,7 @@ class LISS(HookedModule):
 
         self.weightings = nn.ModuleList()
         self.pos_encs = nn.ModuleList()
-        self.hooks.add_hooks("V")
-        self.hooks.add_hooks(
-            *(f"iss.{i}" for i in range(1, self.config("length_is")+1))
-        )
-
+        self.hooks.add_hooks("V", "iss")
         self.p = self.config("length_is")
 
     def add_weighting(self, weighting: _Weighting) -> None:
@@ -131,7 +118,6 @@ class LISS(HookedModule):
             for weighting in self.weightings:
                 result = weighting.on_weighting(result, l)
             result = torch.cumsum(result, dim=-4)
-            self.hook(f"iss.{l}", result)
 
             if self.beta is not None:
                 result /= nn.functional.pad(
@@ -147,7 +133,55 @@ class LISS(HookedModule):
         for weighting in self.weightings:
             result = weighting.on_forward_end(result)
 
-        self.hook(f"iss.{self.p}", result)
-        result = torch.einsum("hvwd,bthvw->btd", self.W_O, result)
+        self.hook("iss", result)
+        return result
 
+
+class LISSConfig(BaseModel):
+    d_values: int
+    values_2D: bool = False
+    n_is: int = 1
+    max_length_is: int = 2
+    levels: Optional[Sequence[int]] = None
+
+
+class LISS(HookedModule):
+    "Learnable Iterated Sums Signature"
+
+    _config_class = LISSConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent, **kwargs)
+        self.W_O = nn.Parameter(torch.empty((
+            self.config("max_length_is") if self.config("levels") is None else
+                len(self.config("levels")),
+            self.config("n_is"),
+            self.config("d_values"),
+            self.config("d_values") if self.config("values_2D") else 1,
+            self.config("d_hidden"),
+        )))
+        nn.init.xavier_normal_(self.W_O)
+
+        self.levels = nn.ModuleList()
+        if (levels := self.config("levels")) is not None:
+            for p in levels:
+                kwargs["length_is"] = p
+                self.levels.append(LISSLevel(self, **kwargs))
+        else:
+            for p in range(self.config("max_length_is")):
+                kwargs["length_is"] = p+1
+                self.levels.append(LISSLevel(self, **kwargs))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        result = self.levels[0](x).unsqueeze(0)
+        for k in range(1, len(self.levels)):
+            result = torch.concat(
+                (result, self.levels[k](x).unsqueeze(0)),
+                dim=0,
+            )
+        result = torch.einsum("phvwd,pbthvw->btd", self.W_O, result)
         return result
