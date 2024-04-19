@@ -14,6 +14,7 @@ def get_attention_matrices(
     model: Elissabeth,
     x: torch.Tensor,
     total: bool = False,
+    level_index: int = 0,
 ) -> torch.Tensor:
     """Returns the attention matrices in an Elissabeth model generated
     by the input ``x``.
@@ -27,28 +28,34 @@ def get_attention_matrices(
             attention matrix for the whole iterated sum ``Att_{t_1,t}``
             by calculating the iterated sum of all weightings. Defaults
             to False.
+        level_index (int, optional): The index of the ISS level to
+            extract the attention matrices from. Defaults to 0.
 
     Returns:
         torch.Tensor: Attention matrix of shape
             ``(n_is, n_layers, length_is, T, T)``.
     """
     for layer in model.layers:
-        for weighting in layer.weightings:
+        for weighting in layer.levels[level_index].weightings:
             weighting.hooks.get("Att").attach()
 
     model(x.to(next(model.parameters()).device).unsqueeze(0))
 
     for layer in model.layers:
-        for weighting in layer.weightings:
+        for weighting in layer.levels[level_index].weightings:
             weighting.hooks.get("Att").release()
 
     n_layers = model.config("n_layers")
-    iss_length = model.layers[0].config("length_is")
+    print(model)
+    if model.layers[0].config("levels") is not None:
+        iss_length = model.layers[0].config("levels")[level_index]
+    else:
+        iss_length = level_index + 1
     N = model.layers[0].config("n_is")
     att_mat = torch.ones((N, n_layers, iss_length, x.size(0), x.size(0)))
 
     for l in range(n_layers):
-        for weighting in model.layers[l].weightings:
+        for weighting in model.layers[l].levels[level_index].weightings:
             att_mat[:, l, :, :, :] *= weighting.hooks.get("Att").fwd[0]
 
     if total:

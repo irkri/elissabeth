@@ -1,7 +1,7 @@
 import itertools
 from abc import ABC, abstractmethod
 from enum import IntFlag, auto
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 import torch
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from torch import nn
 
 from ..base import HookedModule
 from ..positional import _PositionalEncoding
+from .qkv import QKGen, Sin
 
 
 class Weighting(IntFlag):
@@ -280,12 +281,6 @@ class ComplexExponential(Exponential):
         return x.real * self.W_O_real + x.imag * self.W_O_imag
 
 
-class Sin(nn.Module):
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return torch.sin(input)
-
-
 class ControlledExponentialConfig(BaseModel):
 
     share_control: bool = False
@@ -494,35 +489,8 @@ class Cosine(_Weighting):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
-        self.W_Q = nn.Parameter(torch.empty((
-            self.config("n_is"),
-            1 if self.config("share_queries") else self.config("length_is"),
-            self.config("d_hidden"),
-            self.config("d_query_key"),
-        )))
-        nn.init.xavier_normal_(self.W_Q)
-        self.W_K = nn.Parameter(torch.empty((
-            self.config("n_is"),
-            1 if self.config("share_keys") else self.config("length_is"),
-            self.config("d_hidden"),
-            self.config("d_query_key"),
-        )))
-        nn.init.xavier_normal_(self.W_K)
-        self.b_Q = self.b_K = None
-        if self.config("bias"):
-            self.b_Q = nn.Parameter(torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_queries")
-                    else self.config("length_is"),
-                self.config("d_query_key"),
-            )))
-            nn.init.zeros_(self.b_Q)
-            self.b_K = nn.Parameter(torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_keys") else self.config("length_is"),
-                self.config("d_query_key"),
-            )))
-            nn.init.zeros_(self.b_K)
+        self.P_Q = QKGen(self, **kwargs)
+        self.P_K = QKGen(self, **kwargs)
 
         P = self.config("length_is") * self.config("d_query_key")
         trig_id = []
@@ -553,14 +521,10 @@ class Cosine(_Weighting):
         self._dim = 0
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        Q = torch.einsum('hldi,...btd->...bthli', self.W_Q, x)
-        if self.b_Q is not None:
-            Q = Q + self.b_Q
+        Q = self.P_Q(x)
         for pe in self.pos_encs:
             x = pe(x)
-        K = torch.einsum('hldi,...btd->...bthli', self.W_K, x)
-        if self.b_K is not None:
-            K = K + self.b_K
+        K = self.P_K(x)
         if self.config("restrict_query_key"):
             Q = torch.tanh(Q) * torch.pi / 4
             K = torch.tanh(K) * torch.pi / 4
@@ -579,7 +543,7 @@ class Cosine(_Weighting):
             N = self.config("n_is")
             D = self.config("d_query_key")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
+            att_mat = torch.empty((B, N, p, T, T)).to(x.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l

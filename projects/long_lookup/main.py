@@ -71,19 +71,19 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     state_dict = model.state_dict()
 
     state_dict["embedding.weight"] = torch.eye(5)
-    state_dict["layers.0.levels.0.W_V"] = torch.Tensor([[
-        [[1, 0, 0, 0, 0],
+    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.Tensor([
+        [1, 0, 0, 0, 0],
         [0, 1, 0, 0, 0],
         [0, 0, 1, 0, 0],
         [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1]],
+        [0, 0, 0, 0, 1],
 
-        [[1, 1, 1, 1, 1],
         [1, 1, 1, 1, 1],
         [1, 1, 1, 1, 1],
         [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1]]
-    ]]).unsqueeze(-1)
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+    ])
 
     state_dict["layers.0.W_O"] = torch.Tensor([[[
         [1, 0, 0, 0, 0],
@@ -99,30 +99,44 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     ]]).unsqueeze(-1).unsqueeze(-1)
 
     d = torch.pi / 2
-    state_dict["layers.0.levels.0.weightings.0.W_Q"] = torch.Tensor([[
-        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    ]])
-    state_dict["layers.0.levels.0.weightings.0.W_K"] = torch.Tensor([[
-        [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-        [[0, 0, 0], [d, 0, 0], [0, d, 0], [0, 0, d], [d, d, 0]],
-    ]])
+    state_dict["layers.0.levels.0.weightings.0.P_Q.transform.weight"] = (
+        torch.Tensor([
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+
+            [0, d, 0, 0, d],
+            [0, 0, d, 0, d],
+            [0, 0, 0, d, 0],
+        ])
+    )
+    state_dict["layers.0.levels.0.weightings.0.P_K.transform.weight"] = (
+        torch.Tensor([
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+
+            [0, d, 0, 0, d],
+            [0, 0, d, 0, d],
+            [0, 0, 0, d, 0],
+        ])
+    )
 
     model.load_state_dict(state_dict)
 
-    model.get_parameter(
-        "layers.0.levels.0.weightings.0.W_Q"
-    ).requires_grad = False
-    model.get_parameter(
-        "layers.0.levels.0.weightings.0.W_K"
-    ).requires_grad = False
-    model.get_parameter("layers.0.levels.0.W_V").requires_grad = False
-    model.get_parameter("layers.0.W_O").requires_grad = False
-    model.get_parameter("embedding.weight").requires_grad = False
-    model.get_parameter("unembedding.weight").requires_grad = False
-    model.get_parameter(
-        "layers.0.levels.0.weightings.1.alpha"
-    ).requires_grad = False
+    for name in [
+        "layers.0.levels.0.weightings.0.P_Q.transform.weight",
+        "layers.0.levels.0.weightings.0.P_Q.transform.bias",
+        "layers.0.levels.0.weightings.0.P_K.transform.weight",
+        "layers.0.levels.0.weightings.0.P_K.transform.bias",
+        "layers.0.levels.0.P_V.transform.weight",
+        "layers.0.levels.0.P_V.transform.bias",
+        "layers.0.W_O",
+        "embedding.weight",
+        "unembedding.weight",
+        "layers.0.levels.0.weightings.1.alpha",
+    ]:
+        model.get_parameter(name).requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,

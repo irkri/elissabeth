@@ -9,6 +9,7 @@ from torch import nn
 from ..base import HookedModule
 from ..positional import _PositionalEncoding
 from .weighting import _Weighting
+from .qkv import VGen
 
 
 class LISSLevelConfig(BaseModel):
@@ -20,8 +21,6 @@ class LISSLevelConfig(BaseModel):
 
     share_values: bool = False
     pe_value: bool = False
-
-    bias: bool = True
 
 
 class LISSLevel(HookedModule):
@@ -35,28 +34,7 @@ class LISSLevel(HookedModule):
         **kwargs,
     ) -> None:
         super().__init__(parent, **kwargs)
-        self.W_V = nn.Parameter(
-            torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_values") else self.config("length_is"),
-                self.config("d_hidden"),
-                self.config("d_values"),
-                self.config("d_values") if self.config("values_2D") else 1,
-            ))
-        )
-        nn.init.xavier_normal_(self.W_V)
-        self.b_V = None
-        if self.config("bias"):
-            self.b_V = nn.Parameter(
-                torch.empty((
-                    self.config("n_is"),
-                    1 if self.config("share_values")
-                        else self.config("length_is"),
-                    self.config("d_values"),
-                    self.config("d_values") if self.config("values_2D") else 1,
-                ))
-            )
-            nn.init.zeros_(self.b_V)
+        self.P_V = VGen(self, **kwargs)
 
         self.beta = None
         if self.config("sum_normalization"):
@@ -87,9 +65,7 @@ class LISSLevel(HookedModule):
         if self.config("pe_value"):
             for pe in self.pos_encs:
                 x = pe(x)
-        V = torch.einsum('hldvw,...btd->...bthlvw', self.W_V, x)
-        if self.b_V is not None:
-            V = V + self.b_V
+        V = self.P_V(x)
         self.hook("V", V)
 
         result = V[..., :, :, :, 0, :, :]
