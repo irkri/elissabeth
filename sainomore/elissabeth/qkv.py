@@ -58,6 +58,8 @@ class QKGen(HookedModule):
             torch.nn.init.zeros_(self.transform.bias)
         else:
             latent = self.config("qk_latent")
+            if latent is None:
+                latent = in_
             self.transform = nn.Sequential(
                 nn.Linear(in_, latent),
                 Sin() if activation == "sin" else nn.ReLU(),
@@ -126,6 +128,8 @@ class VGen(HookedModule):
             torch.nn.init.zeros_(self.transform.bias)
         else:
             latent = self.config("v_latent")
+            if latent is None:
+                latent = in_
             self.transform = nn.Sequential(
                 nn.Linear(in_, latent),
                 Sin() if activation == "sin" else nn.ReLU(),

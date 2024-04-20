@@ -120,8 +120,8 @@ class ExponentialConfig(BaseModel):
 
     share_queries: bool = False
     share_keys: bool = False
-    bias: bool = True
     restrict_query_key: bool = False
+    d_query_key: int = 1
 
 
 class Exponential(_Weighting):
@@ -135,46 +135,17 @@ class Exponential(_Weighting):
     ) -> None:
         super().__init__(parent=parent, **kwargs)
 
-        self._Q: torch.Tensor | None = None
-        self._K: torch.Tensor | None = None
-        self.W_Q = nn.Parameter(torch.empty((
-            self.config("n_is"),
-            1 if self.config("share_queries") else self.config("length_is"),
-            self.config("d_hidden"),
-        )))
-        nn.init.xavier_normal_(self.W_Q)
-        self.W_K = nn.Parameter(torch.empty((
-            self.config("n_is"),
-            1 if self.config("share_keys") else self.config("length_is"),
-            self.config("d_hidden"),
-        )))
-        nn.init.xavier_normal_(self.W_K)
-        self.b_Q = self.b_K = None
-        if self.config("bias"):
-            self.b_Q = nn.Parameter(torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_queries")
-                    else self.config("length_is"),
-            )))
-            nn.init.zeros_(self.b_Q)
-            self.b_K = nn.Parameter(torch.empty((
-                self.config("n_is"),
-                1 if self.config("share_keys") else self.config("length_is"),
-            )))
-            nn.init.zeros_(self.b_K)
+        self.P_Q = QKGen(self, **kwargs)
+        self.P_K = QKGen(self, **kwargs)
 
         self.hooks.add_hooks("Q", "K")
         self._p = self.config("length_is")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        self._Q = torch.einsum('hld,btd->bthl', self.W_Q, x)
-        if self.b_Q is not None:
-            self._Q = self._Q + self.b_Q
+        self._Q = self.P_Q(x).squeeze(-1)
         for pe in self.pos_encs:
             x = pe(x)
-        self._K = torch.einsum('hld,btd->bthl', self.W_K, x)
-        if self.b_K is not None:
-            self._K = self._K + self.b_K
+        self._K = self.P_K(x).squeeze(-1)
         if self.config("restrict_query_key"):
             self._Q = torch.tanh(self._Q)
             self._K = torch.tanh(self._K)
@@ -233,14 +204,10 @@ class ComplexExponential(Exponential):
         self._p = self.config("length_is")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        self._Q = torch.einsum('hld,btd->bthl', self.W_Q, x)
-        if self.b_Q is not None:
-            self._Q = self._Q + self.b_Q
+        self._Q = self.P_Q(x).squeeze(-1)
         for pe in self.pos_encs:
             x = pe(x)
-        self._K = torch.einsum('hld,btd->bthl', self.W_K, x)
-        if self.b_K is not None:
-            self._K = self._K + self.b_K
+        self._K = self.P_K(x).squeeze(-1)
         if self.config("restrict_query_key"):
             self._Q = torch.tanh(self._Q)
             self._K = torch.tanh(self._K)
@@ -475,7 +442,6 @@ class CosineDecay(_Weighting):
 
 class CosineConfig(ExponentialConfig):
 
-    d_query_key: int = 1
     exponent: int = 1
 
 
@@ -567,7 +533,7 @@ class Cosine(_Weighting):
         W = self.get_buffer("weight_signature")
         for _ in range(-self._dim-6):
             W = W.unsqueeze(1)
-        if self._cos_Q is not None and self._sin_Q is not None and l > 0:
+        if l > 0:
             ind = torch.arange(
                 W.size(-3)-4*(l-1)*self._dqk, W.size(-3)-4*l*self._dqk, -4
             ).to(W.device)
@@ -579,7 +545,7 @@ class Cosine(_Weighting):
                 self._sin_Q[..., iq, :, :, :].pow(W.index_select(-3, ind-3)),
                 dim=-3,
             )
-        if self._cos_K is not None and self._sin_K is not None and l < self._p:
+        if l < self._p:
             ind = torch.arange(
                 W.size(-3)-4*l*self._dqk, W.size(-3)-4*(l+1)*self._dqk, -4
             ).to(W.device)

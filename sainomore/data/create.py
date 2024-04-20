@@ -4,7 +4,8 @@ __all__ = [
     "imitate_mha",
     "streaks",
     "numberville",
-    "long_lookup"
+    "long_lookup",
+    "copying",
 ]
 
 import itertools
@@ -218,4 +219,23 @@ def long_lookup(
             x[i, -1] = mark
             y[i, :-1] = x[i, 1:]
             y[i, -1] = x[i, index-1]
+    return x, y
+
+
+def copying(
+    n_samples: int,
+    length: int,
+    n_categories: int = 10,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if length <= 20:
+        raise ValueError("Length has to be at least 21")
+    if n_categories <= 2:
+        raise ValueError("There have to be at least 3 categories")
+    x = torch.empty((n_samples, length), dtype=torch.int64)
+    x = torch.fill(x, n_categories-2)
+    x[:, :10] = torch.randint(n_categories-2, size=(n_samples, 10))
+    x[:, -11] = n_categories-1
+    y = torch.empty((n_samples, length), dtype=torch.int64)
+    y = torch.fill(y, -1)
+    y[:, -10:] = x[:, :10]
     return x, y

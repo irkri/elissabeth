@@ -46,7 +46,6 @@ def get_attention_matrices(
             weighting.hooks.get("Att").release()
 
     n_layers = model.config("n_layers")
-    print(model)
     if model.layers[0].config("levels") is not None:
         iss_length = model.layers[0].config("levels")[level_index]
     else:

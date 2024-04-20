@@ -1,19 +1,21 @@
 {
     "context_length" : null,
     "input_vocab_size" : null,
-    "d_hidden" : 5,
     "n_layers" : 1,
+    "d_hidden" : 5,
     "layer_norm" : false,
     "residual_stream": false,
 
     "n_is" : 1,
     "levels" : [2],
+    "sum_normalization" : false,
+
     "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,
-    "sum_normalization" : false,
-
-    "bias" : false,
+    "v_activation:": null,
+    "v_latent": null,
+    "v_include_time": false,
 
     "restrict_query_key" : false,
     "exponent": 1,
@@ -25,7 +27,7 @@
     "d_alpha": 1,
     "decay_exponent": 1,
 
-    "share_queries" : false,
-    "share_keys" : false,
-    "share_values" : false
+    "qk_activation:": null,
+    "qk_latent": null,
+    "qk_include_time": false
 }

@@ -3,19 +3,21 @@
     "input_vocab_size": 2,
     "input_type": "vector",
     "output_vocab_size": 3,
-    "d_hidden": 16,
     "n_layers": 2,
+    "d_hidden": 16,
     "layer_norm": true,
     "residual_stream": true,
 
     "n_is": 4,
     "max_length_is": 5,
+    "sum_normalization": false,
+
     "d_values": 1,
     "values_2D": false,
     "pe_value": true,
-    "sum_normalization": false,
-
-    "bias": true,
+    "v_activation:": null,
+    "v_latent": null,
+    "v_include_time": false,
 
     "apes_latent": 32,
 

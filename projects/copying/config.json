@@ -1,0 +1,27 @@
+{
+    "context_length" : null,
+    "input_vocab_size" : null,
+    "n_layers" : 1,
+    "d_hidden" : 16,
+    "layer_norm" : true,
+    "residual_stream": true,
+
+    "n_is" : 4,
+    "max_length_is" : 4,
+    "sum_normalization" : true,
+
+    "d_values" : 1,
+    "values_2D" : false,
+    "pe_value" : false,
+    "v_activation:": null,
+    "v_latent": null,
+    "v_include_time": false,
+
+    "restrict_query_key" : false,
+    "exponent": 1,
+    "d_query_key": 1,
+
+    "qk_activation:": "relu",
+    "qk_latent": null,
+    "qk_include_time": true
+}
