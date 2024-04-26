@@ -2,24 +2,24 @@
     "context_length" : null,
     "input_vocab_size" : null,
     "n_layers" : 1,
-    "d_hidden" : 5,
-    "layer_norm" : false,
-    "residual_stream": false,
+    "d_hidden" : 16,
+    "layer_norm" : true,
+    "residual_stream": true,
 
-    "n_is" : 1,
-    "levels" : [2],
-    "sum_normalization" : false,
+    "n_is" : 8,
+    "max_length_is" : 3,
+    "sum_normalization" : true,
 
     "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,
-    "v_activation:": null,
-    "v_latent": null,
-    "v_include_time": false,
+    "v_activation": "relu",
+    "v_latent": 16,
+    "v_include_time": true,
 
     "restrict_query_key" : false,
     "exponent": 1,
-    "d_query_key": 3,
+    "d_query_key": 1,
 
     "exp_alpha_0" : 50,
 
@@ -27,7 +27,7 @@
     "d_alpha": 1,
     "decay_exponent": 1,
 
-    "qk_activation:": null,
-    "qk_latent": null,
-    "qk_include_time": false
+    "qk_activation": "relu",
+    "qk_latent": 16,
+    "qk_include_time": true
 }

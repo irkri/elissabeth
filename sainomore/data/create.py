@@ -226,16 +226,17 @@ def copying(
     n_samples: int,
     length: int,
     n_categories: int = 10,
+    to_copy: int = 10,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if length <= 20:
-        raise ValueError("Length has to be at least 21")
+    if length <= 2 * to_copy:
+        raise ValueError("Length has to be at least 2*to_copy + 1")
     if n_categories <= 2:
         raise ValueError("There have to be at least 3 categories")
     x = torch.empty((n_samples, length), dtype=torch.int64)
     x = torch.fill(x, n_categories-2)
-    x[:, :10] = torch.randint(n_categories-2, size=(n_samples, 10))
-    x[:, -11] = n_categories-1
+    x[:, :to_copy] = torch.randint(n_categories-2, size=(n_samples, to_copy))
+    x[:, -(to_copy+1)] = n_categories-1
     y = torch.empty((n_samples, length), dtype=torch.int64)
     y = torch.fill(y, -1)
-    y[:, -10:] = x[:, :10]
+    y[:, -to_copy:] = x[:, :to_copy]
     return x, y

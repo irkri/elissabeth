@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 import wandb
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
@@ -26,9 +26,10 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 1000,
+    "n_samples": 5000,
     "context_length": 100,
     "n_categories": 10,
+    "to_copy": 10,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
@@ -50,7 +51,8 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
 
     model = Elissabeth.build(
         model_config,
-        Weighting.Exponential,
+        Weighting.Cosine,
+        Weighting.ExponentialDecay,
     )
 
     lightning_module = TokenPredictionModule(
@@ -67,7 +69,7 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
 def train(
     lightning_module: TokenPredictionModule,
     use_wandb: bool = False,
-    load_path: Optional[str] = None,
+    load_path: Optional[Path] = None,
     progress_bar: bool = False,
     only_test: bool = False,
 ) -> None:
@@ -76,22 +78,22 @@ def train(
             n_samples=config["n_samples"],
             length=config["context_length"],
             n_categories=config["n_categories"],
+            to_copy=config["to_copy"],
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
-        num_workers=5,
+        num_workers=10,
         # somehow this option is important, atleast on CPU
         # (no more waiting between epochs)
         persistent_workers=True,
     )
-
     wandb_logger = None
     if use_wandb:
         wandb_logger = WandbLogger(
             project="Elissabeth Copying",
             checkpoint_name=load_path,
             tags=[],
-            id=load_path.split("/")[1] if load_path is not None else None,
+            id=load_path.parts[-3] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
 
@@ -102,25 +104,33 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    # example = long_lookup(
-    #     n_samples=1,
-    #     length=config["context_length"],
-    #     characters=config["characters"],
-    #     multiple_keys=False,
-    # )[0]
+    x, _ = copying(
+        n_samples=1,
+        length=config["context_length"],
+        n_categories=config["n_categories"],
+        to_copy=config["to_copy"],
+    )
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        WeightHistory((
-                "model.embedding.weight",
-                "model.unembedding.weight",
-                "model.layers.0.P_V.transform.weight",
-                "model.layers.0.weightings.0.P_Q.transform.weight",
-                "model.layers.0.weightings.0.P_K.transform.weight",
-                "model.layers.0.W_O",
-            ),
-            each_n_epochs=100,
-            # save_path=".",
-        ),
+        ModelCheckpoint(monitor="validation/loss", mode="min"),
+        # WeightHistory((
+        #         "model.embedding.weight",
+        #         "model.unembedding.weight",
+        #         "model.layers.0.levels.0.P_V.transform.weight",
+        #         "model.layers.0.levels.0.P_V.transform.bias",
+        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.0.weight",
+        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.0.bias",
+        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.1.weight",
+        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.1.bias",
+        #         "model.layers.0.levels.0.weightings.0.P_K.transform.0.weight",
+        #         "model.layers.0.levels.0.weightings.0.P_K.transform.0.bias",
+        #         "model.layers.0.levels.0.weightings.0.P_K.transform.1.weight",
+        #         "model.layers.0.levels.0.weightings.0.P_K.transform.1.bias",
+        #         ("model.layers.0.W_O", (2, 4)),
+        #     ),
+        #     each_n_epochs=100,
+        #     # save_path=".",
+        # ),
         # ElissabethWeighting(
         #     example,
         #     each_n_epochs=100,
@@ -162,12 +172,13 @@ def plot(lightning_module: TokenPredictionModule) -> None:
         n_samples=1,
         length=config["context_length"],
         n_categories=config["n_categories"],
+        to_copy=config["to_copy"],
     )
-    print(x)
-    print(y)
+    # print(x)
+    # print(y)
 
-    out = lightning_module.predict_step(x)
-    print(out)
+    # out = lightning_module.predict_step(x)
+    # print(out)
 
     att = get_attention_matrices(
         lightning_module.model,  # type: ignore
@@ -181,12 +192,45 @@ def plot(lightning_module: TokenPredictionModule) -> None:
         att[:, 0],
         x[0],
         cmap="RdPu",
+        cmap_example="tab20",
         share_cmap=False,
         log_cmap=False,
         causal_mask=True,
         # contains_total=True,
-        figsize=(10, 5)
+        figsize=(10, 25)
     )
+    # 0.6296377778053284
+    # 0.9977337718009949
+
+    # 0.8785377740859985
+    # 0.4517635107040405
+
+    # 0.9316196441650391
+    # 0.17080585658550262
+
+    # 0.9936496615409851
+    # 0.0214511938393116
+
+    # 0.9998123645782471
+    # 0.0037638270296156406
+
+
+    # x = torch.zeros((16, 16)).unsqueeze(1)
+    # x = x.repeat(1, 100, 1)
+    # y = torch.empty((16, 100, 17))
+    # y[:, :, :16] = x
+    # y[:, :, 16] = torch.linspace(1/100, 1, 100)
+
+    # Q_t = lightning_module.model.layers[0].levels[0].weightings[0].P_Q.transform(y).detach()
+    # K_t = lightning_module.model.layers[0].levels[0].weightings[0].P_K.transform(y).detach()
+
+    # fig, ax = plt.subplots(1, 2, figsize=(16, 4))
+
+    # for j in range(Q_t.size(0)):
+    #     ax[0].plot(torch.norm(Q_t[j, :, :], dim=1), label=f"Dimension {j}")
+    #     ax[1].plot(torch.norm(K_t[j, :, :], dim=1), label=f"Dimension {j}")
+    # fig.legend()
+
     # W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
 
     # fig, ax = plt.subplots(1, 2)
@@ -196,12 +240,12 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     # fig.colorbar(mat1)
     # fig.colorbar(mat2)
 
-    # plt.savefig(
-    #     Path.cwd() / "plot.pdf",
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
-    plt.show()
+    plt.savefig(
+        Path.cwd() / "copying_cos_4d.pdf",
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
+    # plt.show()
 
 
 def battery(lightning_module: TokenPredictionModule) -> None:
@@ -221,6 +265,7 @@ def battery(lightning_module: TokenPredictionModule) -> None:
                     n_samples=1000,
                     length=lengths[l],
                     n_categories=config["n_categories"],
+                    to_copy=config["to_copy"],
                 ),
                 val_size=0.0,
                 batch_size=config["batch_size"],
@@ -240,6 +285,7 @@ def battery(lightning_module: TokenPredictionModule) -> None:
                     n_samples=100,
                     length=lengths[l],
                     n_categories=config["n_categories"],
+                    to_copy=config["to_copy"],
                 ),
                 val_size=1.0,
                 batch_size=config["batch_size"],
@@ -284,8 +330,9 @@ def main() -> None:
             if not (folder.is_dir() and (folder / args.load).is_dir()):
                 continue
             if (load_path := (folder / args.load / "checkpoints")).exists():
+                load_path = load_path / next(load_path.iterdir())
                 saved_ = torch.load(
-                    next(load_path.iterdir()),
+                    load_path,
                     # map_location=torch.device("cpu"),
                 )
                 lightning_module.load_state_dict(saved_["state_dict"])

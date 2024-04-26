@@ -156,14 +156,14 @@ class Exponential(_Weighting):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
+            att_mat = torch.empty((B, N, p, T, T)).to(x.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
-                Q_ = self._Q[..., iq].repeat(1, T, 1).reshape(
+                Q_ = self._Q[..., iq, 0, 0].repeat(1, T, 1).reshape(
                     B, T, T, N,
                 ).transpose(1, 2)
-                K_ = self._K[..., ik].unsqueeze(1)
+                K_ = self._K[..., ik, 0, 0].unsqueeze(1)
                 att_mat[:, :, l, :, :] = torch.exp(Q_ - K_).moveaxis(3, 1)
             self.hook("Att", att_mat)
 
@@ -190,13 +190,13 @@ class ComplexExponential(Exponential):
     ) -> None:
         super().__init__(parent=parent, **kwargs)
         self.W_O_real = nn.Parameter(torch.empty((
-            self.config("n_is"), 1,
+            self.config("n_is"),
             self.config("d_values"),
             self.config("d_values") if self.config("values_2D") else 1,
         )))
         nn.init.xavier_normal_(self.W_O_real)
         self.W_O_imag = nn.Parameter(torch.empty((
-            self.config("n_is"), 1,
+            self.config("n_is"),
             self.config("d_values"),
             self.config("d_values") if self.config("values_2D") else 1,
         )))
@@ -218,14 +218,14 @@ class ComplexExponential(Exponential):
             B, T = x.shape[0], x.shape[1]
             N = self.config("n_is")
             p = self.config("length_is")
-            att_mat = torch.empty((B, N, p, T, T)).to(self.W_Q.device)
+            att_mat = torch.empty((B, N, p, T, T)).to(x.device)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
-                Q_ = self._Q[..., iq].repeat(1, T, 1).reshape(
+                Q_ = self._Q[..., iq, 0, 0].repeat(1, T, 1).reshape(
                     B, T, T, N,
                 ).transpose(1, 2)
-                K_ = self._K[..., ik].unsqueeze(1)
+                K_ = self._K[..., ik, 0, 0].unsqueeze(1)
                 att_mat[:, :, l, :, :] = torch.exp(
                     (Q_ - K_) * 1j
                 ).moveaxis(3, 1)

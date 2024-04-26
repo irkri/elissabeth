@@ -26,13 +26,13 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 500,
-    "context_length": 25,
+    "n_samples": 5000,
+    "context_length": 100,
     "characters": 5,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
-    "epochs": 1001,
+    "epochs": 10001,
 
     "batch_size": 64,
     "val_size": 0.2,
@@ -62,81 +62,81 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     )
     model_config["input_vocab_size"] = config["characters"]
 
-    model = LookUpElissabeth.build(
+    model = Elissabeth.build(
         model_config,
-        Weighting.Cosine,
-        Weighting.ExponentialDecay,
+        Weighting.ComplexExponential,
+        # Weighting.ExponentialDecay,
     )
 
-    state_dict = model.state_dict()
+    # state_dict = model.state_dict()
 
-    state_dict["embedding.weight"] = torch.eye(5)
-    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.Tensor([
-        [1, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1],
+    # state_dict["embedding.weight"] = torch.eye(5)
+    # state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.Tensor([
+    #     [1, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0],
+    #     [0, 0, 1, 0, 0],
+    #     [0, 0, 0, 1, 0],
+    #     [0, 0, 0, 0, 1],
 
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1],
-    ])
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    #     [1, 1, 1, 1, 1],
+    # ])
 
-    state_dict["layers.0.W_O"] = torch.Tensor([[[
-        [1, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 1],
-    ]]]).unsqueeze(3)
-    state_dict["unembedding.weight"] = torch.eye(5)
+    # state_dict["layers.0.W_O"] = torch.Tensor([[[
+    #     [1, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0],
+    #     [0, 0, 1, 0, 0],
+    #     [0, 0, 0, 1, 0],
+    #     [0, 0, 0, 0, 1],
+    # ]]]).unsqueeze(3)
+    # state_dict["unembedding.weight"] = torch.eye(5)
 
-    state_dict["layers.0.levels.0.weightings.1.alpha"] = torch.Tensor([[
-        [100, 0]
-    ]]).unsqueeze(-1).unsqueeze(-1)
+    # state_dict["layers.0.levels.0.weightings.1.alpha"] = torch.Tensor([[
+    #     [100, 0]
+    # ]]).unsqueeze(-1).unsqueeze(-1)
 
-    d = torch.pi / 2
-    state_dict["layers.0.levels.0.weightings.0.P_Q.transform.weight"] = (
-        torch.Tensor([
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0],
+    # d = torch.pi / 2
+    # state_dict["layers.0.levels.0.weightings.0.P_Q.transform.weight"] = (
+    #     torch.Tensor([
+    #         [0, 0, 0, 0, 0],
+    #         [0, 0, 0, 0, 0],
+    #         [0, 0, 0, 0, 0],
 
-            [0, d, 0, 0, d],
-            [0, 0, d, 0, d],
-            [0, 0, 0, d, 0],
-        ])
-    )
-    state_dict["layers.0.levels.0.weightings.0.P_K.transform.weight"] = (
-        torch.Tensor([
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0],
+    #         [0, d, 0, 0, d],
+    #         [0, 0, d, 0, d],
+    #         [0, 0, 0, d, 0],
+    #     ])
+    # )
+    # state_dict["layers.0.levels.0.weightings.0.P_K.transform.weight"] = (
+    #     torch.Tensor([
+    #         [0, 0, 0, 0, 0],
+    #         [0, 0, 0, 0, 0],
+    #         [0, 0, 0, 0, 0],
 
-            [0, d, 0, 0, d],
-            [0, 0, d, 0, d],
-            [0, 0, 0, d, 0],
-        ])
-    )
+    #         [0, d, 0, 0, d],
+    #         [0, 0, d, 0, d],
+    #         [0, 0, 0, d, 0],
+    #     ])
+    # )
 
-    model.load_state_dict(state_dict)
+    # model.load_state_dict(state_dict)
 
-    for name in [
-        "layers.0.levels.0.weightings.0.P_Q.transform.weight",
-        "layers.0.levels.0.weightings.0.P_Q.transform.bias",
-        "layers.0.levels.0.weightings.0.P_K.transform.weight",
-        "layers.0.levels.0.weightings.0.P_K.transform.bias",
-        "layers.0.levels.0.P_V.transform.weight",
-        "layers.0.levels.0.P_V.transform.bias",
-        "layers.0.W_O",
-        "embedding.weight",
-        "unembedding.weight",
-        "layers.0.levels.0.weightings.1.alpha",
-    ]:
-        model.get_parameter(name).requires_grad = False
+    # for name in [
+    #     "layers.0.levels.0.weightings.0.P_Q.transform.weight",
+    #     "layers.0.levels.0.weightings.0.P_Q.transform.bias",
+    #     "layers.0.levels.0.weightings.0.P_K.transform.weight",
+    #     "layers.0.levels.0.weightings.0.P_K.transform.bias",
+    #     "layers.0.levels.0.P_V.transform.weight",
+    #     "layers.0.levels.0.P_V.transform.bias",
+    #     "layers.0.W_O",
+    #     "embedding.weight",
+    #     "unembedding.weight",
+    #     "layers.0.levels.0.weightings.1.alpha",
+    # ]:
+    #     model.get_parameter(name).requires_grad = False
 
     lightning_module = TokenPredictionModule(
         model,
@@ -152,7 +152,7 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
 def train(
     lightning_module: TokenPredictionModule,
     use_wandb: bool = False,
-    load_path: Optional[str] = None,
+    load_path: Optional[Path] = None,
     progress_bar: bool = False,
     only_test: bool = False,
 ) -> None:
@@ -177,7 +177,7 @@ def train(
             project="Elissabeth Long Lookup 2",
             checkpoint_name=load_path,
             tags=["one key"],
-            id=load_path.split("/")[1] if load_path is not None else None,
+            id=load_path.parts[-3] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
 
@@ -188,25 +188,25 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    example = long_lookup(
+    x, _ = long_lookup(
         n_samples=1,
         length=config["context_length"],
         characters=config["characters"],
         multiple_keys=False,
-    )[0]
+    )
     callbacks: list[Callback] = [
         GeneralConfigCallback(max_depth=10),
-        WeightHistory((
-                "model.embedding.weight",
-                "model.unembedding.weight",
-                ("model.layers.0.W_V", (2, 3)),
-                "model.layers.0.weightings.0.W_Q",
-                "model.layers.0.weightings.0.W_K",
-                ("model.layers.0.weightings.1.alpha", (2, )),
-            ),
-            each_n_epochs=100,
-            # save_path=".",
-        ),
+        # WeightHistory((
+        #         "model.embedding.weight",
+        #         "model.unembedding.weight",
+        #         ("model.layers.0.W_V", (2, 3)),
+        #         "model.layers.0.weightings.0.W_Q",
+        #         "model.layers.0.weightings.0.W_K",
+        #         ("model.layers.0.weightings.1.alpha", (2, )),
+        #     ),
+        #     each_n_epochs=100,
+        #     # save_path=".",
+        # ),
         # ElissabethWeighting(
         #     example,
         #     each_n_epochs=100,
@@ -214,7 +214,7 @@ def train(
         #     # save_path=".",
         # ),
         # ElissabethISTracker(
-        #     example,
+        #     x,
         #     each_n_epochs=100,
         #     use_wandb=True,
         #     # save_path=".",
@@ -368,8 +368,9 @@ def main() -> None:
             if not (folder.is_dir() and (folder / args.load).is_dir()):
                 continue
             if (load_path := (folder / args.load / "checkpoints")).exists():
+                load_path = load_path / next(load_path.iterdir())
                 saved_ = torch.load(
-                    next(load_path.iterdir()),
+                    load_path,
                     # map_location=torch.device("cpu"),
                 )
                 lightning_module.load_state_dict(saved_["state_dict"])

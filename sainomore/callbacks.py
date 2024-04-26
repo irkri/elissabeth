@@ -5,7 +5,7 @@ import lightning.pytorch as L
 import numpy as np
 import torch
 import wandb
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
 from torch.utils.data import DataLoader
@@ -88,7 +88,7 @@ class WeightHistory(Callback):
                 name,
                 (),
                 path,
-                is_1d=(len(dim) == 1) if dim is not None else False
+                is_1d=(len(dim) == 1) if dim is not None else param.ndim == 1,
             )
 
     def _log_image(

@@ -6,22 +6,24 @@
     "layer_norm" : true,
     "residual_stream": true,
 
-    "n_is" : 4,
-    "max_length_is" : 4,
+    "n_is" : 1,
+    "levels" : [1],
     "sum_normalization" : true,
 
-    "d_values" : 1,
+    "d_values" : 10,
     "values_2D" : false,
     "pe_value" : false,
-    "v_activation:": null,
-    "v_latent": null,
-    "v_include_time": false,
+    "v_activation": "relu",
+    "v_latent": 32,
+    "v_include_time": true,
 
     "restrict_query_key" : false,
     "exponent": 1,
-    "d_query_key": 1,
+    "d_query_key": 4,
 
-    "qk_activation:": "relu",
-    "qk_latent": null,
+    "exp_alpha_0": 10.0,
+
+    "qk_activation": "relu",
+    "qk_latent": 32,
     "qk_include_time": true
 }
