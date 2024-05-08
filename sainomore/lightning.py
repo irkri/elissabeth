@@ -67,7 +67,8 @@ class TokenPredictionModule(SAILearningModule):
         x, y = batch
         outputs = self(x).swapaxes(1, 2)
         if self._only_last:
-            y = y[..., -1]
+            if y.ndim == 2:
+                y = y[..., -1]
             outputs = outputs[..., -1]
 
         loss = self.criterion(outputs, y)
@@ -97,7 +98,8 @@ class TokenPredictionModule(SAILearningModule):
         x, y = batch
         outputs = self(x).swapaxes(1, 2)
         if self._only_last:
-            y = y[..., -1]
+            if y.ndim == 2:
+                y = y[..., -1]
             outputs = outputs[..., -1]
 
         loss = self.criterion(outputs, y)
@@ -160,7 +162,8 @@ class VectorApproximationModule(SAILearningModule):
         x, y = batch
         outputs = self(x)
         if self._only_last:
-            y = y[:, -1, :]
+            if y.ndim == 3:
+                y = y[:, -1, :]
             outputs = outputs[:, -1, :]
 
         loss = self.criterion(outputs, y)
@@ -179,7 +182,8 @@ class VectorApproximationModule(SAILearningModule):
         x, y = batch
         outputs = self(x)
         if self._only_last:
-            y = y[:, -1, :]
+            if y.ndim == 3:
+                y = y[:, -1, :]
             outputs = outputs[:, -1, :]
 
         loss = self.criterion(outputs, y)

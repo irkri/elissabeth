@@ -21,7 +21,7 @@ class UCRLoader:
             PATH / self.dataset / f"{self.dataset}_TRAIN.txt",
             max_rows=2,
         )
-        return data.shape[1]
+        return data.shape[1] - 1
 
     @property
     def nlabels(self) -> int:

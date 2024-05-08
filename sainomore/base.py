@@ -152,6 +152,10 @@ class SAINoMoreModule(ABC, HookedModule):
             if len(matching_dims) > 1:
                 raise ValueError("More than 2 dimensions match in size")
             elif len(matching_dims) == 0:
+                if param.nelement() == 1:
+                    nn.init.ones_(param)
+                    param.requires_grad = requires_grad
+                    return
                 raise ValueError("No matching dimensions found")
         else:
             matching_dims = [dims]

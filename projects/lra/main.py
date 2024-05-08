@@ -14,26 +14,23 @@ from torchmetrics.classification import MulticlassAccuracy
 
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
-from sainomore.data import SplitDataModule, long_lookup
+from sainomore.data import GivenDataModule, long_lookup
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import SAILearningModule, TokenPredictionModule
 from sainomore.models import Transformer
 from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
-from data import UCRLoader
-from modules import Preparateur
+from data import PathFinder
+
+PATH = Path("./lra_release/lra_release/pathfinder32")
 
 torch.set_float32_matmul_precision('high')
-
-dataloader = UCRLoader("Yoga")
 
 config = {
     "lr": 5e-2,
     "weight_decay": 1e-4,
     "epochs": 1001,
-
-    "batch_size": 64,
 }
 
 
@@ -41,38 +38,21 @@ def build_model() -> SAILearningModule:
     with open("config.json", "r") as f:
         model_config = json.load(f)
 
-    nlabels = dataloader.nlabels
-    model_config["context_length"] = dataloader.context_length
+    model_config["context_length"] = 32**2
     model_config["input_vocab_size"] = 1
-    model_config["d_hidden"] = 10
-    model_config["output_vocab_size"] = nlabels
+    model_config["output_vocab_size"] = 2
 
     model = Elissabeth.build(
         model_config,
         Weighting.ComplexExponential
     )
 
-    model.embedding = Preparateur()
-
-    for l in range(1):
-        W_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.weight")
-        b_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.bias")
-        torch.nn.init.ones_(W_V)
-        torch.nn.init.zeros_(b_V)
-        W_V.requires_grad = False
-        b_V.requires_grad = False
-
-        # torch.nn.init.xavier_normal_(model.get_parameter(
-        #     f"layers.0.levels.{l}.weightings.0.alpha"
-        # ))
-    # model.set_eye("unembedding.weight", requires_grad=False)
-
     lightning_module = TokenPredictionModule(
         model,
         learning_rate=config["lr"],
         weight_decay=config["weight_decay"],
         only_last=True,
-        accuracy=MulticlassAccuracy(num_classes=nlabels),
+        accuracy=MulticlassAccuracy(num_classes=2),
     )
     return lightning_module
 
@@ -84,13 +64,20 @@ def train(
     progress_bar: bool = False,
     only_test: bool = False,
 ) -> None:
-    data_module = SplitDataModule(
-        dataloader.get_train(),
-        dataloader.get_test(),
-        batch_size=config["batch_size"],
+    data_module = PathFinder(
+        PATH,
+        val_size=0.2,
+        batch_size=32,
         num_workers=5,
         persistent_workers=True,
     )
+    # data_module = GivenDataModule(
+    #     data.get_train(),
+    #     dataloader.get_test(),
+    #     batch_size=config["batch_size"],
+    #     num_workers=5,
+    #     persistent_workers=True,
+    # )
 
     wandb_logger = None
     if use_wandb:
@@ -148,10 +135,13 @@ def train(
 
 
 def plot(lightning_module: SAILearningModule) -> None:
-    x, y = dataloader.get_test()
+    dataset = PathFinder("./lra_release/lra_release/pathfinder32")
 
-    out = lightning_module(x[:1])
-    print(out)
+    dataset.setup()
+    item = next(iter(dataset.train_dataloader()))
+    print(item[0].shape, item[1].shape)
+    plt.imshow(item[0][0, :, 0].reshape(32, 32))
+
     # print(torch.mean((x[0] - out[0])**2))
 
     # print(out)
@@ -178,11 +168,11 @@ def plot(lightning_module: SAILearningModule) -> None:
     # # fig.colorbar(mat1)
     # # fig.colorbar(mat2)
 
-    # plt.savefig(
-    #     Path.cwd() / "plot.png",
-    #     bbox_inches="tight",
-    #     facecolor=(0, 0, 0, 0),
-    # )
+    plt.savefig(
+        Path.cwd() / "plot.png",
+        bbox_inches="tight",
+        facecolor=(0, 0, 0, 0),
+    )
     # plt.show()
 
 

@@ -72,11 +72,11 @@ class QKGen(HookedModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x
-        T = self.get_buffer("T")
-        for _ in range(x.ndim - 3):
-            T = T.unsqueeze(0)
-        T = T.repeat(*x.shape[:-2], 1, 1)
         if self._include_time:
+            T = self.get_buffer("T")
+            for _ in range(x.ndim - 3):
+                T = T.unsqueeze(0)
+            T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
         return self.transform(y).reshape(*x.shape[:-1], *self._shape)
 
@@ -143,10 +143,10 @@ class VGen(HookedModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x
-        T = self.get_buffer("T")
-        for _ in range(x.ndim - 3):
-            T = T.unsqueeze(0)
-        T = T.repeat(*x.shape[:-2], 1, 1)
         if self._include_time:
+            T = self.get_buffer("T")
+            for _ in range(x.ndim - 3):
+                T = T.unsqueeze(0)
+            T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
         return self.transform(y).reshape(*x.shape[:-1], *self._shape)
