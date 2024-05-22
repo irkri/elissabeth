@@ -86,6 +86,7 @@ class VGenConfig(BaseModel):
     v_activation: Optional[Literal["sin", "relu"]] = None
     v_latent: Optional[int] = None
     v_include_time: bool = False
+    v_norm: bool = True
 
 
 class VGen(HookedModule):
@@ -140,6 +141,10 @@ class VGen(HookedModule):
             torch.nn.init.zeros_(self.transform[0].bias)
             torch.nn.init.xavier_normal_(self.transform[2].weight)
             torch.nn.init.zeros_(self.transform[2].bias)
+        if self.config("v_norm"):
+            self.norm = torch.nn.LayerNorm(out)
+        else:
+            self.norm = torch.nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x
@@ -149,4 +154,6 @@ class VGen(HookedModule):
                 T = T.unsqueeze(0)
             T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
-        return self.transform(y).reshape(*x.shape[:-1], *self._shape)
+        return self.norm(
+            self.transform(y)
+        ).reshape(*x.shape[:-1], *self._shape)
