@@ -4,6 +4,7 @@ __all__ = [
     "imitate_mha",
     "streaks",
     "numberville",
+    "evencount",
     "long_lookup",
     "copying",
 ]
@@ -219,6 +220,42 @@ def long_lookup(
             x[i, -1] = mark
             y[i, :-1] = x[i, 1:]
             y[i, -1] = x[i, index-1]
+    return x, y
+
+
+def evencount(
+    n_samples: int,
+    length: int,
+    characters: int = 3,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generates a dataset of characters from an alphabet of given size.
+    The task is to find two occurences of the last character in the
+    sequence. The question is if there are an even or odd number of
+    characters between the two occurences.
+    """
+    x = torch.randint(
+        characters-1,
+        size=(n_samples, length),
+        dtype=torch.int64,
+    )
+    y = torch.zeros(n_samples, dtype=torch.int64)
+    for i in range(n_samples):
+        mark = np.sort(np.random.choice(length-1, size=2, replace=False))
+        x[i, mark] = characters - 1
+        x[i, -1] = characters - 1
+
+        x[i, mark[0]+1:mark[1]] = torch.randint(
+            characters - 2, size=(mark[1]-mark[0]-1,),
+        )
+        if mark[1] - mark[0] > 2:
+            number = np.random.randint(1, mark[1] - mark[0] - 1)
+            places = np.random.choice(
+                mark[1]-mark[0]-1,
+                size=number,
+                replace=False,
+            )
+            x[i, places+mark[0]+1] = characters - 2
+            y[i] = number % 2
     return x, y
 
 

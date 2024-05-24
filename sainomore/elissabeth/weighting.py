@@ -204,10 +204,10 @@ class ComplexExponential(Exponential):
         self._p = self.config("length_is")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        self._Q = self.P_Q(x).squeeze(-1)
+        self._Q = self.P_Q(x)
         for pe in self.pos_encs:
             x = pe(x)
-        self._K = self.P_K(x).squeeze(-1)
+        self._K = self.P_K(x)
         if self.config("restrict_query_key"):
             self._Q = torch.tanh(self._Q)
             self._K = torch.tanh(self._K)
@@ -238,10 +238,10 @@ class ComplexExponential(Exponential):
             raise RuntimeError("Did not calculate query or key")
         iq = 0 if self.config("share_queries") else l-1
         ik = 0 if self.config("share_keys") else l
-        x = x * torch.exp((
+        x = x * torch.prod(torch.exp((
             (0 if l == 0 else self._Q[:, :, :, iq])
             - (0 if l == self._p else self._K[:, :, :, ik])  # type: ignore
-        ) * 1j)
+        ) * 1j), dim=-3)
         return x
 
     def on_forward_end(self, x: torch.Tensor) -> torch.Tensor:

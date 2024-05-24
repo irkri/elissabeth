@@ -1,23 +1,24 @@
 import argparse
 import os
 from typing import Optional
+import json
+from pathlib import Path
 
 import lightning.pytorch as L
 import numpy as np
 import torch
 import wandb
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers.wandb import WandbLogger
 from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
 from data import LetterAssembler
+from sainomore.elissabeth import Weighting
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
 from sainomore.data.lightning import GivenDataModule
 from sainomore.lightning import TokenPredictionModule
-from sainomore.models import (DecoderOnlyTransformer,
-                              DecoderOnlyTransformerConfig)
 from sainomore import Elissabeth, LISSConfig
 # from sainomore.tools import (get_liss_attention_matrix,
 #                              plot_liss_attention_matrix)
@@ -27,15 +28,15 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 assembler = (
-    LetterAssembler(os.path.join(os.path.dirname(__file__), "quotes.txt"))
+    LetterAssembler(Path(__file__).parent / "quotes.txt")
 )
 
 config = {
     "context_length": assembler.context_length,
     "characters": assembler.vocab_size,
 
-    "lr": 1e-2,
-    "weight_decay": 1e-2,
+    "lr": 3e-5,
+    "weight_decay": 1e-4,
     "epochs": 501,
 
     "batch_size": 32,
@@ -80,43 +81,17 @@ class PredictionCallback(Callback):
 
 
 def build_model() -> TokenPredictionModule:
-    # model_config = DecoderOnlyTransformerConfig(
-    #     context_length=config["context_length"],
-    #     input_vocab_size=config["characters"],
-    #     positional_encoding="sinusoidal",
-    #     n_layers=1,
-    #     n_heads=4,
-    #     d_hidden=32,
-    #     d_head=4,
-    #     ffn_units=32,
-    #     bias=True,
-    # )
-    # model = DecoderOnlyTransformer(model_config)
+    with open("config.json", "r") as f:
+        model_config = json.load(f)
 
-    model_config = LISSConfig(
-        context_length=config["context_length"],
-        input_vocab_size=config["characters"],
-        n_layers=1,
-        length_is=3,
-        n_is=16,
-        d_values=16,
-        values_2D=False,
-        d_hidden=64,#config["characters"],
-        # exponent=2,
-        # d_query_key=2,
-        bias_query_key=True,
-        bias_value=True,
-        positional_encoding=None,
-        distance_weighting=False,
-        pe_key=True,
-        pe_value=False,
-        share_queries=False,
-        share_keys=False,
-        share_values=False,
-        sum_normalization="independent",
+    model_config["context_length"] = config["context_length"]
+    model_config["input_vocab_size"] = config["characters"]
+
+    model = Elissabeth.build(
+        model_config,
+        Weighting.ComplexExponential,
+        # Weighting.ExponentialDecay,
     )
-    model = Elissabeth(model_config)
-    # model.set_eye("embedding.weight")
 
     lightning_module = TokenPredictionModule(
         model,
@@ -151,7 +126,7 @@ def train(
         wandb_logger = WandbLogger(
             project="Elissabeth Makemore",
             checkpoint_name=load_path,
-            tags=[lightning_module.model.layers[0].__class__.__name__],
+            tags=[],
             id=load_path.split("/")[-2] if load_path is not None else None,
             resume="must" if load_path is not None else False,
         )
@@ -178,20 +153,21 @@ def train(
     callbacks = [
         GeneralConfigCallback(max_depth=10),
         PredictionCallback(each_n_epochs=25),
-        WeightHistory((
-                ("model.layers.0.W_Q", (2, 0)),
-                ("model.layers.0.b_Q", (0, )),
-                ("model.layers.0.W_K", (2, 0)),
-                ("model.layers.0.b_K", (0, )),
-                # "model.layers.0.W_V",
-                # "model.layers.0.b_V",
-                # "model.layers.0.W_O",
-                # ("model.layers.0.alpha", (1, 2)),
-                "model.embedding.weight",
-                "model.unembedding.weight",
-            ),
-            each_n_epochs=25,
-        ),
+        ModelCheckpoint(monitor="validation/loss", mode="min"),
+        # WeightHistory((
+        #         ("model.layers.0.W_Q", (2, 0)),
+        #         ("model.layers.0.b_Q", (0, )),
+        #         ("model.layers.0.W_K", (2, 0)),
+        #         ("model.layers.0.b_K", (0, )),
+        #         # "model.layers.0.W_V",
+        #         # "model.layers.0.b_V",
+        #         # "model.layers.0.W_O",
+        #         # ("model.layers.0.alpha", (1, 2)),
+        #         "model.embedding.weight",
+        #         "model.unembedding.weight",
+        #     ),
+        #     each_n_epochs=25,
+        # ),
         # ElissabethISTracker(
         #     example,
         #     reduce="norm",
@@ -284,20 +260,20 @@ def main() -> None:
 
     lightning_module = build_model()
 
-    load = None
+    load_path = None
     if args.load is not None:
-        directory = os.path.dirname(__file__)
-        for folder in os.listdir(directory):
-            path = os.path.join(directory, folder)
-            if not (os.path.isdir(path)
-                        and os.path.isdir(os.path.join(path, args.load))):
+        directory = Path.cwd()
+        for folder in directory.iterdir():
+            if not (folder.is_dir() and (folder / args.load).is_dir()):
                 continue
-            if os.path.join(path, args.load, "checkpoints"):
-                chckpt_path = os.path.join(path, args.load, "checkpoints")
-                load = os.path.join(chckpt_path, os.listdir(chckpt_path)[0])
-                saved_ = torch.load(load)
+            if (load_path := (folder / args.load / "checkpoints")).exists():
+                load_path = load_path / next(load_path.iterdir())
+                saved_ = torch.load(
+                    load_path,
+                    # map_location=torch.device("cpu"),
+                )
                 lightning_module.load_state_dict(saved_["state_dict"])
-    if args.load is not None and load is None:
+    if args.load is not None and load_path is None:
         raise FileExistsError(
             "Load specification does not point to a saved model"
         )
@@ -305,7 +281,7 @@ def main() -> None:
     if args.mode == "train":
         train(
             lightning_module,
-            load_path=load,
+            load_path=load_path,
             use_wandb=args.online,
             progress_bar=not args.online,
         )

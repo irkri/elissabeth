@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+from pathlib import Path
 
 import torch
 import numpy as np
@@ -7,7 +8,7 @@ import numpy as np
 
 class LetterAssembler:
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: Path) -> None:
         with open(path, "r", encoding="utf-8") as f:
             lines = list(filter(None, f.read().split("\n")))
         lines = [x.strip() for x in lines]
@@ -60,5 +61,5 @@ class LetterAssembler:
 
 if __name__ == "__main__":
     print(next(iter(LetterAssembler(
-        os.path.join(os.path.dirname(__file__), "names.txt")
+        Path(__file__).parent / "quotes.txt"
     ).get_dataset())))
