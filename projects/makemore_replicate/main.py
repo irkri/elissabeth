@@ -200,13 +200,13 @@ def generate(
     n_samples: int = 5,
     max_length: Optional[int] = None,
 ) -> list[str]:
-    # lightning_module.to("cuda")
+    lightning_module.to("cuda")
 
     start = torch.zeros((n_samples, 1)).long().to(lightning_module.device)
     T = assembler.context_length if max_length is None else max_length
     for _ in range(1, T):
         out = lightning_module.model(start)
-        probabilities = torch.softmax(out[:, :, -1], dim=-1)
+        probabilities = torch.softmax(out[:, -1, :], dim=-1)
         start = torch.cat(
             (start, torch.multinomial(probabilities, num_samples=1)),
             dim=1,
