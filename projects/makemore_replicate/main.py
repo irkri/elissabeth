@@ -35,7 +35,7 @@ config = {
     "context_length": assembler.context_length,
     "characters": assembler.vocab_size,
 
-    "lr": 3e-5,
+    "lr": 5e-3,
     "weight_decay": 1e-4,
     "epochs": 501,
 
@@ -200,7 +200,7 @@ def generate(
     n_samples: int = 5,
     max_length: Optional[int] = None,
 ) -> list[str]:
-    lightning_module.to("cuda")
+    # lightning_module.to("cuda")
 
     start = torch.zeros((n_samples, 1)).long().to(lightning_module.device)
     T = assembler.context_length if max_length is None else max_length
@@ -217,7 +217,7 @@ def generate(
 
 
 def plot(lightning_module: TokenPredictionModule) -> None:
-    lightning_module.to("cuda")
+    # lightning_module.to("cuda")
 
     print(lightning_module.model.layers[0].alpha)
     print(

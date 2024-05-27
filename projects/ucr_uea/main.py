@@ -22,18 +22,18 @@ from sainomore.positional import PositionalEncoding
 from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
 from data import UCRLoader
-from modules import Preparateur
+from modules import Preparateur, Sieve
 
 torch.set_float32_matmul_precision('high')
 
-dataloader = UCRLoader("Yoga")
+dataloader = UCRLoader("CinCECGTorso")
 
 config = {
     "lr": 5e-2,
     "weight_decay": 1e-4,
     "epochs": 1001,
 
-    "batch_size": 64,
+    "batch_size": 16,
 }
 
 
@@ -44,23 +44,23 @@ def build_model() -> SAILearningModule:
     nlabels = dataloader.nlabels
     model_config["context_length"] = dataloader.context_length
     model_config["input_vocab_size"] = 1
-    model_config["d_hidden"] = 10
     model_config["output_vocab_size"] = nlabels
 
     model = Elissabeth.build(
         model_config,
-        Weighting.ComplexExponential
+        Weighting.ComplexExponential,
     )
 
-    model.embedding = Preparateur()
+    model.embedding = Preparateur(model, max_pow=5)
+    model.unembedding = Sieve(model, classes=nlabels)
 
-    for l in range(1):
-        W_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.weight")
-        b_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.bias")
-        torch.nn.init.ones_(W_V)
-        torch.nn.init.zeros_(b_V)
-        W_V.requires_grad = False
-        b_V.requires_grad = False
+    # for l in range(1):
+    #     W_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.weight")
+    #     b_V = model.get_parameter(f"layers.0.levels.{l}.P_V.transform.bias")
+    #     torch.nn.init.ones_(W_V)
+    #     torch.nn.init.zeros_(b_V)
+    #     W_V.requires_grad = False
+    #     b_V.requires_grad = False
 
         # torch.nn.init.xavier_normal_(model.get_parameter(
         #     f"layers.0.levels.{l}.weightings.0.alpha"
@@ -150,8 +150,14 @@ def train(
 def plot(lightning_module: SAILearningModule) -> None:
     x, y = dataloader.get_test()
 
+    lightning_module.model.attach_all_hooks()
     out = lightning_module(x[:1])
-    print(out)
+    lightning_module.model.release_all_hooks()
+    print(torch.var(out, dim=1))
+
+    iss = lightning_module.model.get_hook("layers.0.levels.0", "V").fwd
+    # print(iss[0, :, 0, 0, 0])
+    print(iss[0, :, 0, 0, 0, 0])
     # print(torch.mean((x[0] - out[0])**2))
 
     # print(out)
