@@ -20,6 +20,7 @@ class Weighting(IntFlag):
     ComplexExponential = auto()
     CosineDecay = auto()
     Cosine = auto()
+    MSC = auto()
 
 
 class _Weighting(ABC, HookedModule):
@@ -564,6 +565,90 @@ class Cosine(_Weighting):
         return x
 
 
+class MSCConfig(ExponentialConfig):
+
+    pass
+
+
+class MSC(_Weighting):
+
+    _config_class = MSCConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
+        qk_kwargs = kwargs.copy()
+        qk_kwargs["d_query_key"] = 2 * kwargs["d_query_key"]
+        self.P_Q = QKGen(self, **qk_kwargs)
+        self.P_K = QKGen(self, **qk_kwargs)
+
+        self.hooks.add_hooks("Q", "K")
+        self._p = self.config("length_is")
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        Q = self.P_Q(x)
+        for pe in self.pos_encs:
+            x = pe(x)
+        K = self.P_K(x)
+        if self.config("restrict_query_key"):
+            Q = torch.tanh(Q) * torch.pi / 4
+            K = torch.tanh(K) * torch.pi / 4
+        self.hooks("Q", Q)
+        self.hooks("K", K)
+        self._Q = Q.unsqueeze(-1).unsqueeze(-1)
+        self._K = K.unsqueeze(-1).unsqueeze(-1)
+
+        if self.hooks.get("Att").is_attached():
+            B, T = x.size(-3), x.size(-2)
+            N = self.config("n_is")
+            D = self.config("d_query_key")
+            p = self.config("length_is")
+            att_mat = torch.empty((B, N, p, T, T)).to(x.device)
+            print(att_mat.shape)
+            for l in range(p):
+                iq = 0 if self.config("share_queries") else l
+                ik = 0 if self.config("share_keys") else l
+                ind = (0, ) * (x.ndim - 3)
+                Q_ = (self._Q[*ind, ..., iq, :, 0, 0]
+                    .repeat(1, T, 1, 1).reshape(B, T, T, N, D)
+                    .transpose(1, 2)
+                )
+                K_ = self._K[*ind, ..., ik, :, 0, 0].unsqueeze(1)
+                att_mat[:, :, l] = torch.prod(
+                    torch.cos(Q_[..., 0::2]).moveaxis(3, 1),
+                    dim=-1,
+                )
+                att_mat[:, :, l] *= torch.prod(
+                    torch.sin(Q_[..., 1::2]).moveaxis(3, 1),
+                    dim=-1,
+                )
+                att_mat[:, :, l] *= torch.prod(
+                    torch.cos(K_[..., 1::2]).moveaxis(3, 1),
+                    dim=-1,
+                )
+                att_mat[:, :, l] *= torch.prod(
+                    torch.sin(K_[..., 1::2]).moveaxis(3, 1),
+                    dim=-1,
+                )
+            self.hook("Att", att_mat)
+
+        return x
+
+    def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
+        iq = 0 if self.config("share_queries") else l-1
+        ik = 0 if self.config("share_keys") else l
+        if l > 0:
+            x = x * torch.prod(torch.cos(self._Q[..., iq, 0::2, :, :]), dim=-3)
+            x = x * torch.prod(torch.sin(self._Q[..., iq, 1::2, :, :]), dim=-3)
+        if l < self._p:
+            x = x * torch.prod(torch.cos(self._K[..., ik, 0::2, :, :]), dim=-3)
+            x = x * torch.prod(torch.sin(self._K[..., ik, 1::2, :, :]), dim=-3)
+        return x
+
+
 def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
     weightings: list[type[_Weighting]] = []
     for weight in weighting:
@@ -580,4 +665,6 @@ def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
                 weightings.append(CosineDecay)
             case Weighting.Cosine:
                 weightings.append(Cosine)
+            case Weighting.MSC:
+                weightings.append(MSC)
     return weightings
