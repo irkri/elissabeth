@@ -117,14 +117,15 @@ class LISSConfig(BaseModel):
     d_values: int
     values_2D: bool = False
     n_is: int = 1
-    max_length_is: int = 2
-    levels: Optional[Sequence[int]] = None
+    max_length: Optional[int] = None
+    lengths: Optional[Sequence[int]] = None
 
 
 class LISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
     _config_class = LISSConfig
+    parameter_sorting = {"W_O": (0, 1, 3, 2, 4)}
 
     def __init__(
         self,
@@ -132,9 +133,14 @@ class LISS(HookedModule):
         **kwargs,
     ) -> None:
         super().__init__(parent, **kwargs)
+        if self.config("lengths") is not None:
+            n_lengths = len(self.config("lengths"))
+        elif self.config("max_length") is not None:
+            n_lengths = len(self.config("max_length"))
+        else:
+            raise KeyError("Length of iterated sum has to be specified")
         self.W_O = nn.Parameter(torch.empty((
-            self.config("max_length_is") if self.config("levels") is None else
-                len(self.config("levels")),
+            n_lengths,
             self.config("n_is"),
             self.config("d_values"),
             self.config("d_values") if self.config("values_2D") else 1,
@@ -143,12 +149,12 @@ class LISS(HookedModule):
         nn.init.xavier_normal_(self.W_O)
 
         self.levels = nn.ModuleList()
-        if (levels := self.config("levels")) is not None:
+        if (levels := self.config("lengths")) is not None:
             for p in levels:
                 kwargs["length_is"] = p
                 self.levels.append(LISSLevel(self, **kwargs))
         else:
-            for p in range(self.config("max_length_is")):
+            for p in range(self.config("max_length")):
                 kwargs["length_is"] = p+1
                 self.levels.append(LISSLevel(self, **kwargs))
 

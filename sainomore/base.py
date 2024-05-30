@@ -14,6 +14,7 @@ from .hooks import Hook, HookCollection
 class HookedModule(nn.Module):
 
     _config_class: type[BaseModel]
+    parameter_sorting: dict[str, tuple[int, ...]] | None = None
 
     def __init__(
         self,
@@ -84,6 +85,27 @@ class HookedModule(nn.Module):
                 config.update(child.get_config())
         config.update(self._config.model_dump())
         return config
+
+    def get_parameter_sorting(self, name: str) -> tuple[int, ...]:
+        if (self.parameter_sorting is not None
+                and name in self.parameter_sorting):
+            return self.parameter_sorting[name]
+        for things in self.children():
+            if isinstance(things, nn.ModuleList):
+                for thing in things:
+                    if isinstance(thing, HookedModule):
+                        return thing.get_parameter_sorting(name)
+            elif isinstance(things, HookedModule):
+                return things.get_parameter_sorting(name)
+        raise AttributeError(f"Parameter {name!r} not found")
+
+    def detach_sorted_parameter(self, name: str) -> torch.Tensor:
+        param = self.get_parameter(name).detach()
+        try:
+            sorting = self.get_parameter_sorting(name.split(".")[-1])
+        except AttributeError:
+            sorting = tuple(i for i in range(param.ndim))
+        return torch.permute(param, sorting)
 
     def get_hook(self, name: str) -> Hook:
         try:

@@ -607,7 +607,6 @@ class MSC(_Weighting):
             D = self.config("d_query_key")
             p = self.config("length_is")
             att_mat = torch.empty((B, N, p, T, T)).to(x.device)
-            print(att_mat.shape)
             for l in range(p):
                 iq = 0 if self.config("share_queries") else l
                 ik = 0 if self.config("share_keys") else l
