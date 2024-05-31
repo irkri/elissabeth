@@ -125,7 +125,7 @@ class LISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
     _config_class = LISSConfig
-    parameter_sorting = {"W_O": (0, 1, 3, 2, 4)}
+    parameter_sorting = {"W_O": (0, 1, 4, 2, 3)}
 
     def __init__(
         self,

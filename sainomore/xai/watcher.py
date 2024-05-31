@@ -94,8 +94,9 @@ class ElissabethWatcher:
         if param.ndim > 4:
             raise IndexError(
                 f"Expected 4 dimensions of parameter {name!r}, "
-                f"but got {param.ndim}. Either specify {param.ndim-4} "
-                "dimensions in 'reduce_dims' or set this option to 'True'."
+                f"but got {param.ndim}: {param.shape}. "
+                f"Either specify {param.ndim-4} dimensions in 'reduce_dims' "
+                "or set this option to 'True'."
             )
         return plot_parameter_matrix(param, **kwargs)
 
