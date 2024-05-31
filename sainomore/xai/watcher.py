@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Self, Optional
+from typing import Self, Literal
 
 import numpy as np
 import torch
@@ -7,8 +7,8 @@ from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
 from ..elissabeth.elissabeth import Elissabeth
-from .plotting import plot_attention_matrix, plot_parameter_matrix
-from .tools import get_attention_matrices
+from .plotting import plot_attention_matrix, plot_parameter_matrix, plot_qkv_probing
+from .tools import get_attention_matrices, probe_qkv_transform
 
 
 class ElissabethWatcher:
@@ -54,17 +54,19 @@ class ElissabethWatcher:
         example: torch.Tensor,
         show_example: bool = True,
         total: bool = False,
-        length_index: int = 0,
+        layer: int = 0,
+        length: int = 0,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         att_mat = get_attention_matrices(
             self.model,
             example,
+            layer=layer,
+            length=length,
             total=total,
-            length_index=length_index,
         )
         figatt, axatt = plot_attention_matrix(
-            att_mat[:, 0],
+            att_mat,
             example if show_example else None,
             contains_total=total,
             **kwargs,
@@ -96,3 +98,17 @@ class ElissabethWatcher:
                 "dimensions in 'reduce_dims' or set this option to 'True'."
             )
         return plot_parameter_matrix(param, **kwargs)
+
+    def plot_qkv_probing(
+        self,
+        which: Literal["q", "k", "v"] = "v",
+        layer: int = 0,
+        length: int = 0,
+        weighting: int = 0,
+        norm_p: float | str = "fro",
+        sharey: bool = True,
+        cmap: str = "tab20",
+        **kwargs,
+    ) ->  tuple[Figure, list[list[np.ndarray]]]:
+        prb = probe_qkv_transform(self.model, which, layer, length, weighting)
+        return plot_qkv_probing(prb, norm_p, sharey, cmap, **kwargs)

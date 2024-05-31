@@ -77,8 +77,8 @@ def plot_attention_matrix(
     """Plots the given attention matrix from an Elissabeth model.
 
     Args:
-        matrix (np.ndarray): Attention matrix of shape
-            ``(n_layers, length_is, T, T)``.
+        matrix (torch.Tensor): Attention matrix for one LISS layer of
+            shape ``(n_is, length_is, T, T)``.
         example (Optional[torch.Tensor], optional): The example the
             attention matrix was generated for. Defaults to None.
         contains_total (bool, optional): Whether the last attention
@@ -101,10 +101,10 @@ def plot_attention_matrix(
             matplotlib.
     """
     matrix = torch.clone(matrix)
-    n_layers, iss_length, *_ = matrix.shape
+    n_is, iss_length, *_ = matrix.shape
 
-    fig, ax = plt.subplots(n_layers, iss_length, **kwargs)
-    if n_layers == 1:
+    fig, ax = plt.subplots(n_is, iss_length, **kwargs)
+    if n_is == 1:
         ax = np.array([ax])
     if iss_length == 1:
         ax = np.array(ax)[:, np.newaxis]
@@ -112,7 +112,7 @@ def plot_attention_matrix(
     mat = None
     if causal_mask:
         triu_indices = np.triu_indices(matrix.shape[2])
-        for l in range(n_layers):
+        for l in range(n_is):
             for d in range(iss_length):
                 matrix[l, d][triu_indices] = np.nan
         if example is not None:
@@ -121,7 +121,7 @@ def plot_attention_matrix(
             for i in range(mat.shape[0]):
                 mat[i, i:] = example[i]
     content = []
-    for l in range(n_layers):
+    for l in range(n_is):
         content.append([])
         max_ = np.nanmax(matrix[l])
         min_ = np.nanmin(matrix[l])
@@ -154,7 +154,7 @@ def plot_attention_matrix(
                 ax[l, d].set_ylabel(f"${t_l}$")
                 ax[l, d].set_xlabel(f"${t_r}$")
 
-    for l in range(n_layers):
+    for l in range(n_is):
         for d in range(iss_length):
             divider = make_axes_locatable(ax[l, d])
             axc = divider.append_axes("right", size="5%", pad=0.1)
@@ -191,4 +191,66 @@ def plot_attention_matrix(
             else:
                 axc.remove()
     fig.tight_layout()
+    return fig, ax
+
+
+def plot_qkv_probing(
+    probing: torch.Tensor,
+    norm_p: float | str = "fro",
+    sharey: bool = True,
+    cmap: str = "tab20",
+    **kwargs,
+) -> tuple[Figure, list[list[np.ndarray]]]:
+    """Plots the given qkv probing from an Elissabeth model.
+
+    Args:
+        probing (torch.Tensor): Probing of one LISS layer of shape
+            ``(d_in, T, n_is, length_is, d_out, ...)``. All additional
+            dimension get reduced by taking the norm over them.
+        norm_p (float | str, optional): Norm to use for reducing
+            additional dimensions in the input. The format is the same
+            as the argument ``p`` in the function ``torch.norm``.
+            Defaults to 'fro'.
+        sharey (bool, optional): If the y-axis of all ``d_in`` plots
+            should be shared. Defaults to True.
+        cmap (str, optional): Colormap for the different ``d_out`` lines
+            of a single plot. Defaults to 'tab20'.
+
+    Returns:
+        tuple[Figure, list[list[np.ndarray]]]: Figure and list of list
+            of array of axes from matplotlib. The outer two lists
+            correspond to subfigures of the main figure.
+    """
+    in_, T, n_is, lengths, out_, *other = probing.shape
+    size_other = int(np.prod(other) if len(other) > 1 else 1)
+    fig = plt.figure(**kwargs)
+    subfigs = fig.subfigures(n_is, lengths)
+    if n_is == 1:
+        subfigs = np.array([subfigs])
+    if lengths == 1:
+        subfigs = np.array(subfigs)[:, np.newaxis]
+    colorwheel = plt.get_cmap(cmap)
+    ax: list[list[np.ndarray]] = []
+    for n in range(n_is):
+        ax.append([])
+        for p in range(lengths):
+            ax[-1].append(subfigs[n, p].subplots(1, in_, sharey=sharey))
+            for i in range(in_):
+                for j in range(out_):
+                    display = probing[i, :, n, p, j]
+                    if len(other) > 1 and not (len(other)==1 and other[0]==1):
+                        display = torch.norm(
+                            display.reshape(T, size_other),
+                            p=norm_p,
+                            dim=-1,
+                        )
+                    ax[-1][-1][i].plot(
+                        display,
+                        label=f"{j}" if i==0 else None,
+                        color=colorwheel(j),
+                    )
+                    ax[-1][-1][i].set_xticks([])
+                    ax[-1][-1][i].set_xticklabels([])
+            if n == 0 and p == lengths - 1:
+                subfigs[n, p].legend(title="Dimension")
     return fig, ax
