@@ -30,16 +30,30 @@ class GeneralConfigCallback(Callback):
     ) -> None:
         model_summary = summarize(pl_module, max_depth=self._max_depth)
 
+        contains_wandb = False
         for logger in trainer.loggers:
+            if isinstance(logger, WandbLogger):
+                contains_wandb = True
+                if (logger.save_dir is None or logger.name is None
+                        or logger.version is None):
+                    raise RuntimeError(
+                        "save_dir, name or version of Wandb logger is None"
+                    )
+                path = Path(logger.save_dir).absolute()
+                path = path / logger.name / logger.version
+                path.mkdir(parents=True, exist_ok=True)
+                with open(path / "config.json", "w") as f:
+                    json.dump(pl_module.model.get_config(), f, indent=4)
             logger.log_hyperparams({
                 "total_parameters": model_summary.total_parameters,
                 "trainable_parameters": model_summary.trainable_parameters,
                 "model_size": model_summary.model_size,
             })
-        if trainer.log_dir is None:
-            raise RuntimeError("log_dir of Trainer is None, aborting")
-        with open(Path(trainer.log_dir) / "config.json", "w") as f:
-            json.dump(pl_module.model.get_config(), f, indent=4)
+        if not contains_wandb:
+            if trainer.log_dir is None:
+                raise RuntimeError("log_dir of Trainer is None, aborting")
+            with open(Path(trainer.log_dir) / "config.json", "w") as f:
+                json.dump(pl_module.model.get_config(), f, indent=4)
 
 
 class WeightHistory(Callback):
