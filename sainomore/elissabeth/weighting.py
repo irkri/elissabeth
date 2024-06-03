@@ -648,22 +648,33 @@ class MSC(_Weighting):
         return x
 
 
-def get_weighting(weighting: Weighting) -> list[type[_Weighting]]:
+dict_weighting_id: dict[Weighting, type[_Weighting]] = {
+    Weighting.ExponentialDecay: ExponentialDecay,
+    Weighting.Exponential: Exponential,
+    Weighting.ComplexExponential: ComplexExponential,
+    Weighting.ControlledExponential: ControlledExponential,
+    Weighting.CosineDecay: CosineDecay,
+    Weighting.Cosine: Cosine,
+    Weighting.MSC: MSC,
+}
+
+
+dict_weighting_str: dict[str, type[_Weighting]] = {
+    "ExponentialDecay": ExponentialDecay,
+    "Exponential": Exponential,
+    "ComplexExponential": ComplexExponential,
+    "ControlledExponential": ControlledExponential,
+    "CosineDecay": CosineDecay,
+    "Cosine": Cosine,
+    "MSC": MSC,
+}
+
+
+def get_weighting(weighting: Weighting | list[str]) -> list[type[_Weighting]]:
     weightings: list[type[_Weighting]] = []
     for weight in weighting:
-        match weight:
-            case Weighting.ExponentialDecay:
-                weightings.append(ExponentialDecay)
-            case Weighting.Exponential:
-                weightings.append(Exponential)
-            case Weighting.ComplexExponential:
-                weightings.append(ComplexExponential)
-            case Weighting.ControlledExponential:
-                weightings.append(ControlledExponential)
-            case Weighting.CosineDecay:
-                weightings.append(CosineDecay)
-            case Weighting.Cosine:
-                weightings.append(Cosine)
-            case Weighting.MSC:
-                weightings.append(MSC)
+        if isinstance(weight, IntFlag):
+            weightings.append(dict_weighting_id[weight])
+        elif isinstance(weight, str):
+            weightings.append(dict_weighting_str[weight])
     return weightings

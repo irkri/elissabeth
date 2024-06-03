@@ -19,17 +19,16 @@ from sainomore.data import GivenDataModule, copying
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
 from sainomore.positional import PositionalEncoding
-from sainomore.tools import get_attention_matrices, plot_attention_matrix
 
 torch.set_float32_matmul_precision('high')
 
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 5000,
+    "n_samples": 500,
     "context_length": 100,
-    "n_categories": 10,
-    "to_copy": 10,
+    "n_categories": 5,
+    "to_copy": 2,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
@@ -51,10 +50,9 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
 
     model = Elissabeth.build(
         model_config,
-        Weighting.Cosine,
+        Weighting.MSC,
         Weighting.ExponentialDecay,
     )
-
     lightning_module = TokenPredictionModule(
         model,
         learning_rate=config["lr"],
@@ -164,95 +162,10 @@ def train(
         wandb.finish()
 
 
-def plot(lightning_module: TokenPredictionModule) -> None:
-    torch.random.manual_seed(662)
-    np.random.seed(662)
-
-    x, y = copying(
-        n_samples=1,
-        length=config["context_length"],
-        n_categories=config["n_categories"],
-        to_copy=config["to_copy"],
-    )
-    # print(x)
-    # print(y)
-
-    # out = lightning_module.predict_step(x)
-    # print(out)
-
-    att = get_attention_matrices(
-        lightning_module.model,  # type: ignore
-        x[0],
-        # total=True,
-    )
-    # idx = att[:, 0, 0] < 0
-    # att[:, 0, 0, *idx] = 1e-20
-    # att[:, 0, 0] = torch.log(att[:, 0, 0])
-    figatt, axatt = plot_attention_matrix(
-        att[:, 0],
-        x[0],
-        cmap="RdPu",
-        cmap_example="tab20",
-        share_cmap=False,
-        log_cmap=False,
-        causal_mask=True,
-        # contains_total=True,
-        figsize=(10, 25)
-    )
-    # 0.6296377778053284
-    # 0.9977337718009949
-
-    # 0.8785377740859985
-    # 0.4517635107040405
-
-    # 0.9316196441650391
-    # 0.17080585658550262
-
-    # 0.9936496615409851
-    # 0.0214511938393116
-
-    # 0.9998123645782471
-    # 0.0037638270296156406
-
-
-    # x = torch.zeros((16, 16)).unsqueeze(1)
-    # x = x.repeat(1, 100, 1)
-    # y = torch.empty((16, 100, 17))
-    # y[:, :, :16] = x
-    # y[:, :, 16] = torch.linspace(1/100, 1, 100)
-
-    # Q_t = lightning_module.model.layers[0].levels[0].weightings[0].P_Q.transform(y).detach()
-    # K_t = lightning_module.model.layers[0].levels[0].weightings[0].P_K.transform(y).detach()
-
-    # fig, ax = plt.subplots(1, 2, figsize=(16, 4))
-
-    # for j in range(Q_t.size(0)):
-    #     ax[0].plot(torch.norm(Q_t[j, :, :], dim=1), label=f"Dimension {j}")
-    #     ax[1].plot(torch.norm(K_t[j, :, :], dim=1), label=f"Dimension {j}")
-    # fig.legend()
-
-    # W_V = lightning_module.get_parameter("model.layers.0.W_V").detach()
-
-    # fig, ax = plt.subplots(1, 2)
-
-    # mat1 = ax[0].matshow(W_V[0, 0, :, :, 0])
-    # mat2 = ax[1].matshow(W_V[0, 1, :, :, 0])
-    # fig.colorbar(mat1)
-    # fig.colorbar(mat2)
-
-    plt.savefig(
-        Path.cwd() / "copying_cos_4d.pdf",
-        bbox_inches="tight",
-        facecolor=(0, 0, 0, 0),
-    )
-    # plt.show()
-
-
 def battery(lightning_module: TokenPredictionModule) -> None:
     lengths = [10, 25, 100, 150, 200, 250, 500, 750, 1000, 10_000]
     samples = 5
     trainit = True
-    multiple_keys = False
 
     accuracy = np.zeros((len(lengths), samples, 2))
     trainer = L.Trainer(max_epochs=500)
@@ -315,7 +228,7 @@ def battery(lightning_module: TokenPredictionModule) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("mode", choices=["train", "test", "plot", "battery"])
+    parser.add_argument("mode", choices=["train", "test", "battery"])
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--load", default=None)
 
@@ -333,7 +246,7 @@ def main() -> None:
                 load_path = load_path / next(load_path.iterdir())
                 saved_ = torch.load(
                     load_path,
-                    # map_location=torch.device("cpu"),
+                    map_location=torch.device("cpu"),
                 )
                 lightning_module.load_state_dict(saved_["state_dict"])
     if args.load is not None and load_path is None:
@@ -350,8 +263,6 @@ def main() -> None:
         )
     elif args.mode == "test":
         train(lightning_module, only_test=True)
-    elif args.mode == "plot":
-        plot(lightning_module)
     elif args.mode == "battery":
         battery(lightning_module)
 

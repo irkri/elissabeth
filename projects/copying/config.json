@@ -6,16 +6,17 @@
     "layer_norm" : true,
     "residual_stream": true,
 
-    "n_is" : 1,
-    "levels" : [1],
+    "n_is" : 4,
+    "lengths" : [1],
     "sum_normalization" : true,
 
-    "d_values" : 10,
+    "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,
     "v_activation": "relu",
     "v_latent": 32,
     "v_include_time": true,
+    "v_norm": false,
 
     "restrict_query_key" : false,
     "exponent": 1,
@@ -25,5 +26,10 @@
 
     "qk_activation": "relu",
     "qk_latent": 32,
-    "qk_include_time": true
+    "qk_include_time": true,
+
+    "weighting": [
+        "MSC",
+        "ExponentialDecay"
+    ]
 }

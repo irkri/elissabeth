@@ -122,6 +122,20 @@ class HookedModule(nn.Module):
 
 class SAINoMoreModule(ABC, HookedModule):
 
+    _flags: Optional[tuple[IntFlag, ...]] = None
+
+    @property
+    def flags(self) -> tuple[IntFlag, ...]:
+        if self._flags is None:
+            raise RuntimeError("Failed to initialize module")
+        return self._flags
+
+    @flags.setter
+    def flags(self, flags: tuple[IntFlag, ...]) -> None:
+        if self._flags is not None:
+            raise RuntimeError("Flags already set; cannot be changed")
+        self._flags = flags
+
     def attach_all_hooks(
         self, *,
         forward: bool = True,

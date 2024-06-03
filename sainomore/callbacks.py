@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Sequence
+import json
 
 import lightning.pytorch as L
 import numpy as np
@@ -12,18 +13,20 @@ from torch.utils.data import DataLoader
 
 from .base import HookedModule
 from .elissabeth import Elissabeth
+from .lightning import SAILearningModule
 
 
 class GeneralConfigCallback(Callback):
 
-    def __init__(self, max_depth: int = 10) -> None:
+    def __init__(self, max_depth: int = 10, log_config: bool = True) -> None:
         super().__init__()
         self._max_depth = max_depth
+        self._log_config = log_config
 
     def on_train_start(
         self,
         trainer: L.Trainer,
-        pl_module: L.LightningModule,
+        pl_module: SAILearningModule,
     ) -> None:
         model_summary = summarize(pl_module, max_depth=self._max_depth)
 
@@ -33,6 +36,10 @@ class GeneralConfigCallback(Callback):
                 "trainable_parameters": model_summary.trainable_parameters,
                 "model_size": model_summary.model_size,
             })
+        if trainer.log_dir is None:
+            raise RuntimeError("log_dir of Trainer is None, aborting")
+        with open(Path(trainer.log_dir) / "config.json", "w") as f:
+            json.dump(pl_module.model.get_config(), f, indent=4)
 
 
 class WeightHistory(Callback):

@@ -29,6 +29,8 @@ class ElissabethConfig(BaseModel):
 
     output_vocab_size: int = -1
 
+    weighting: list[str] | None = None
+
     @validator("output_vocab_size", always=True)
     def val_output_size(cls, output_vocab_size, values: dict[str, Any]) -> int:
         if output_vocab_size == -1 and "input_vocab_size" in values:
@@ -122,11 +124,15 @@ class Elissabeth(SAINoMoreModule):
         model = cls(**config)
         weightings = []
         pos_encs = []
-        for flag in flags:
-            if isinstance(flag, PositionalEncoding):
-                pos_encs.extend(get_pe(flag))
-            if isinstance(flag, Weighting):
-                weightings.extend(get_weighting(flag))
+        model.flags = flags
+        if "weighting" in config:
+            weightings.extend(get_weighting(config["weighting"]))
+        else:
+            for flag in flags:
+                if isinstance(flag, PositionalEncoding):
+                    pos_encs.extend(get_pe(flag))
+                if isinstance(flag, Weighting):
+                    weightings.extend(get_weighting(flag))
         for layer in model.layers:
             for level in layer.levels:
                 for pe in pos_encs:
