@@ -139,9 +139,12 @@ class LISS(HookedModule):
             n_lengths = len(self.config("max_length"))
         else:
             raise KeyError("Length of iterated sum has to be specified")
-        self.W_O = nn.Parameter(torch.empty((
+        self.W_H = nn.Parameter(torch.empty((
             n_lengths,
             self.config("n_is"),
+        )))
+        nn.init.constant_(self.W_H, 1 / self.W_H.nelement())
+        self.W_O = nn.Parameter(torch.empty((
             self.config("d_values"),
             self.config("d_values") if self.config("values_2D") else 1,
             self.config("d_hidden"),
@@ -165,5 +168,6 @@ class LISS(HookedModule):
                 (result, self.levels[k](x).unsqueeze(0)),
                 dim=0,
             )
-        result = torch.einsum("phvwd,pbthvw->btd", self.W_O, result)
+        result = torch.einsum("ph,pbthvw->btvw", self.W_H, result)
+        result = torch.einsum("vwd,btvw->btd", self.W_O, result)
         return result

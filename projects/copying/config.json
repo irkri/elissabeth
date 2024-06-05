@@ -2,15 +2,15 @@
     "context_length" : null,
     "input_vocab_size" : null,
     "n_layers" : 1,
-    "d_hidden" : 16,
+    "d_hidden" : 10,
     "layer_norm" : true,
     "residual_stream": true,
 
-    "n_is" : 4,
+    "n_is" : 8,
     "lengths" : [1],
     "sum_normalization" : true,
 
-    "d_values" : 5,
+    "d_values" : 10,
     "values_2D" : false,
     "pe_value" : false,
     "v_activation": "relu",

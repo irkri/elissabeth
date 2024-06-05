@@ -11,6 +11,7 @@ def get_attention_matrices(
     layer: int = 0,
     length: int = 0,
     total: bool = False,
+    project_heads: bool = False,
 ) -> torch.Tensor:
     """Returns the attention matrices in an Elissabeth model generated
     by the input ``x``.
@@ -28,10 +29,15 @@ def get_attention_matrices(
             attention matrix for the whole iterated sum ``Att_{t_1,t}``
             by calculating the iterated sum of all weightings. Defaults
             to False.
+        project_heads (bool, optional): Whether the ``n_is`` iterated
+            sums of the model should be linearly projected using the
+            ``W_H`` matrix in the model. The result then is a tensor
+            with first dimension of size 1. Defaults to False.
 
     Returns:
         torch.Tensor: Attention matrix of shape
-            ``(n_is, length_is, T, T)``.
+            ``(n_is, length_is, T, T)`` or ``(1, length_is, T, T)`` if
+            ``project_heads`` is set to true.
     """
     for liss_layer in model.layers:
         for weighting in liss_layer.levels[length].weightings:
@@ -47,11 +53,18 @@ def get_attention_matrices(
         iss_length = model.layers[layer].config("lengths")[length]
     else:
         iss_length = length + 1
+
     N = model.layers[0].config("n_is")
     att_mat = torch.ones((N, iss_length, x.size(0), x.size(0)))
 
     for weighting in model.layers[layer].levels[length].weightings:
         att_mat[:, :, :, :] *= weighting.hooks.get("Att").fwd[0]
+    if project_heads:
+        att_mat = torch.tensordot(
+            model.layers[layer].W_H[length, :],
+            att_mat,
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
 
     if total:
         total_att = torch.zeros((N, x.size(0), x.size(0)))
@@ -64,7 +77,13 @@ def get_attention_matrices(
             mat = torch.clone(att_mat[:, :, p, :, :])
             mat[:, :, *ind] = 0
             total_att[:, :, :, :] = mat @ total_att
-        att_mat = torch.cat((att_mat, total_att.unsqueeze(2)), dim=2)
+        if project_heads:
+            total_att = torch.tensordot(
+                model.layers[layer].W_H[length, :],
+                total_att,
+                dims=([0], [0]),  # type: ignore
+            ).detach().unsqueeze(0)
+        att_mat = torch.cat((att_mat, total_att.unsqueeze(-3)), dim=-3)
 
     return att_mat
 

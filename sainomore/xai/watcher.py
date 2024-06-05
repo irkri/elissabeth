@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Literal, Optional, Self
+from collections.abc import Sequence
 
 import numpy as np
 import torch
@@ -61,6 +62,7 @@ class ElissabethWatcher:
         example: torch.Tensor,
         show_example: bool = True,
         total: bool = False,
+        project_heads: bool = False,
         layer: int = 0,
         length: int = 0,
         **kwargs,
@@ -71,6 +73,7 @@ class ElissabethWatcher:
             layer=layer,
             length=length,
             total=total,
+            project_heads=project_heads,
         )
         figatt, axatt = plot_attention_matrix(
             att_mat,
@@ -84,6 +87,7 @@ class ElissabethWatcher:
         self,
         name: str,
         reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         param = self.model.detach_sorted_parameter(name)
@@ -96,14 +100,16 @@ class ElissabethWatcher:
             param = param.squeeze()
             while param.ndim > 4:
                 param = param[0]
-        while param.ndim < 4:
-            param = param.unsqueeze(0)
-        if param.ndim > 4:
+        if isinstance(append_dims, Sequence):
+            for d in append_dims:
+                param.unsqueeze(d)
+        elif append_dims:
+            while param.ndim < 4:
+                param = param.unsqueeze(0)
+        if param.ndim != 4:
             raise IndexError(
                 f"Expected 4 dimensions of parameter {name!r}, "
-                f"but got {param.ndim}: {param.shape}. "
-                f"Either specify {param.ndim-4} dimensions in 'reduce_dims' "
-                "or set this option to 'True'."
+                f"but got {param.ndim}: {param.shape}."
             )
         return plot_parameter_matrix(param, **kwargs)
 

@@ -25,10 +25,10 @@ torch.set_float32_matmul_precision('high')
 SAVE_PATH: Optional[str] = None
 
 config = {
-    "n_samples": 500,
+    "n_samples": 1000,
     "context_length": 100,
-    "n_categories": 5,
-    "to_copy": 2,
+    "n_categories": 10,
+    "to_copy": 10,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
@@ -48,11 +48,7 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     )
     model_config["input_vocab_size"] = config["n_categories"]
 
-    model = Elissabeth.build(
-        model_config,
-        Weighting.MSC,
-        Weighting.ExponentialDecay,
-    )
+    model = Elissabeth.build(model_config)
     lightning_module = TokenPredictionModule(
         model,
         learning_rate=config["lr"],
@@ -109,38 +105,8 @@ def train(
         to_copy=config["to_copy"],
     )
     callbacks: list[Callback] = [
-        GeneralConfigCallback(max_depth=10),
+        GeneralConfigCallback(),
         ModelCheckpoint(monitor="validation/loss", mode="min"),
-        # WeightHistory((
-        #         "model.embedding.weight",
-        #         "model.unembedding.weight",
-        #         "model.layers.0.levels.0.P_V.transform.weight",
-        #         "model.layers.0.levels.0.P_V.transform.bias",
-        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.0.weight",
-        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.0.bias",
-        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.1.weight",
-        #         "model.layers.0.levels.0.weightings.0.P_Q.transform.1.bias",
-        #         "model.layers.0.levels.0.weightings.0.P_K.transform.0.weight",
-        #         "model.layers.0.levels.0.weightings.0.P_K.transform.0.bias",
-        #         "model.layers.0.levels.0.weightings.0.P_K.transform.1.weight",
-        #         "model.layers.0.levels.0.weightings.0.P_K.transform.1.bias",
-        #         ("model.layers.0.W_O", (2, 4)),
-        #     ),
-        #     each_n_epochs=100,
-        #     # save_path=".",
-        # ),
-        # ElissabethWeighting(
-        #     example,
-        #     each_n_epochs=100,
-        #     use_wandb=True,
-        #     # save_path=".",
-        # ),
-        # ElissabethISTracker(
-        #     example,
-        #     each_n_epochs=100,
-        #     use_wandb=True,
-        #     # save_path=".",
-        # ),
     ]
 
     trainer = L.Trainer(
