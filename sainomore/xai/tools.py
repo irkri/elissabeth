@@ -173,6 +173,7 @@ def get_iss(
     layer: int = 0,
     length: int = 0,
     project_heads: tuple[int, ...] | bool = False,
+    project_values: bool = False,
 ) -> torch.Tensor:
     """Extracts the hook 'iss' from an Elissabeth model. This only works
     for one dimensional values.
@@ -192,8 +193,8 @@ def get_iss(
     model.layers[layer].levels[length].hooks.get("iss").attach()
     model(x.to(next(model.parameters()).device).unsqueeze(0))
     model.layers[layer].levels[length].hooks.get("iss").release()
-    iss = model.layers[layer].levels[length].hooks.get("iss").fwd[0, ..., 0]
-    iss = torch.swapaxes(torch.swapaxes(iss, 0, 1), 1, 2)
+    iss = model.layers[layer].levels[length].hooks.get("iss").fwd[0, ...]
+    iss = torch.swapaxes(iss, 0, 1)
 
     if isinstance(project_heads, tuple):
         iss = torch.tensordot(
@@ -207,4 +208,9 @@ def get_iss(
             iss,
             dims=([0], [0]),  # type: ignore
         ).detach().unsqueeze(0)
-    return iss
+    if project_values:
+        iss = torch.einsum("vwd,ntvw->ntd", model.layers[layer].W_O, iss)
+        iss = iss.detach()
+    else:
+        iss = iss[..., 0]
+    return torch.swapaxes(iss, 1, 2)
