@@ -3,21 +3,29 @@ from typing import Optional
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from matplotlib.colors import LogNorm, Normalize
+from matplotlib.colors import CenteredNorm, LogNorm, Normalize
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-def _get_plot_cmap_norm(vmin: float, vmax: float, log: bool) -> Normalize:
+def _get_plot_cmap_norm(
+    vmin: float,
+    vmax: float,
+    log: bool,
+    center_zero: bool,
+) -> Normalize:
     if log and vmin > 0:
         return LogNorm(vmin=vmin, vmax=vmax)
     else:
+        if center_zero:
+            return CenteredNorm(vcenter=0)
         return Normalize(vmin=vmin, vmax=vmax)
 
 
 def plot_parameter_matrix(
     parameter: torch.Tensor,
     cmap: str = "seismic",
+    center_zero: bool = True,
     log_cmap: bool = False,
     share_cmap: bool = True,
     **kwargs,
@@ -43,7 +51,7 @@ def plot_parameter_matrix(
             content[-1].append(ax[l, d].matshow(
                 parameter[l, d],
                 cmap=cmap,
-                norm=_get_plot_cmap_norm(min_, max_, log_cmap),
+                norm=_get_plot_cmap_norm(min_, max_, log_cmap, center_zero),
             ))
             ax[l, d].tick_params(
                 top=False, left=False, bottom=False, right=False,
@@ -68,6 +76,7 @@ def plot_attention_matrix(
     example: Optional[torch.Tensor] = None,
     contains_total: bool = False,
     cmap: str = "seismic",
+    center_zero: bool = False,
     cmap_example: str = "Set1",
     causal_mask: bool = True,
     log_cmap: bool = False,
@@ -86,6 +95,8 @@ def plot_attention_matrix(
             weighting of the iterated sum. Defaults to False.
         cmap (str, optional): Colormap for the attention matrix.
             Defaults to "seismic".
+        center_zero (bool, optional): Whether to center the colormap
+            such that zero has color white. Defaults to False.
         cmap_example (str, optional): Colormap for the example that is
             plotted besides the matrix plot. Defaults to "Set1".
         causal_mask (bool, optional): Whether to automatically set a
@@ -134,7 +145,7 @@ def plot_attention_matrix(
             content[-1].append(ax[l, d].matshow(
                 matrix[l, d],
                 cmap=cmap,
-                norm=_get_plot_cmap_norm(min_, max_, log_cmap),
+                norm=_get_plot_cmap_norm(min_, max_, log_cmap, center_zero),
             ))
             ax[l, d].tick_params(
                 top=False, left=False, bottom=False, right=False,

@@ -1,9 +1,9 @@
+from typing import Literal, Optional
+
 import torch
 from torch import nn
 
-from typing import Optional, Literal
-
-from ..base import HookedModule, BaseModel
+from ..base import BaseModel, HookedModule
 
 
 class Sin(nn.Module):
@@ -142,7 +142,7 @@ class VGen(HookedModule):
             torch.nn.init.xavier_normal_(self.transform[2].weight)
             torch.nn.init.zeros_(self.transform[2].bias)
         if self.config("v_norm"):
-            self.norm = torch.nn.LayerNorm(out)
+            self.norm = torch.nn.LayerNorm([self._shape[-2], self._shape[-1]])
         else:
             self.norm = torch.nn.Identity()
 
@@ -155,5 +155,5 @@ class VGen(HookedModule):
             T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
         return self.norm(
-            self.transform(y)
-        ).reshape(*x.shape[:-1], *self._shape)
+            self.transform(y).reshape(*x.shape[:-1], *self._shape)
+        )

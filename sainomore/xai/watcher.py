@@ -1,7 +1,7 @@
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, Optional, Self
-from collections.abc import Sequence
 
 import numpy as np
 import torch
@@ -10,7 +10,8 @@ from matplotlib.figure import Figure
 from ..elissabeth.elissabeth import Elissabeth
 from .plotting import (plot_attention_matrix, plot_parameter_matrix,
                        plot_qkv_probing)
-from .tools import get_attention_matrices, probe_qkv_transform
+from .tools import (get_attention_matrices, get_iss, probe_qkv_transform,
+                    reduce_append_dims)
 
 
 class ElissabethWatcher:
@@ -61,8 +62,9 @@ class ElissabethWatcher:
         self,
         example: torch.Tensor,
         show_example: bool = True,
+        only_kernels: Optional[tuple[int, ...]] = None,
         total: bool = False,
-        project_heads: bool = False,
+        project_heads: tuple[int, ...] | bool = False,
         layer: int = 0,
         length: int = 0,
         **kwargs,
@@ -72,6 +74,7 @@ class ElissabethWatcher:
             example,
             layer=layer,
             length=length,
+            only_kernels=only_kernels,
             total=total,
             project_heads=project_heads,
         )
@@ -91,26 +94,7 @@ class ElissabethWatcher:
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         param = self.model.detach_sorted_parameter(name)
-        if isinstance(reduce_dims, dict):
-            reduce_dims = dict(sorted(reduce_dims.items()))
-            for d, i in reduce_dims.items():
-                param = torch.index_select(param, dim=d, index=torch.tensor(i))
-                param = param.squeeze(d)
-        elif reduce_dims:
-            param = param.squeeze()
-            while param.ndim > 4:
-                param = param[0]
-        if isinstance(append_dims, Sequence):
-            for d in append_dims:
-                param.unsqueeze(d)
-        elif append_dims:
-            while param.ndim < 4:
-                param = param.unsqueeze(0)
-        if param.ndim != 4:
-            raise IndexError(
-                f"Expected 4 dimensions of parameter {name!r}, "
-                f"but got {param.ndim}: {param.shape}."
-            )
+        param = reduce_append_dims(param, 4, reduce_dims, append_dims)
         return plot_parameter_matrix(param, **kwargs)
 
     def plot_qkv_probing(
@@ -126,3 +110,17 @@ class ElissabethWatcher:
     ) ->  tuple[Figure, list[list[np.ndarray]]]:
         prb = probe_qkv_transform(self.model, which, layer, length, weighting)
         return plot_qkv_probing(prb, norm_p, sharey, cmap, **kwargs)
+
+    def plot_iss(
+        self,
+        x: torch.Tensor,
+        layer: int = 0,
+        length: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        iss = get_iss(self.model, x, layer, length, project_heads)
+        iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
+        return plot_parameter_matrix(iss, **kwargs)

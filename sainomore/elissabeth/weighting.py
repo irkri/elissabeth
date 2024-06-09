@@ -625,7 +625,7 @@ class MSC(_Weighting):
                     dim=-1,
                 )
                 att_mat[:, :, l] *= torch.prod(
-                    torch.cos(K_[..., 1::2]).moveaxis(3, 1),
+                    torch.cos(K_[..., 0::2]).moveaxis(3, 1),
                     dim=-1,
                 )
                 att_mat[:, :, l] *= torch.prod(

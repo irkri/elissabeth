@@ -8,8 +8,8 @@ from torch import nn
 
 from ..base import HookedModule
 from ..positional import _PositionalEncoding
-from .weighting import _Weighting
 from .qkv import VGen
+from .weighting import _Weighting
 
 
 class LISSLevelConfig(BaseModel):
@@ -125,7 +125,7 @@ class LISS(HookedModule):
     "Learnable Iterated Sums Signature"
 
     _config_class = LISSConfig
-    parameter_sorting = {"W_O": (0, 1, 4, 2, 3)}
+    parameter_sorting = {"W_O": (2, 0, 1)}
 
     def __init__(
         self,
