@@ -186,9 +186,19 @@ def get_iss(
             to 0.
         length (int, optional): The index of the iss length to use.
             Defaults to 0.
+        project_heads (tuple of int | bool, optional): Whether the
+            ``n_is`` iterated sums of the model should be linearly
+            projected using the ``W_H`` matrix in the model. The result
+            then is a tensor with first dimension of size 1. If a tuple
+            of indices is given, only these iterated sums are
+            considered. Defaults to False.
+        project_values (bool, optional): Whether the values should be
+            projected to the hidden dimension using the parameters
+            ``W_O`` in the model. The result then is a tensor with
+            ``d_v`` replaced to ``d_hidden``. Defaults to False.
 
     Returns:
-        torch.Tensor: Tensor of shape ``(n_is, T, d_v)``.
+        torch.Tensor: Tensor of shape ``(n_is, d_v, T)``.
     """
     model.layers[layer].levels[length].hooks.get("iss").attach()
     model(x.to(next(model.parameters()).device).unsqueeze(0))
@@ -213,4 +223,63 @@ def get_iss(
         iss = iss.detach()
     else:
         iss = iss[..., 0]
-    return torch.swapaxes(iss, 1, 2)
+    return torch.swapaxes(iss, -1, -2)
+
+
+def get_values(
+    model: Elissabeth,
+    x: torch.Tensor,
+    layer: int = 0,
+    length: int = 0,
+    project_heads: tuple[int, ...] | bool = False,
+    project_values: bool = False,
+) -> torch.Tensor:
+    """Extracts the values hook 'V' from an Elissabeth model. This only
+    works for one dimensional values.
+
+    Args:
+        model (Elissabeth): Model to extract the values from.
+        x (torch.Tensor): Example tensor for which the model calculates
+            an output.
+        layer (int, optional): The index of the layer to use. Defaults
+            to 0.
+        length (int, optional): The index of the iss length to use.
+            Defaults to 0.
+        project_heads (tuple of int | bool, optional): Whether the
+            ``n_is`` iterated sums of the model should be linearly
+            projected using the ``W_H`` matrix in the model. The result
+            then is a tensor with first dimension of size 1. If a tuple
+            of indices is given, only these iterated sums are
+            considered. Defaults to False.
+        project_values (bool, optional): Whether the values should be
+            projected to the hidden dimension using the parameters
+            ``W_O`` in the model. The result then is a tensor with
+            ``d_v`` replaced to ``d_hidden``. Defaults to False.
+
+    Returns:
+        torch.Tensor: Tensor of shape ``(n_is, p, d_v, T)``.
+    """
+    model.layers[layer].levels[length].hooks.get("V").attach()
+    model(x.to(next(model.parameters()).device).unsqueeze(0))
+    model.layers[layer].levels[length].hooks.get("V").release()
+    v = model.layers[layer].levels[length].hooks.get("V").fwd[0, ...]
+    v = torch.swapaxes(torch.swapaxes(v, 0, 1), 1, 2)
+
+    if isinstance(project_heads, tuple):
+        v = torch.tensordot(
+            model.layers[layer].W_H[length, project_heads],
+            v[project_heads, ...],
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+    elif project_heads:
+        v = torch.tensordot(
+            model.layers[layer].W_H[length, :],
+            v,
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+    if project_values:
+        v = torch.einsum("vwd,nptvw->nptd", model.layers[layer].W_O, v)
+        v = v.detach()
+    else:
+        v = v[..., 0]
+    return torch.swapaxes(v, -1, -2)

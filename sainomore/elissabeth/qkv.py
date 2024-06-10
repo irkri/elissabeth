@@ -87,6 +87,7 @@ class VGenConfig(BaseModel):
     v_latent: Optional[int] = None
     v_include_time: bool = False
     v_norm: bool = True
+    v_shared: bool = False
 
 
 class VGen(HookedModule):
@@ -108,13 +109,13 @@ class VGen(HookedModule):
             self.register_buffer("T", indices)
 
         self._shape = (
-            self.config("n_is"),
+            (self.config("n_is") if not self.config("v_shared") else 1),
             self.config("length_is"),
             self.config("d_values"),
             self.config("d_values") if self.config("values_2D") else 1,
         )
         out = (
-            self.config("n_is")
+            (self.config("n_is") if not self.config("v_shared") else 1)
             * self.config("length_is")
             * self.config("d_values")
             * (self.config("d_values") if self.config("values_2D") else 1)
@@ -154,6 +155,9 @@ class VGen(HookedModule):
                 T = T.unsqueeze(0)
             T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
-        return self.norm(
-            self.transform(y).reshape(*x.shape[:-1], *self._shape)
-        )
+        V = self.transform(y).reshape(*x.shape[:-1], *self._shape)
+        if self.config("v_shared"):
+            V = V.repeat(
+                *((1, )*len(x.shape[:-1])), self.config("n_is"), 1, 1, 1,
+            )
+        return self.norm(V)

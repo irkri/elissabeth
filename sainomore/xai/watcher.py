@@ -9,9 +9,9 @@ from matplotlib.figure import Figure
 
 from ..elissabeth.elissabeth import Elissabeth
 from .plotting import (plot_attention_matrix, plot_parameter_matrix,
-                       plot_qkv_probing)
-from .tools import (get_attention_matrices, get_iss, probe_qkv_transform,
-                    reduce_append_dims)
+                       plot_qkv_probing, plot_time_parameters)
+from .tools import (get_attention_matrices, get_iss, get_values,
+                    probe_qkv_transform, reduce_append_dims)
 
 
 class ElissabethWatcher:
@@ -132,3 +132,47 @@ class ElissabethWatcher:
         )
         iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
         return plot_parameter_matrix(iss, **kwargs)
+
+    def plot_iss_time(
+        self,
+        x: torch.Tensor,
+        layer: int = 0,
+        length: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        project_values: bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        iss = get_iss(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            project_heads=project_heads,
+            project_values=project_values,
+        )
+        iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
+        return plot_time_parameters(iss, **kwargs)
+
+    def plot_values(
+        self,
+        x: torch.Tensor,
+        layer: int = 0,
+        length: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        project_values: bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        v = get_values(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            project_heads=project_heads,
+            project_values=project_values,
+        )
+        v = reduce_append_dims(v, 4, reduce_dims, append_dims)
+        return plot_parameter_matrix(v, **kwargs)

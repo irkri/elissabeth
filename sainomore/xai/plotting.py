@@ -71,6 +71,35 @@ def plot_parameter_matrix(
     return fig, ax
 
 
+def plot_time_parameters(
+    parameter: torch.Tensor,
+    cmap: str = "tab20",
+    **kwargs,
+) -> tuple[Figure, np.ndarray]:
+    parameter = torch.clone(parameter)
+    rows, cols, *_ = parameter.shape
+
+    fig, ax = plt.subplots(rows, cols, **kwargs)
+    if rows == 1:
+        ax = np.array([ax])
+    if cols == 1:
+        ax = np.array(ax)[:, np.newaxis]
+
+    colors = plt.get_cmap(cmap)
+    for l in range(rows):
+        for d in range(cols):
+            for j in range(parameter.size(2)):
+                ax[l, d].plot(
+                    parameter[l, d, j],
+                    label=f"{j}" if l == 0 and d == 0 else None,
+                    color=colors(j),
+                )
+
+    fig.tight_layout()
+    fig.legend(title="Dimension")
+    return fig, ax
+
+
 def plot_attention_matrix(
     matrix: torch.Tensor,
     example: Optional[torch.Tensor] = None,
