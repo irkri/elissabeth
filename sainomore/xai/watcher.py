@@ -10,7 +10,7 @@ from matplotlib.figure import Figure
 from ..elissabeth.elissabeth import Elissabeth
 from .plotting import (plot_attention_matrix, plot_parameter_matrix,
                        plot_qkv_probing, plot_time_parameters)
-from .tools import (get_attention_matrices, get_iss, get_values,
+from .tools import (get_attention_matrices, get_iss, get_query_key, get_values,
                     probe_qkv_transform, reduce_append_dims)
 
 
@@ -106,9 +106,12 @@ class ElissabethWatcher:
         norm_p: float | str = "fro",
         sharey: bool = True,
         cmap: str = "tab20",
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
         **kwargs,
     ) ->  tuple[Figure, list[list[np.ndarray]]]:
         prb = probe_qkv_transform(self.model, which, layer, length, weighting)
+        prb = reduce_append_dims(prb, None, reduce_dims, append_dims)
         return plot_qkv_probing(prb, norm_p, sharey, cmap, **kwargs)
 
     def plot_iss(
@@ -136,6 +139,7 @@ class ElissabethWatcher:
     def plot_iss_time(
         self,
         x: torch.Tensor,
+        x_axis: Optional[torch.Tensor] = None,
         layer: int = 0,
         length: int = 0,
         project_heads: tuple[int, ...] | bool = False,
@@ -153,7 +157,7 @@ class ElissabethWatcher:
             project_values=project_values,
         )
         iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
-        return plot_time_parameters(iss, **kwargs)
+        return plot_time_parameters(iss, x_axis=x_axis, **kwargs)
 
     def plot_values(
         self,
@@ -176,3 +180,78 @@ class ElissabethWatcher:
         )
         v = reduce_append_dims(v, 4, reduce_dims, append_dims)
         return plot_parameter_matrix(v, **kwargs)
+
+    def plot_values_time(
+        self,
+        x: torch.Tensor,
+        x_axis: Optional[torch.Tensor] = None,
+        layer: int = 0,
+        length: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        project_values: bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        v = get_values(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            project_heads=project_heads,
+            project_values=project_values,
+        )
+        v = reduce_append_dims(v, 4, reduce_dims, append_dims)
+        return plot_time_parameters(v, x_axis, **kwargs)
+
+    def plot_query_key(
+        self,
+        x: torch.Tensor,
+        which: Literal["Q", "K"],
+        layer: int = 0,
+        length: int = 0,
+        weighting: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        q, k = get_query_key(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            weighting=weighting,
+            project_heads=project_heads,
+        )
+        if which == "Q":
+            q = reduce_append_dims(q, 4, reduce_dims, append_dims)
+            return plot_parameter_matrix(q, **kwargs)
+        elif which == "K":
+            k = reduce_append_dims(k, 4, reduce_dims, append_dims)
+            return plot_parameter_matrix(k, **kwargs)
+
+    def plot_query_key_time(
+        self,
+        x: torch.Tensor,
+        x_axis: Optional[torch.Tensor] = None,
+        layer: int = 0,
+        length: int = 0,
+        weighting: int = 0,
+        names: Optional[tuple[str, ...]] = None,
+        project_heads: tuple[int, ...] | bool = False,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        q, k = get_query_key(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            weighting=weighting,
+            project_heads=project_heads,
+        )
+        q = reduce_append_dims(q, 4, reduce_dims, append_dims)
+        k = reduce_append_dims(k, 4, reduce_dims, append_dims)
+        return plot_time_parameters((q, k), x_axis, names=names, **kwargs)

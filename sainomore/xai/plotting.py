@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from matplotlib.colors import CenteredNorm, LogNorm, Normalize
+from matplotlib.colors import CenteredNorm, LogNorm, Normalize, SymLogNorm
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -11,22 +11,24 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 def _get_plot_cmap_norm(
     vmin: float,
     vmax: float,
-    log: bool,
+    log: bool | tuple[float, float],
     center_zero: bool,
 ) -> Normalize:
-    if log and vmin > 0:
-        return LogNorm(vmin=vmin, vmax=vmax)
-    else:
-        if center_zero:
-            return CenteredNorm(vcenter=0)
-        return Normalize(vmin=vmin, vmax=vmax)
+    if log:
+        if isinstance(log, tuple):
+            return SymLogNorm(log[0], log[1], vmin=vmin, vmax=vmax)
+        if vmin > 0:
+            return LogNorm(vmin=vmin, vmax=vmax)
+    if center_zero:
+        return CenteredNorm(vcenter=0)
+    return Normalize(vmin=vmin, vmax=vmax)
 
 
 def plot_parameter_matrix(
     parameter: torch.Tensor,
     cmap: str = "seismic",
     center_zero: bool = True,
-    log_cmap: bool = False,
+    log_cmap: bool | tuple[float, float] = False,
     share_cmap: bool = True,
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
@@ -72,12 +74,20 @@ def plot_parameter_matrix(
 
 
 def plot_time_parameters(
-    parameter: torch.Tensor,
+    parameter: torch.Tensor | tuple[torch.Tensor, ...],
+    x_axis: Optional[torch.Tensor] = None,
+    names: Optional[tuple[str, ...]] = None,
     cmap: str = "tab20",
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
-    parameter = torch.clone(parameter)
-    rows, cols, *_ = parameter.shape
+    if isinstance(parameter, tuple):
+        parameter = tuple(torch.clone(p) for p in parameter)
+        rows, cols, *_ = parameter[0].shape
+        dims = parameter[0].size(2)
+    else:
+        parameter = torch.clone(parameter)
+        rows, cols, *_ = parameter.shape
+        dims = parameter.size(2)
 
     fig, ax = plt.subplots(rows, cols, **kwargs)
     if rows == 1:
@@ -88,12 +98,28 @@ def plot_time_parameters(
     colors = plt.get_cmap(cmap)
     for l in range(rows):
         for d in range(cols):
-            for j in range(parameter.size(2)):
-                ax[l, d].plot(
-                    parameter[l, d, j],
-                    label=f"{j}" if l == 0 and d == 0 else None,
-                    color=colors(j),
-                )
+            for j in range(dims):
+                if isinstance(parameter, tuple):
+                    for i, p in enumerate(parameter):
+                        if names is not None:
+                            label = f"{names[i]} {j}"
+                        else:
+                            label = f"{j}"
+                        ax[l, d].plot(
+                            p[l, d, j],
+                            label=label if l == 0 and d == 0 else None,
+                            color=colors(j),
+                            ls="--" if i % 2 == 0 else "-",
+                        )
+                else:
+                    ax[l, d].plot(
+                        parameter[l, d, j],
+                        label=f"{j}" if l == 0 and d == 0 else None,
+                        color=colors(j),
+                    )
+                if x_axis is not None:
+                    ax[l, d].set_xticks(np.arange(len(x_axis)))
+                    ax[l, d].set_xticklabels(x_axis.numpy())
 
     fig.tight_layout()
     fig.legend(title="Dimension")
@@ -108,7 +134,7 @@ def plot_attention_matrix(
     center_zero: bool = False,
     cmap_example: str = "Set1",
     causal_mask: bool = True,
-    log_cmap: bool = False,
+    log_cmap: bool | tuple[float, float] = False,
     share_cmap: bool = True,
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
@@ -131,7 +157,11 @@ def plot_attention_matrix(
         causal_mask (bool, optional): Whether to automatically set a
             causal mask for the attention matrix. Defaults to True.
         log_map (bool, optional): Whether to scale the colormap for
-            the attention matrix logarithmically. Defaults to False.
+            the attention matrix logarithmically. If a tuple of two
+            floats is given, these are the arguments for matplotlibs
+            ``SymLogNorm`` ``linthresh`` and ``linscale``. This is
+            useful for inputs containing negative numbers. Defaults to
+            False.
         share_map (bool, optional): Whether to share the colormap across
             different attention matrices in the same layer. Defaults
             to True.

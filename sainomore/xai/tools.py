@@ -8,7 +8,7 @@ from ..elissabeth import Elissabeth
 
 def reduce_append_dims(
     tensor: torch.Tensor,
-    expect: int,
+    expect: Optional[int] = None,
     reduce_dims: dict[int, int] | bool = False,
     append_dims: Sequence[int] | bool = True,
 ) -> torch.Tensor:
@@ -27,7 +27,7 @@ def reduce_append_dims(
     elif append_dims:
         while tensor.ndim < 4:
             tensor = tensor.unsqueeze(0)
-    if tensor.ndim != expect:
+    if expect is not None and tensor.ndim != expect:
         raise IndexError(
             f"Expected {expect} dimensions of tensor, "
             f"but got {tensor.ndim}: {tensor.shape}."
@@ -224,6 +224,73 @@ def get_iss(
     else:
         iss = iss[..., 0]
     return torch.swapaxes(iss, -1, -2)
+
+
+def get_query_key(
+    model: Elissabeth,
+    x: torch.Tensor,
+    layer: int = 0,
+    length: int = 0,
+    weighting: int = 0,
+    project_heads: tuple[int, ...] | bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extracts the query and key hooks from an Elissabeth model.
+
+    Args:
+        model (Elissabeth): Model to extract the hooks from.
+        x (torch.Tensor): Example tensor for which the model calculates
+        which ("Q" or "K"): Extract either queries "Q" or keys "K".
+        layer (int, optional): The index of the layer to use. Defaults
+            to 0.
+        length (int, optional): The index of the iss length to use.
+            Defaults to 0.
+        weighting (int, optional): The index of the kernel to extract
+            query and key from. Defaults to 0.
+        project_heads (tuple of int | bool, optional): Whether the
+            ``n_is`` iterated sums of the model should be linearly
+            projected using the ``W_H`` matrix in the model. The result
+            then is a tensor with first dimension of size 1. If a tuple
+            of indices is given, only these iterated sums are
+            considered. Defaults to False.
+
+    Returns:
+        tuple of torch.Tensor: Two tensors of shape
+            ``(n_is, p, d_qk, T)``.
+    """
+    kernel = model.layers[layer].levels[length].weightings[weighting]
+    kernel.hooks.get("Q").attach()
+    kernel.hooks.get("K").attach()
+    model(x.to(next(model.parameters()).device).unsqueeze(0))
+    kernel.hooks.get("Q").release()
+    kernel.hooks.get("K").release()
+    q = kernel.hooks.get("Q").fwd[0, ...]
+    k = kernel.hooks.get("K").fwd[0, ...]
+    q = torch.swapaxes(torch.swapaxes(q, 0, 1), 1, 2)
+    k = torch.swapaxes(torch.swapaxes(k, 0, 1), 1, 2)
+
+    if isinstance(project_heads, tuple):
+        q = torch.tensordot(
+            model.layers[layer].W_H[length, project_heads],
+            q[project_heads, ...],
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+        k = torch.tensordot(
+            model.layers[layer].W_H[length, project_heads],
+            k[project_heads, ...],
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+    elif project_heads:
+        q = torch.tensordot(
+            model.layers[layer].W_H[length, :],
+            q,
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+        k = torch.tensordot(
+            model.layers[layer].W_H[length, :],
+            k,
+            dims=([0], [0]),  # type: ignore
+        ).detach().unsqueeze(0)
+    return (torch.swapaxes(q, -1, -2), torch.swapaxes(k, -1, -2))
 
 
 def get_values(
