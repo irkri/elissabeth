@@ -8,10 +8,12 @@ import torch
 from matplotlib.figure import Figure
 
 from ..elissabeth.elissabeth import Elissabeth
-from .plotting import (plot_attention_matrix, plot_parameter_matrix,
-                       plot_qkv_probing, plot_time_parameters)
-from .tools import (get_attention_matrices, get_iss, get_query_key, get_values,
-                    probe_qkv_transform, reduce_append_dims)
+from .plotting import (plot_alphabet_projection, plot_attention_matrix,
+                       plot_parameter_matrix, plot_qkv_probing,
+                       plot_time_parameters)
+from .tools import (get_alphabet_projection, get_attention_matrices, get_iss,
+                    get_query_key, get_values, probe_qkv_transform,
+                    reduce_append_dims)
 
 
 class ElissabethWatcher:
@@ -255,3 +257,48 @@ class ElissabethWatcher:
         q = reduce_append_dims(q, 4, reduce_dims, append_dims)
         k = reduce_append_dims(k, 4, reduce_dims, append_dims)
         return plot_time_parameters((q, k), x_axis, names=names, **kwargs)
+
+    def plot_alphabet_projection(
+        self,
+        layer: int = 0,
+        length: int = 0,
+        weighting: int = 0,
+        n: int = 0,
+        p: int = 0,
+        q: bool = True,
+        k: bool = True,
+        v: bool = True,
+        transpose: bool = True,
+        annotate_axes: bool = True,
+        **kwargs,
+    ) -> tuple[Figure, np.ndarray]:
+        qkv = get_alphabet_projection(
+            self.model,
+            layer=layer,
+            length=length,
+            weighting=weighting,
+            n=n,
+            p=p,
+        )
+        qkvnew = ()
+        labels = []
+        if q:
+            qkvnew = qkvnew + (qkv[0], )
+            labels.append("Q")
+        if k:
+            qkvnew = qkvnew + (qkv[1], )
+            labels.append("K")
+        if v:
+            qkvnew = qkvnew + (qkv[2], )
+            labels.append("V")
+        fig, ax = plot_alphabet_projection(
+            qkvnew,
+            transpose=transpose,
+            **kwargs,
+        )
+        if annotate_axes:
+            for i, axis in enumerate(ax[:, 0]):
+                axis.set_ylabel(f"{i}" if transpose else f"{labels[i]}")
+            for i, axis in enumerate(ax[0, :]):
+                axis.set_title(f"{labels[i]}" if transpose else f"{i}")
+        return fig, ax

@@ -350,3 +350,30 @@ def get_values(
     else:
         v = v[..., 0]
     return torch.swapaxes(v, -1, -2)
+
+
+def get_alphabet_projection(
+    model: Elissabeth,
+    layer: int = 0,
+    length: int = 0,
+    weighting: int = 0,
+    n: int = 0,
+    p: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    x = torch.arange(model.config("input_vocab_size"))
+    x = x.unsqueeze(1).repeat(1, model.config("context_length"))
+    kernel = model.layers[layer].levels[length].weightings[weighting]
+    model.layers[layer].levels[length].hooks.get("V").attach()
+    kernel.hooks.get("Q").attach()
+    kernel.hooks.get("K").attach()
+    model(x.to(next(model.parameters()).device))
+    model.layers[layer].levels[length].hooks.get("V").release()
+    kernel.hooks.get("Q").release()
+    kernel.hooks.get("K").release()
+    q = kernel.hooks.get("Q").fwd[..., n, p, :]
+    k = kernel.hooks.get("K").fwd[..., n, p, :]
+    v = model.layers[layer].levels[length].hooks.get("V").fwd[..., n, p, :, 0]
+    q = torch.swapaxes(q, 1, 2)
+    k = torch.swapaxes(k, 1, 2)
+    v = torch.swapaxes(v, 1, 2)
+    return q, k, v

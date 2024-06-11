@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Optional
 
 import numpy as np
@@ -25,15 +26,23 @@ def _get_plot_cmap_norm(
 
 
 def plot_parameter_matrix(
-    parameter: torch.Tensor,
+    parameter: torch.Tensor | Sequence[Sequence[torch.Tensor]] |
+        Sequence[torch.Tensor],
     cmap: str = "seismic",
     center_zero: bool = True,
     log_cmap: bool | tuple[float, float] = False,
     share_cmap: bool = True,
     **kwargs,
 ) -> tuple[Figure, np.ndarray]:
-    parameter = torch.clone(parameter)
-    rows, cols, *_ = parameter.shape
+    if isinstance(parameter, Sequence):
+        parameter = [
+            [torch.clone(param) for param in parameter[i]]
+            for i in range(len(parameter))
+        ]
+        rows, cols = len(parameter), len(parameter[0])
+    else:
+        parameter = torch.clone(parameter)
+        rows, cols, *_ = parameter.shape
 
     fig, ax = plt.subplots(rows, cols, **kwargs)
     if rows == 1:
@@ -44,14 +53,15 @@ def plot_parameter_matrix(
     content = []
     for l in range(rows):
         content.append([])
-        max_ = np.nanmax(parameter[l])
-        min_ = np.nanmin(parameter[l])
+        if share_cmap:
+            max_ = np.nanmax(parameter[l])
+            min_ = np.nanmin(parameter[l])
         for d in range(cols):
             if not share_cmap:
-                max_ = np.nanmax(parameter[l, d])
-                min_ = np.nanmin(parameter[l, d])
+                max_ = np.nanmax(parameter[l][d])
+                min_ = np.nanmin(parameter[l][d])
             content[-1].append(ax[l, d].matshow(
-                parameter[l, d],
+                parameter[l][d],
                 cmap=cmap,
                 norm=_get_plot_cmap_norm(min_, max_, log_cmap, center_zero),
             ))
@@ -323,4 +333,29 @@ def plot_qkv_probing(
                     ax[-1][-1][i].set_xticklabels([])
             if n == 0 and p == lengths - 1:
                 subfigs[n, p].legend(title="Dimension")
+    return fig, ax
+
+
+def plot_alphabet_projection(
+    qkv: tuple[torch.Tensor, ...],
+    transpose: bool = True,
+    cmap: str = "seismic",
+    center_zero: bool = True,
+    log_cmap: bool | tuple[float, float] = False,
+    share_cmap: bool = False,
+    **kwargs,
+) -> tuple[Figure, np.ndarray]:
+    if transpose:
+        qkvT = [
+            [qkv[i][j] for i in range(len(qkv))]
+            for j in range(qkv[0].shape[0])
+        ]
+    fig, ax = plot_parameter_matrix(
+        qkvT if transpose else qkv,
+        cmap=cmap,
+        center_zero=center_zero,
+        log_cmap=log_cmap,
+        share_cmap=share_cmap,
+        **kwargs,
+    )
     return fig, ax
