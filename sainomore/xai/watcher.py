@@ -268,6 +268,7 @@ class ElissabethWatcher:
         q: bool = True,
         k: bool = True,
         v: bool = True,
+        tokens: Optional[torch.Tensor] = None,
         transpose: bool = True,
         annotate_axes: bool = True,
         **kwargs,
@@ -279,26 +280,32 @@ class ElissabethWatcher:
             weighting=weighting,
             n=n,
             p=p,
+            q=q,
+            k=k,
+            v=v,
+            tokens=tokens,
         )
-        qkvnew = ()
         labels = []
         if q:
-            qkvnew = qkvnew + (qkv[0], )
             labels.append("Q")
         if k:
-            qkvnew = qkvnew + (qkv[1], )
             labels.append("K")
         if v:
-            qkvnew = qkvnew + (qkv[2], )
             labels.append("V")
         fig, ax = plot_alphabet_projection(
-            qkvnew,
+            qkv,
             transpose=transpose,
             **kwargs,
         )
         if annotate_axes:
             for i, axis in enumerate(ax[:, 0]):
-                axis.set_ylabel(f"{i}" if transpose else f"{labels[i]}")
+                axis.set_ylabel(
+                    f"{tokens[i] if tokens is not None else i}"
+                    if transpose else f"{labels[i]}"
+                )
             for i, axis in enumerate(ax[0, :]):
-                axis.set_title(f"{labels[i]}" if transpose else f"{i}")
+                axis.set_title(
+                    f"{labels[i]}" if transpose else
+                    f"{tokens[i] if tokens is not None else i}"
+                )
         return fig, ax

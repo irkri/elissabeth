@@ -359,21 +359,41 @@ def get_alphabet_projection(
     weighting: int = 0,
     n: int = 0,
     p: int = 0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    x = torch.arange(model.config("input_vocab_size"))
+    q: bool = True,
+    k: bool = True,
+    v: bool = True,
+    tokens: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, ...]:
+    if tokens is None:
+        x = torch.arange(model.config("input_vocab_size"))
+    else:
+        x = tokens.clone()
     x = x.unsqueeze(1).repeat(1, model.config("context_length"))
-    kernel = model.layers[layer].levels[length].weightings[weighting]
-    model.layers[layer].levels[length].hooks.get("V").attach()
-    kernel.hooks.get("Q").attach()
-    kernel.hooks.get("K").attach()
+    if q or k:
+        kernel = model.layers[layer].levels[length].weightings[weighting]
+    if q:
+        kernel.hooks.get("Q").attach()
+    if k:
+        kernel.hooks.get("K").attach()
+    if v:
+        model.layers[layer].levels[length].hooks.get("V").attach()
     model(x.to(next(model.parameters()).device))
-    model.layers[layer].levels[length].hooks.get("V").release()
-    kernel.hooks.get("Q").release()
-    kernel.hooks.get("K").release()
-    q = kernel.hooks.get("Q").fwd[..., n, p, :]
-    k = kernel.hooks.get("K").fwd[..., n, p, :]
-    v = model.layers[layer].levels[length].hooks.get("V").fwd[..., n, p, :, 0]
-    q = torch.swapaxes(q, 1, 2)
-    k = torch.swapaxes(k, 1, 2)
-    v = torch.swapaxes(v, 1, 2)
-    return q, k, v
+    result = ()
+    if q:
+        kernel.hooks.get("Q").release()
+        qt = kernel.hooks.get("Q").fwd[..., n, p, :]
+        qt = torch.swapaxes(qt, 1, 2)
+        result += (qt, )
+    if k:
+        kernel.hooks.get("K").release()
+        kt = kernel.hooks.get("K").fwd[..., n, p, :]
+        kt = torch.swapaxes(kt, 1, 2)
+        result += (kt, )
+    if v:
+        model.layers[layer].levels[length].hooks.get("V").release()
+        vt = model.layers[layer].levels[length].hooks.get("V").fwd[
+            ..., n, p, :, 0,
+        ]
+        vt = torch.swapaxes(vt, 1, 2)
+        result += (vt, )
+    return result
