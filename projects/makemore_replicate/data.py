@@ -53,9 +53,12 @@ class LetterAssembler:
         index = index[1] if len(index) > 1 else tensor.size(0)
         return "".join([self.itos[int(i)] for i in tensor[1:index]])
 
-    def to_tensor(self, word: str) -> torch.Tensor:
+    def to_tensor(self, word: str, fill: bool = True) -> torch.Tensor:
         numerical = [self.stoi[c] for c in word]
-        numerical += [self.stoi[" "]] * (self.context_length - len(numerical))
+        if fill:
+            numerical += [self.stoi[" "]] * (
+                self.context_length - len(numerical)
+            )
         return torch.Tensor(numerical).long()
 
 

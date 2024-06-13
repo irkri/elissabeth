@@ -114,14 +114,14 @@ def get_attention_matrices(
     if total:
         total_att = torch.zeros((N, x.size(0), x.size(0)))
         ind = torch.triu_indices(x.size(0), x.size(0), offset=0)
-        total_att[:, :] = att_mat[:, :, 0]
-        total_att[:, :, *ind] = 0
+        total_att[:, :, :] = att_mat[:, 0, :, :]
+        total_att[:, *ind] = 0
         for p in range(1, iss_length):
             if p == iss_length - 1:
                 ind = torch.triu_indices(x.size(0), x.size(0), offset=1)
-            mat = torch.clone(att_mat[:, :, p, :, :])
-            mat[:, :, *ind] = 0
-            total_att[:, :, :, :] = mat @ total_att
+            mat = torch.clone(att_mat[:, p, :, :])
+            mat[:, *ind] = 0
+            total_att[:, :, :] = mat @ total_att
         if isinstance(project_heads, tuple):
             total_att = torch.tensordot(
                 model.layers[layer].W_H[length, project_heads],
