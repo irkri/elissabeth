@@ -69,9 +69,12 @@ class ElissabethWatcher:
         project_heads: tuple[int, ...] | bool = False,
         layer: int = 0,
         length: int = 0,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
-        att_mat = get_attention_matrices(
+        att = get_attention_matrices(
             self.model,
             example,
             layer=layer,
@@ -80,8 +83,12 @@ class ElissabethWatcher:
             total=total,
             project_heads=project_heads,
         )
+        att = reduce_append_dims(att, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                att = torch.index_select(att, selection[0], selection[1])
         figatt, axatt = plot_attention_matrix(
-            att_mat,
+            att,
             example if show_example else None,
             contains_total=total,
             **kwargs,
@@ -93,10 +100,14 @@ class ElissabethWatcher:
         name: str,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         param = self.model.detach_sorted_parameter(name)
         param = reduce_append_dims(param, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                param = torch.index_select(param, selection[0], selection[1])
         return plot_parameter_matrix(param, **kwargs)
 
     def plot_qkv_probing(
@@ -110,10 +121,14 @@ class ElissabethWatcher:
         cmap: str = "tab20",
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) ->  tuple[Figure, list[list[np.ndarray]]]:
         prb = probe_qkv_transform(self.model, which, layer, length, weighting)
         prb = reduce_append_dims(prb, None, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                prb = torch.index_select(prb, selection[0], selection[1])
         return plot_qkv_probing(prb, norm_p, sharey, cmap, **kwargs)
 
     def plot_iss(
@@ -125,6 +140,7 @@ class ElissabethWatcher:
         project_values: bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         iss = get_iss(
@@ -136,6 +152,9 @@ class ElissabethWatcher:
             project_values=project_values,
         )
         iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                iss = torch.index_select(iss, selection[0], selection[1])
         return plot_parameter_matrix(iss, **kwargs)
 
     def plot_iss_time(
@@ -148,6 +167,7 @@ class ElissabethWatcher:
         project_values: bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         iss = get_iss(
@@ -159,6 +179,9 @@ class ElissabethWatcher:
             project_values=project_values,
         )
         iss = reduce_append_dims(iss, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                iss = torch.index_select(iss, selection[0], selection[1])
         return plot_time_parameters(iss, x_axis=x_axis, **kwargs)
 
     def plot_values(
@@ -170,6 +193,7 @@ class ElissabethWatcher:
         project_values: bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         v = get_values(
@@ -181,6 +205,9 @@ class ElissabethWatcher:
             project_values=project_values,
         )
         v = reduce_append_dims(v, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                iss = torch.index_select(iss, selection[0], selection[1])
         return plot_parameter_matrix(v, **kwargs)
 
     def plot_values_time(
@@ -193,6 +220,7 @@ class ElissabethWatcher:
         project_values: bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         v = get_values(
@@ -216,6 +244,7 @@ class ElissabethWatcher:
         project_heads: tuple[int, ...] | bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         q, k = get_query_key(
@@ -244,6 +273,7 @@ class ElissabethWatcher:
         project_heads: tuple[int, ...] | bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
+        index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         q, k = get_query_key(
