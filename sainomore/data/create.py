@@ -4,7 +4,7 @@ __all__ = [
     "imitate_mha",
     "streaks",
     "numberville",
-    "evencount",
+    "occurences",
     "long_lookup",
     "copying",
 ]
@@ -223,39 +223,38 @@ def long_lookup(
     return x, y
 
 
-def evencount(
+def occurences(
     n_samples: int,
     length: int,
     characters: int = 3,
+    occurences: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Generates a dataset of characters from an alphabet of given size.
-    The task is to find two occurences of the last character in the
-    sequence. The question is if there are an even or odd number of
-    characters between the two occurences.
+    The task is to find all occurences of the last character in the
+    sequence. If this number is equal to ``occurences``, the sequence is
+    classified as positive.
     """
     x = torch.randint(
-        characters-1,
+        characters,
         size=(n_samples, length),
         dtype=torch.int64,
     )
     y = torch.zeros(n_samples, dtype=torch.int64)
     for i in range(n_samples):
-        mark = np.sort(np.random.choice(length-1, size=2, replace=False))
-        x[i, mark] = characters - 1
-        x[i, -1] = characters - 1
-
-        x[i, mark[0]+1:mark[1]] = torch.randint(
-            characters - 2, size=(mark[1]-mark[0]-1,),
-        )
-        if mark[1] - mark[0] > 2:
-            number = np.random.randint(1, mark[1] - mark[0] - 1)
-            places = np.random.choice(
-                mark[1]-mark[0]-1,
-                size=number,
-                replace=False,
-            )
-            x[i, places+mark[0]+1] = characters - 2
-            y[i] = number % 2
+        if np.random.randint(2) == 0:
+            mask = np.random.choice(length-1, size=occurences-1, replace=False)
+            y[i] = 1
+        else:
+            occs = np.random.randint(occurences-1)
+            mask = np.random.choice(length-1, size=occs, replace=False)
+        mark = np.random.randint(characters)
+        x[i, x[i] == mark] = characters
+        x[i, mask] = mark
+        x[i, -1] = mark
+        x[i, x[i] == characters] = torch.tensor(np.random.choice(
+            [i for i in range(characters) if i != mark],
+            size=int((x[i] == characters).sum()),
+        )).long()
     return x, y
 
 

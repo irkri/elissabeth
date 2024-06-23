@@ -254,6 +254,7 @@ class ControlledExponentialConfig(BaseModel):
     share_control: bool = False
     activation: Literal["sin", "relu"] = "sin"
     control_mlp_size: int = 16
+    control_mlp_input: int = 16
 
 
 class ControlledExponential(_Weighting):
@@ -266,17 +267,26 @@ class ControlledExponential(_Weighting):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
-        indices = torch.linspace(
-            1/self.config("context_length"), 1, self.config("context_length")
+        T = self.config("context_length")
+        d = self.config("control_mlp_input")
+        position = torch.arange(T).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d, 2) * (-torch.log(torch.tensor(10000.0)) / d)
         )
-        self.register_buffer("T", indices)
+        pe = torch.zeros(T, d)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d % 2 != 0:
+            pe[:, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
 
         out = self.config("n_is") * (
             1 if self.config("share_control") else self.config("length_is")
         )
         mlp_size = self.config("control_mlp_size")
         self.mlp = nn.Sequential(
-            nn.Linear(1, mlp_size),
+            nn.Linear(d, mlp_size),
             Sin() if self.config("activation") == "sin" else nn.ReLU(),
             nn.Linear(mlp_size, out, bias=False),
         )
@@ -286,13 +296,13 @@ class ControlledExponential(_Weighting):
         self._T = self.config("context_length")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
-        self._mlp_pass = self.mlp(self.get_buffer("T").unsqueeze(-1)).reshape(
+        self._mlp_pass = self.mlp(self.get_buffer("pe")).reshape(
             (self._T, self._p, self._N)
         )
         if self.hooks.get("Att").is_attached():
             T = self._mlp_pass.unsqueeze(0)
             self.hook("Att", torch.exp(
-                ((T - T.transpose(0, 1))).unsqueeze(0).unsqueeze(0)
+                ((T.transpose(0, 1) - T)).unsqueeze(0).unsqueeze(0)
             ).unsqueeze(0))
         return x
 
@@ -305,7 +315,7 @@ class ControlledExponential(_Weighting):
         alpha_k = torch.tensor(0) if l == self._p else (
             self._mlp_pass[:x.size(-4), ik, :]
         )
-        x = x * torch.exp(alpha_k - alpha_q).unsqueeze(-1).unsqueeze(-1)
+        x = x * torch.exp(alpha_q - alpha_k).unsqueeze(-1).unsqueeze(-1)
         return x
 
     def add_pe(self, pe: _PositionalEncoding) -> None:

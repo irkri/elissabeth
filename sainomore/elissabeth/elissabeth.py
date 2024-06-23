@@ -26,6 +26,7 @@ class ElissabethConfig(BaseModel):
     residual_stream: bool = True
 
     mlp_size: int | None = None
+    conv_kernel_size: int | None = None
 
     output_vocab_size: int = -1
 
@@ -56,6 +57,7 @@ class Elissabeth(SAINoMoreModule):
             )
             nn.init.xavier_normal_(self.embedding.weight)
 
+
         self.layers = nn.ModuleList([
             LISS(self, **kwargs) for _ in range(self.config("n_layers"))
         ])
@@ -77,6 +79,16 @@ class Elissabeth(SAINoMoreModule):
                     nn.LayerNorm(self.config("d_hidden"))
                     for _ in range(self.config("n_layers"))
                 ])
+        self.convs = None
+        if self.config("conv_kernel_size") is not None:
+            self.convs = nn.ModuleList([
+                nn.Conv1d(
+                    self.config("d_hidden"),
+                    self.config("d_hidden"),
+                    self.config("conv_kernel_size"),
+                    padding="same",
+                ) for _ in range(self.config("n_layers"))
+            ])
 
         self.unembedding = nn.Linear(
             self.config("d_hidden"), self.config("output_vocab_size"),
@@ -94,6 +106,13 @@ class Elissabeth(SAINoMoreModule):
         """
         x = self.embedding(x)
         for i in range(len(self.layers)):
+            if self.convs is not None:
+                y = x
+                if self._residual_stream:
+                    x = x + self.convs[i](y.swapaxes(1, 2)).swapaxes(1, 2)
+                else:
+                    x = self.convs[i](y.swapaxes(1, 2)).swapaxes(1, 2)
+
             y = x
             if self.layernorms is not None:
                 y = self.layernorms[i](x)

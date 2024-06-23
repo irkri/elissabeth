@@ -6,11 +6,11 @@
     "layer_norm" : true,
     "residual_stream": true,
 
-    "n_is" : 8,
-    "levels" : [3],
+    "n_is" : 1,
+    "lengths" : [3],
     "sum_normalization" : true,
 
-    "d_values" : 10,
+    "d_values" : 4,
     "values_2D" : false,
     "pe_value" : false,
     "v_activation": "relu",
@@ -20,7 +20,7 @@
 
     "restrict_query_key" : false,
     "exponent": 1,
-    "d_query_key": 1,
+    "d_query_key": 3,
 
     "exp_alpha_0": 10.0,
 
