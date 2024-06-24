@@ -1,22 +1,23 @@
 {
     "context_length" : null,
     "input_vocab_size" : null,
-    "n_layers" : 2,
-    "d_hidden" : 16,
-    "layer_norm" : true,
-    "residual_stream": true,
+    "n_layers" : 1,
+    "d_hidden" : 5,
+    "layer_norm" : false,
+    "residual_stream": false,
 
     "n_is" : 1,
-    "lengths" : [3],
-    "sum_normalization" : true,
+    "lengths" : [4],
+    "sum_normalization" : false,
 
-    "d_values" : 4,
+    "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,
-    "v_activation": "relu",
+    "v_activation": null,
     "v_latent": 32,
-    "v_include_time": true,
+    "v_include_time": false,
     "v_norm": false,
+    "v_shared": false,
 
     "restrict_query_key" : false,
     "exponent": 1,
@@ -24,7 +25,11 @@
 
     "exp_alpha_0": 10.0,
 
-    "qk_activation": "relu",
+    "qk_activation": null,
     "qk_latent": 32,
-    "qk_include_time": true
+    "qk_include_time": false,
+
+    "weighting": [
+        "Cosine"
+    ]
 }

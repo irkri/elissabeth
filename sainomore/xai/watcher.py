@@ -232,6 +232,9 @@ class ElissabethWatcher:
             project_values=project_values,
         )
         v = reduce_append_dims(v, 4, reduce_dims, append_dims)
+        if index_selection is not None:
+            for selection in index_selection:
+                iss = torch.index_select(iss, selection[0], selection[1])
         return plot_time_parameters(v, x_axis, **kwargs)
 
     def plot_query_key(
@@ -301,6 +304,8 @@ class ElissabethWatcher:
         tokens: Optional[torch.Tensor] = None,
         transpose: bool = True,
         annotate_axes: bool = True,
+        reduce_dims: dict[int, int] | bool = False,
+        append_dims: Sequence[int] | bool = True,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
         qkv = get_alphabet_projection(
@@ -315,6 +320,10 @@ class ElissabethWatcher:
             v=v,
             tokens=tokens,
         )
+        qkv = tuple(map(
+            lambda x: reduce_append_dims(x, None, reduce_dims, append_dims),
+            qkv
+        ))
         labels = []
         if q:
             labels.append("Q")

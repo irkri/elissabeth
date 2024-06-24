@@ -19,13 +19,14 @@ def reduce_append_dims(
             tensor = tensor.squeeze(d)
     elif reduce_dims:
         tensor = tensor.squeeze()
-        while tensor.ndim > 4:
-            tensor = tensor[0]
+        if expect is not None:
+            while tensor.ndim > expect:
+                tensor = tensor[0]
     if isinstance(append_dims, Sequence):
         for d in append_dims:
             tensor = tensor.unsqueeze(d)
-    elif append_dims:
-        while tensor.ndim < 4:
+    elif append_dims and expect is not None:
+        while tensor.ndim < expect:
             tensor = tensor.unsqueeze(0)
     if expect is not None and tensor.ndim != expect:
         raise IndexError(
@@ -122,6 +123,7 @@ def get_attention_matrices(
             mat = torch.clone(att_mat[:, p, :, :])
             mat[:, *ind] = 0
             total_att[:, :, :] = mat @ total_att
+            print(f"{p}: {total_att.max()}")
         if isinstance(project_heads, tuple):
             total_att = torch.tensordot(
                 model.layers[layer].W_H[length, project_heads],
@@ -265,30 +267,30 @@ def get_query_key(
     kernel.hooks.get("K").release()
     q = kernel.hooks.get("Q").fwd[0, ...]
     k = kernel.hooks.get("K").fwd[0, ...]
-    q = torch.swapaxes(torch.swapaxes(q, 0, 1), 1, 2)
-    k = torch.swapaxes(torch.swapaxes(k, 0, 1), 1, 2)
+    q = torch.swapaxes(torch.swapaxes(q, -3, -4), -2, -3)
+    k = torch.swapaxes(torch.swapaxes(k, -3, -4), -2, -3)
 
     if isinstance(project_heads, tuple):
         q = torch.tensordot(
             model.layers[layer].W_H[length, project_heads],
             q[project_heads, ...],
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-4]),  # type: ignore
         ).detach().unsqueeze(0)
         k = torch.tensordot(
             model.layers[layer].W_H[length, project_heads],
             k[project_heads, ...],
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-4]),  # type: ignore
         ).detach().unsqueeze(0)
     elif project_heads:
         q = torch.tensordot(
             model.layers[layer].W_H[length, :],
             q,
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-4]),  # type: ignore
         ).detach().unsqueeze(0)
         k = torch.tensordot(
             model.layers[layer].W_H[length, :],
             k,
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-4]),  # type: ignore
         ).detach().unsqueeze(0)
     return (torch.swapaxes(q, -1, -2), torch.swapaxes(k, -1, -2))
 
@@ -330,19 +332,19 @@ def get_values(
     model(x.to(next(model.parameters()).device).unsqueeze(0))
     model.layers[layer].levels[length].hooks.get("V").release()
     v = model.layers[layer].levels[length].hooks.get("V").fwd[0, ...]
-    v = torch.swapaxes(torch.swapaxes(v, 0, 1), 1, 2)
+    v = torch.swapaxes(torch.swapaxes(v, -4, -5), -3, -4)
 
     if isinstance(project_heads, tuple):
         v = torch.tensordot(
             model.layers[layer].W_H[length, project_heads],
             v[project_heads, ...],
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-5]),  # type: ignore
         ).detach().unsqueeze(0)
     elif project_heads:
         v = torch.tensordot(
             model.layers[layer].W_H[length, :],
             v,
-            dims=([0], [0]),  # type: ignore
+            dims=([0], [-5]),  # type: ignore
         ).detach().unsqueeze(0)
     if project_values:
         v = torch.einsum("vwd,nptvw->nptd", model.layers[layer].W_O, v)

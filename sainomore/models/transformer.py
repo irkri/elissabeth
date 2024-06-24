@@ -189,6 +189,8 @@ class Transformer(SAINoMoreModule):
     def build(config: dict[str, Any], *flags: IntFlag) -> "Transformer":
         model = Transformer(**config)
         pos_encs = []
+        if "pe" in config:
+            pos_encs.extend(get_pe(config["pe"]))
         for flag in flags:
             if isinstance(flag, PositionalEncoding):
                 pos_encs.extend(get_pe(flag))

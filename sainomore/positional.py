@@ -150,14 +150,29 @@ class APES(_PositionalEncoding):
         return x + encoding
 
 
-def get_pe(pe: PositionalEncoding) -> list[type[_PositionalEncoding]]:
-    pos_encs: list[type[_PositionalEncoding]] = []
-    if PositionalEncoding.RoPE in pe:
-        pos_encs.append(RoPE)
-    if PositionalEncoding.Learnable in pe:
-        pos_encs.append(Learnable)
-    if PositionalEncoding.Sinusoidal in pe:
-        pos_encs.append(Sinusoidal)
-    if PositionalEncoding.APES in pe:
-        pos_encs.append(APES)
-    return pos_encs
+dict_pe_id: dict[PositionalEncoding, type[_PositionalEncoding]] = {
+    PositionalEncoding.RoPE: RoPE,
+    PositionalEncoding.Sinusoidal: Sinusoidal,
+    PositionalEncoding.Learnable: Learnable,
+    PositionalEncoding.APES: APES,
+}
+
+
+dict_pe_str: dict[str, type[_PositionalEncoding]] = {
+    "RoPE": RoPE,
+    "Sinusoidal": Sinusoidal,
+    "Learnable": Learnable,
+    "APES": APES,
+}
+
+
+def get_pe(
+        pe: PositionalEncoding | list[str],
+) -> list[type[_PositionalEncoding]]:
+    pes: list[type[_PositionalEncoding]] = []
+    for enc in pe:
+        if isinstance(enc, IntFlag):
+            pes.append(dict_pe_id[enc])
+        elif isinstance(enc, str):
+            pes.append(dict_pe_str[enc])
+    return pes
