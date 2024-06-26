@@ -123,7 +123,6 @@ def get_attention_matrices(
             mat = torch.clone(att_mat[:, p, :, :])
             mat[:, *ind] = 0
             total_att[:, :, :] = mat @ total_att
-            print(f"{p}: {total_att.max()}")
         if isinstance(project_heads, tuple):
             total_att = torch.tensordot(
                 model.layers[layer].W_H[length, project_heads],

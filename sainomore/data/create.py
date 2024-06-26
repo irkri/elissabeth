@@ -228,6 +228,7 @@ def occurences(
     length: int,
     characters: int = 3,
     occurences: int = 4,
+    allow_higher: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Generates a dataset of characters from an alphabet of given size.
     The task is to find all occurences of the last character in the
@@ -245,7 +246,13 @@ def occurences(
             mask = np.random.choice(length-1, size=occurences-1, replace=False)
             y[i] = 1
         else:
-            occs = np.random.randint(occurences-1)
+            if not allow_higher:
+                occs = np.random.randint(occurences-1)
+            else:
+                if np.random.randint(2) == 0:
+                    occs = np.random.randint(occurences-1)
+                else:
+                    occs = np.random.randint(occurences, length//2)
             mask = np.random.choice(length-1, size=occs, replace=False)
         mark = np.random.randint(characters)
         x[i, x[i] == mark] = characters
