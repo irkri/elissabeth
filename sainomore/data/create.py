@@ -5,7 +5,7 @@ __all__ = [
     "streaks",
     "numberville",
     "occurences",
-    "cascade",
+    "cyclic",
     "long_lookup",
     "copying",
 ]

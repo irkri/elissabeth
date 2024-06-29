@@ -15,7 +15,7 @@ from torchmetrics.classification import MulticlassAccuracy
 
 from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
                                  GeneralConfigCallback, WeightHistory)
-from sainomore.data import GivenDataModule, cascade
+from sainomore.data import GivenDataModule, cyclic
 from sainomore.elissabeth import Elissabeth, Weighting
 from sainomore.lightning import TokenPredictionModule
 from sainomore.positional import PositionalEncoding
@@ -144,7 +144,7 @@ def train(
     if load_path is not None:
         load_path = str(load_path)
     data_module = GivenDataModule(
-        cascade(
+        cyclic(
             n_samples=config["n_samples"],
             length=config["context_length"],
             characters=config["characters"],
@@ -201,7 +201,7 @@ def plot(lightning_module: TokenPredictionModule) -> None:
     # torch.random.manual_seed(662)
     # np.random.seed(662)
 
-    x, y = cascade(
+    x, y = cyclic(
         n_samples=5,
         length=25,
         characters=5,
