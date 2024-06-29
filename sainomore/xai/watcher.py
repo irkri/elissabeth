@@ -64,11 +64,12 @@ class ElissabethWatcher:
         self,
         example: torch.Tensor,
         show_example: bool = True,
-        only_kernels: Optional[tuple[int, ...]] = None,
-        total: bool = False,
-        project_heads: tuple[int, ...] | bool = False,
         layer: int = 0,
         length: int = 0,
+        only_kernels: Optional[tuple[int, ...]] = None,
+        value_direction: Optional[int | tuple[int, int]] = None,
+        total: bool = False,
+        project_heads: tuple[int, ...] | bool = False,
         reduce_dims: dict[int, int] | bool = False,
         append_dims: Sequence[int] | bool = True,
         index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
@@ -80,6 +81,7 @@ class ElissabethWatcher:
             layer=layer,
             length=length,
             only_kernels=only_kernels,
+            value_direction=value_direction,
             total=total,
             project_heads=project_heads,
         )
@@ -234,7 +236,7 @@ class ElissabethWatcher:
         v = reduce_append_dims(v, 4, reduce_dims, append_dims)
         if index_selection is not None:
             for selection in index_selection:
-                iss = torch.index_select(iss, selection[0], selection[1])
+                v = torch.index_select(v, selection[0], selection[1])
         return plot_time_parameters(v, x_axis, **kwargs)
 
     def plot_query_key(

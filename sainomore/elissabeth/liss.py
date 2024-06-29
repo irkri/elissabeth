@@ -46,7 +46,7 @@ class LISSLevel(HookedModule):
             self.beta = nn.Parameter(torch.empty((self.config("length_is"), )))
             nn.init.constant_(self.beta, 5.40988)
 
-        self.weightings = nn.ModuleList()
+        self.weightings: list[_Weighting] = nn.ModuleList()  # type: ignore
         self.pos_encs = nn.ModuleList()
         self.hooks.add_hooks("V", "iss")
         self.p = self.config("length_is")
@@ -151,7 +151,7 @@ class LISS(HookedModule):
         )))
         nn.init.xavier_normal_(self.W_O)
 
-        self.levels = nn.ModuleList()
+        self.levels: list[LISSLevel] = nn.ModuleList()  # type: ignore
         if (levels := self.config("lengths")) is not None:
             for p in levels:
                 kwargs["length_is"] = p

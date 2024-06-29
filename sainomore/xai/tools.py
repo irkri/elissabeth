@@ -42,6 +42,7 @@ def get_attention_matrices(
     layer: int = 0,
     length: int = 0,
     only_kernels: Optional[tuple[int, ...]] = None,
+    value_direction: Optional[int | tuple[int, int]] = None,
     total: bool = False,
     project_heads: tuple[int, ...] | bool = False,
 ) -> torch.Tensor:
@@ -77,11 +78,15 @@ def get_attention_matrices(
     """
     for weighting in model.layers[layer].levels[length].weightings:
         weighting.hooks.get("Att").attach()
+        if value_direction is not None:
+            model.layers[layer].levels[length].hooks.get("V").attach()
 
     model(x.to(next(model.parameters()).device).unsqueeze(0))
 
     for weighting in model.layers[layer].levels[length].weightings:
         weighting.hooks.get("Att").release()
+        if value_direction is not None:
+            model.layers[layer].levels[length].hooks.get("V").release()
 
     if model.layers[layer].config("lengths") is not None:
         iss_length = model.layers[layer].config("lengths")[length]
@@ -98,6 +103,13 @@ def get_attention_matrices(
         for j in only_kernels:
             weighting = model.layers[layer].levels[length].weightings[j]
             att_mat[:, :, :, :] *= weighting.hooks.get("Att").fwd[0]
+
+    if value_direction is not None:
+        v = model.layers[layer].levels[length].hooks.get("V").fwd[0]
+        if isinstance(value_direction, int):
+            value_direction = (value_direction, 0)
+        v = v[..., *value_direction].moveaxis(-3, -1).unsqueeze(-2)
+        att_mat = att_mat * v
 
     if isinstance(project_heads, tuple):
         att_mat = torch.tensordot(

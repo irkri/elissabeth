@@ -58,7 +58,7 @@ class Elissabeth(SAINoMoreModule):
             nn.init.xavier_normal_(self.embedding.weight)
 
 
-        self.layers = nn.ModuleList([
+        self.layers: list[LISS] = nn.ModuleList([  #  type: ignore
             LISS(self, **kwargs) for _ in range(self.config("n_layers"))
         ])
         self.layernorms = None
