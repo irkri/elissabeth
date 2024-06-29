@@ -136,7 +136,7 @@ class LISS(HookedModule):
         if self.config("lengths") is not None:
             n_lengths = len(self.config("lengths"))
         elif self.config("max_length") is not None:
-            n_lengths = len(self.config("max_length"))
+            n_lengths = self.config("max_length")
         else:
             raise KeyError("Length of iterated sum has to be specified")
         self.W_H = nn.Parameter(torch.empty((

@@ -8,39 +8,30 @@ from sainomore.elissabeth import Elissabeth, Weighting
 def test_cosine_weighting() -> None:
 
     config = {
-        "context_length" : "10",
-        "input_vocab_size" : "5",
-        "d_hidden" : "5",
-        "n_layers" : "1",
-        "layer_norm" : "False",
+        "context_length" : 10,
+        "input_vocab_size" : 5,
+        "d_hidden" : 5,
+        "n_layers" : 1,
+        "layer_norm" : False,
+        "residual_stream": False,
+        "sum_normalization" : False,
 
-        "n_is" : "1",
-        "length_is" : "3",
-        "d_values" : "5",
-        "values_2D" : "False",
-        "pe_value" : "False",
+        "n_is" : 1,
+        "lengths" : [3],
+        "d_values" : 5,
+        "values_2D" : False,
+        "pe_value" : False,
+        "v_norm": False,
 
-        "restrict_query_key" : "False",
-        "exponent": "2",
-        "d_query_key": "3",
+        "restrict_query_key" : False,
+        "exponent": 2,
+        "d_query_key": 3,
 
-        "alpha_multiplier" : "2",
+        "exp_alpha_0" : 2,
 
-        "bias" : "False",
-
-        "share_queries" : "False",
-        "share_keys" : "False",
-        "share_values" : "False",
-
-        "sum_normalization" : "False",
-
-        "residual_stream": "False",
+        "weighting": ["ExponentialDecay", "Cosine"]
     }
-    model = Elissabeth.build(
-        config,
-        Weighting.ExponentialDecay,
-        Weighting.Cosine,
-    )
+    model = Elissabeth.build(config)
 
     q11, q12, q13 = randn(5), randn(5), randn(5)
     k11, k12, k13 = randn(5), randn(5), randn(5)
@@ -60,27 +51,24 @@ def test_cosine_weighting() -> None:
     state_dict["embedding.weight"] = torch.eye(5)
 
     alpha = torch.Tensor([1, 3, 2])
-    state_dict["layers.0.weightings.0.alpha"] = (
+    state_dict["layers.0.levels.0.weightings.0.alpha"] = (
         alpha.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     )
     alpha = torch.tanh(alpha)
 
-    state_dict["layers.0.weightings.1.W_Q"] = torch.stack((
-        torch.stack((q11, q12, q13)).T,
-        torch.stack((q21, q22, q23)).T,
-        torch.stack((q31, q32, q33)).T,
-    )).unsqueeze(0)
-    state_dict["layers.0.weightings.1.W_K"] = torch.stack((
-        torch.stack((k11, k12, k13)).T,
-        torch.stack((k21, k22, k23)).T,
-        torch.stack((k31, k32, k33)).T,
-    )).unsqueeze(0)
+    state_dict["layers.0.levels.0.weightings.1.P_Q.transform.weight"] = (
+        torch.stack((q11, q12, q13, q21, q22, q23, q31, q32, q33))
+    )
+    state_dict["layers.0.levels.0.weightings.1.P_K.transform.weight"] = (
+        torch.stack((k11, k12, k13, k21, k22, k23, k31, k32, k33))
+    )
 
-    state_dict["layers.0.W_V"] = torch.stack(
-        (v1, v2, v3)
-    ).unsqueeze(0).unsqueeze(-1)
+    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.cat(
+        (v1.T, v2.T, v3.T), dim=0,
+    )
 
-    state_dict["layers.0.W_O"] = torch.eye(5).unsqueeze(0).unsqueeze(2)
+    state_dict["layers.0.W_H"] = torch.tensor(((1,),))
+    state_dict["layers.0.W_O"] = torch.eye(5).unsqueeze(1)
 
     state_dict["unembedding.weight"] = torch.eye(5)
 
@@ -121,41 +109,32 @@ def test_cosine_weighting() -> None:
 def test_cosine_decay_weighting() -> None:
 
     config = {
-        "context_length" : "10",
-        "input_vocab_size" : "5",
-        "d_hidden" : "5",
-        "n_layers" : "1",
-        "layer_norm" : "False",
+        "context_length" : 10,
+        "input_vocab_size" : 5,
+        "d_hidden" : 5,
+        "n_layers" : 1,
+        "layer_norm" : False,
+        "residual_stream": False,
+        "sum_normalization" : False,
 
-        "n_is" : "1",
-        "length_is" : "3",
-        "d_values" : "5",
-        "values_2D" : "False",
-        "pe_value" : "False",
+        "n_is" : 1,
+        "lengths" : [3],
+        "d_values" : 5,
+        "values_2D" : False,
+        "pe_value" : False,
+        "v_norm": False,
 
-        "restrict_query_key" : "False",
-        "exponent": "1",
-        "d_query_key": "3",
+        "restrict_query_key" : False,
+        "exponent": 1,
+        "d_query_key": 3,
 
-        "alpha_multiplier" : "2",
-        "d_alpha": "1",
-        "decay_exponent": "2",
+        "cos_alpha_0" : 2,
+        "d_alpha": 1,
+        "decay_exponent": 2,
 
-        "bias" : "False",
-
-        "share_queries" : "False",
-        "share_keys" : "False",
-        "share_values" : "False",
-
-        "sum_normalization" : "False",
-
-        "residual_stream": "False",
+        "weighting": ["CosineDecay", "Cosine"]
     }
-    model = Elissabeth.build(
-        config,
-        Weighting.CosineDecay,
-        Weighting.Cosine,
-    )
+    model = Elissabeth.build(config)
 
     q11, q12, q13 = randn(5), randn(5), randn(5)
     k11, k12, k13 = randn(5), randn(5), randn(5)
@@ -175,28 +154,25 @@ def test_cosine_decay_weighting() -> None:
     state_dict["embedding.weight"] = torch.eye(5)
 
     alpha = torch.Tensor([1, 3, 2])
-    state_dict["layers.0.weightings.0.alpha"] = (
+    state_dict["layers.0.levels.0.weightings.0.alpha"] = (
         alpha.unsqueeze(-1).unsqueeze(-1)
              .unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     )
     alpha = torch.tanh(alpha)
 
-    state_dict["layers.0.weightings.1.W_Q"] = torch.stack((
-        torch.stack((q11, q12, q13)).T,
-        torch.stack((q21, q22, q23)).T,
-        torch.stack((q31, q32, q33)).T,
-    )).unsqueeze(0)
-    state_dict["layers.0.weightings.1.W_K"] = torch.stack((
-        torch.stack((k11, k12, k13)).T,
-        torch.stack((k21, k22, k23)).T,
-        torch.stack((k31, k32, k33)).T,
-    )).unsqueeze(0)
+    state_dict["layers.0.levels.0.weightings.1.P_Q.transform.weight"] = (
+        torch.stack((q11, q12, q13, q21, q22, q23, q31, q32, q33))
+    )
+    state_dict["layers.0.levels.0.weightings.1.P_K.transform.weight"] = (
+        torch.stack((k11, k12, k13, k21, k22, k23, k31, k32, k33))
+    )
 
-    state_dict["layers.0.W_V"] = torch.stack(
-        (v1, v2, v3)
-    ).unsqueeze(0).unsqueeze(-1)
+    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.cat(
+        (v1.T, v2.T, v3.T), dim=0,
+    )
 
-    state_dict["layers.0.W_O"] = torch.eye(5).unsqueeze(0).unsqueeze(2)
+    state_dict["layers.0.W_H"] = torch.tensor(((1,),))
+    state_dict["layers.0.W_O"] = torch.eye(5).unsqueeze(1)
 
     state_dict["unembedding.weight"] = torch.eye(5)
 
