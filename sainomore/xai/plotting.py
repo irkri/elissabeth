@@ -139,6 +139,7 @@ def plot_time_parameters(
 def plot_attention_matrix(
     matrix: torch.Tensor,
     example: Optional[torch.Tensor] = None,
+    xlabels: Optional[Sequence[str]] = None,
     contains_total: bool = False,
     cmap: str = "seismic",
     center_zero: bool = False,
@@ -153,8 +154,11 @@ def plot_attention_matrix(
     Args:
         matrix (torch.Tensor): Attention matrix for one LISS layer of
             shape ``(n_is, length_is, T, T)``.
-        example (Optional[torch.Tensor], optional): The example the
+        example (torch.Tensor, optional): The example the
             attention matrix was generated for. Defaults to None.
+        xlabels (sequence of str, optional): Writes the given strings on
+            horizontal and vertical axes of each attention matrix plot.
+            Defaults to None.
         contains_total (bool, optional): Whether the last attention
             matrix in the ``length_is`` axis actually is the total
             weighting of the iterated sum. Defaults to False.
@@ -216,11 +220,17 @@ def plot_attention_matrix(
                 cmap=cmap,
                 norm=_get_plot_cmap_norm(min_, max_, log_cmap, center_zero),
             ))
+            labels = (xlabels is not None)
             ax[l, d].tick_params(
-                top=False, left=False, bottom=False, right=False,
-                labeltop=False, labelleft=False, labelbottom=False,
-                labelright=False,
+                left=False, bottom=False, right=False, top=False,
+                labelleft=labels, labelbottom=labels,
+                labelright=False, labeltop=False,
             )
+            if labels:
+                ax[l, d].set_xticks(np.arange(matrix.shape[2]))
+                ax[l, d].set_xticklabels(xlabels)
+                ax[l, d].set_yticks(np.arange(matrix.shape[2]))
+                ax[l, d].set_yticklabels(xlabels)
             if l == 0:
                 t_r = "t_{" + f"{d+1}" + "}"
                 if d == iss_length-1 and contains_total:

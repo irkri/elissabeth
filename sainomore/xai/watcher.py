@@ -63,6 +63,7 @@ class ElissabethWatcher:
     def plot_attention_matrices(
         self,
         example: torch.Tensor,
+        xlabels: Optional[Sequence[str]] = None,
         show_example: bool = True,
         layer: int = 0,
         length: int = 0,
@@ -92,6 +93,7 @@ class ElissabethWatcher:
         figatt, axatt = plot_attention_matrix(
             att,
             example if show_example else None,
+            xlabels=xlabels,
             contains_total=total,
             **kwargs,
         )

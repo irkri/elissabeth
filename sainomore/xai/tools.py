@@ -109,6 +109,8 @@ def get_attention_matrices(
         if isinstance(value_direction, int):
             value_direction = (value_direction, 0)
         v = v[..., *value_direction].moveaxis(-3, -1).unsqueeze(-2)
+        while v.ndim > 4:
+            v = v.squeeze(0)
         att_mat = att_mat * v
 
     if isinstance(project_heads, tuple):
