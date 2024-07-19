@@ -16,7 +16,7 @@ class LISSLevelConfig(BaseModel):
     d_values: int
     n_is: int = 1
     length_is: int = 2
-    values_2D: bool = True
+    values_2D: bool = False
     sum_normalization: bool = True
 
     share_values: bool = False

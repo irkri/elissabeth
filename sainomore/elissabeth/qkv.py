@@ -83,11 +83,12 @@ class QKGen(HookedModule):
 
 class VGenConfig(BaseModel):
 
-    v_activation: Optional[Literal["sin", "relu"]] = None
+    v_activation: Optional[Literal["sin", "relu", "timegate"]] = None
     v_latent: Optional[int] = None
     v_include_time: bool = False
     v_norm: bool = True
     v_shared: bool = False
+    v_complex: bool = False
 
 
 class VGen(HookedModule):
@@ -102,8 +103,9 @@ class VGen(HookedModule):
         super().__init__(parent, **kwargs)
 
         self._include_time = self.config("v_include_time")
+        activation = self.config("v_activation")
         T = self.config("context_length")
-        if self._include_time:
+        if self._include_time or activation == "timegate":
             indices = torch.empty((1, T, 1))
             indices[0, :, 0] = torch.linspace(1/T, 1, T)
             self.register_buffer("T", indices)
@@ -124,15 +126,25 @@ class VGen(HookedModule):
         if self._include_time:
             in_ += 1
         latent = self.config("d_hidden")
-        activation = self.config("v_activation")
-        if activation is None:
+        self.timegate = None
+        if activation is None or activation == "timegate":
             self.transform = nn.Linear(in_, out)
             torch.nn.init.xavier_normal_(self.transform.weight)
             torch.nn.init.zeros_(self.transform.bias)
-        else:
-            latent = self.config("v_latent")
-            if latent is None:
-                latent = in_
+        latent = self.config("v_latent")
+        if latent is None:
+            latent = in_
+        if activation == "timegate":
+            self.timegate = nn.Sequential(
+                nn.Linear(1, latent),
+                nn.ReLU(),
+                nn.Linear(latent, out),
+            )
+            torch.nn.init.xavier_normal_(self.timegate[0].weight)
+            torch.nn.init.zeros_(self.timegate[0].bias)
+            torch.nn.init.xavier_normal_(self.timegate[2].weight)
+            torch.nn.init.zeros_(self.timegate[2].bias)
+        elif activation is not None:
             self.transform = nn.Sequential(
                 nn.Linear(in_, latent),
                 Sin() if activation == "sin" else nn.ReLU(),
@@ -146,6 +158,7 @@ class VGen(HookedModule):
             self.norm = torch.nn.LayerNorm([self._shape[-2], self._shape[-1]])
         else:
             self.norm = torch.nn.Identity()
+        self._epowi = self.config("v_complex")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x
@@ -155,9 +168,15 @@ class VGen(HookedModule):
                 T = T.unsqueeze(0)
             T = T.repeat(*x.shape[:-2], 1, 1)
             y = torch.cat((x, T), dim=-1)
-        V = self.transform(y).reshape(*x.shape[:-1], *self._shape)
+        if self.timegate is not None:
+            time = self.timegate(self.get_buffer("T")[:, :x.size(-2)])
+            V = (time * self.transform(x)).reshape(*x.shape[:-1], *self._shape)
+        else:
+            V = self.transform(y).reshape(*x.shape[:-1], *self._shape)
         if self.config("v_shared"):
             V = V.repeat(
                 *((1, )*len(x.shape[:-1])), self.config("n_is"), 1, 1, 1,
             )
+        if self._epowi:
+            return torch.exp(self.norm(V)*1j)
         return self.norm(V)
