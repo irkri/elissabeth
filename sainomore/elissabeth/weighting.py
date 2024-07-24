@@ -15,6 +15,7 @@ from .qkv import QKGen, Sin
 class Weighting(IntFlag):
 
     ExponentialDecay = auto()
+    ArcticDecay = auto()
     Exponential = auto()
     ControlledExponential = auto()
     ComplexExponential = auto()
@@ -111,6 +112,45 @@ class ExponentialDecay(_Weighting):
             x = x * torch.exp(
                 self._mult * torch.tanh(self.alpha[:, :, l]) / self._T
             )
+        return x
+
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        pass
+
+
+class ArcticDecayConfig(ExponentialDecayConfig):
+    pass
+
+
+class ArcticDecay(ExponentialDecay):
+
+    _config_class = ArcticDecayConfig
+
+    def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
+        if self.hooks.get("Att").is_attached():
+            T = self.config("context_length")
+            T_1 = torch.arange(T).unsqueeze(0).to(self.alpha.device)
+            T_2 = torch.arange(1, T+1).unsqueeze(0).to(self.alpha.device)
+            self.hook("Att", torch.cat((
+                ((T_1 - T_2.T) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, :-1]) * self._mult,
+                ((T_1 - T_1.T) / T).unsqueeze(0).unsqueeze(0)
+                    * torch.tanh(self.alpha[0, :, -1:]) * self._mult,
+            ), dim=1).unsqueeze(0))
+        return x
+
+    def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
+        iq = 0 if self.config("share_queries") else l-1
+        ik = 0 if self.config("share_keys") else l
+        alpha_q = torch.tensor(0) if l == 0 else (
+            self._mult * torch.tanh(self.alpha[:, :, iq])
+        )
+        alpha_k = torch.tensor(0) if l == self._p else (
+            self._mult * torch.tanh(self.alpha[:, :, ik])
+        )
+        x = x + (alpha_k - alpha_q) * self.get_buffer("T")[:x.size(-4)]
+        if l < self._p - 1:
+            x = x + self._mult * torch.tanh(self.alpha[:, :, l]) / self._T
         return x
 
     def add_pe(self, pe: _PositionalEncoding) -> None:
@@ -660,6 +700,7 @@ class MSC(_Weighting):
 
 dict_weighting_id: dict[Weighting, type[_Weighting]] = {
     Weighting.ExponentialDecay: ExponentialDecay,
+    Weighting.ArcticDecay: ArcticDecay,
     Weighting.Exponential: Exponential,
     Weighting.ComplexExponential: ComplexExponential,
     Weighting.ControlledExponential: ControlledExponential,
@@ -671,6 +712,7 @@ dict_weighting_id: dict[Weighting, type[_Weighting]] = {
 
 dict_weighting_str: dict[str, type[_Weighting]] = {
     "ExponentialDecay": ExponentialDecay,
+    "ArcticDecay": ArcticDecay,
     "Exponential": Exponential,
     "ComplexExponential": ComplexExponential,
     "ControlledExponential": ControlledExponential,

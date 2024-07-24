@@ -11,6 +11,7 @@ from ..base import SAINoMoreModule
 from ..models.mlp import MLP
 from ..positional import PositionalEncoding, get_pe
 from .liss import LISS
+from .lissa import LISSA
 from .weighting import Weighting, get_weighting
 
 
@@ -18,6 +19,8 @@ class ElissabethConfig(BaseModel):
     context_length: int
     input_vocab_size: int
     input_type: Literal["token", "vector"] = "token"
+
+    semiring: Literal["real", "arctic"] = "real"
 
     d_hidden: int
 
@@ -57,10 +60,14 @@ class Elissabeth(SAINoMoreModule):
             )
             nn.init.xavier_normal_(self.embedding.weight)
 
-
-        self.layers: list[LISS] = nn.ModuleList([  #  type: ignore
-            LISS(self, **kwargs) for _ in range(self.config("n_layers"))
-        ])
+        if self.config("semiring") == "real":
+            self.layers: list[LISS] = nn.ModuleList([  #  type: ignore
+                LISS(self, **kwargs) for _ in range(self.config("n_layers"))
+            ])
+        else:
+            self.layers: list[LISSA] = nn.ModuleList([  #  type: ignore
+                LISSA(self, **kwargs) for _ in range(self.config("n_layers"))
+            ])
         self.layernorms = None
         if self.config("layer_norm"):
             self.layernorms = nn.ModuleList([
