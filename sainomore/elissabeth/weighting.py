@@ -118,13 +118,24 @@ class ExponentialDecay(_Weighting):
         pass
 
 
-class ArcticDecayConfig(ExponentialDecayConfig):
-    pass
+class ArcticDecayConfig(BaseModel):
+
+    share_queries: bool = False
+    share_keys: bool = False
+    arctic_alpha_0: float = 1.0
 
 
 class ArcticDecay(ExponentialDecay):
 
     _config_class = ArcticDecayConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
+        self._mult = self.config("arctic_alpha_0")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
         if self.hooks.get("Att").is_attached():
