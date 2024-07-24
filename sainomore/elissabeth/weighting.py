@@ -135,7 +135,18 @@ class ArcticDecay(ExponentialDecay):
         **kwargs,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
+        indices = torch.empty((self.config("context_length"), 1, 1, 1))
+        indices[:, 0, 0, 0] = torch.linspace(
+            1/self.config("context_length"), 1, self.config("context_length")
+        )
+        self.register_buffer("T", indices)
+        self.alpha = nn.Parameter(torch.empty(
+            (1, self.config("n_is"), self.config("length_is"), 1, 1)
+        ))
+        nn.init.zeros_(self.alpha)
         self._mult = self.config("arctic_alpha_0")
+        self._p = self.config("length_is")
+        self._T = self.config("context_length")
 
     def on_forward_start(self, x: torch.Tensor) -> torch.Tensor:
         if self.hooks.get("Att").is_attached():
