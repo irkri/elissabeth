@@ -125,7 +125,7 @@ class ArcticDecayConfig(BaseModel):
     arctic_alpha_0: float = 1.0
 
 
-class ArcticDecay(ExponentialDecay):
+class ArcticDecay(_Weighting):
 
     _config_class = ArcticDecayConfig
 
