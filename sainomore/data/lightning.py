@@ -1,9 +1,9 @@
-__all__ = ["GivenDataModule", "SplitDataModule"]
+__all__ = ["GivenDataModule", "GivenDatasetModule", "SplitDataModule"]
 
 import lightning.pytorch as L
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, Dataset, TensorDataset, random_split
 
 
 class GivenDataModule(L.LightningDataModule):
@@ -21,6 +21,36 @@ class GivenDataModule(L.LightningDataModule):
         nv = int(np.floor(val_size * len(data)))
         self._train_set, self._val_set = random_split(data, [nt, nv])
 
+        self.batch_size = batch_size
+        self._kwargs = kwargs
+
+    def train_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self._train_set,
+            batch_size=self.batch_size,
+            shuffle=True,
+            **self._kwargs,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self._val_set,
+            batch_size=self.batch_size,
+            **self._kwargs,
+        )
+
+
+class GivenDatasetModule(L.LightningDataModule):
+
+    def __init__(
+        self,
+        train_set: Dataset,
+        val_set: Dataset,
+        batch_size: int = 32,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        self._train_set, self._val_set = train_set, val_set
         self.batch_size = batch_size
         self._kwargs = kwargs
 
