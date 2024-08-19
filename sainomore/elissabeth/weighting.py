@@ -581,6 +581,7 @@ class Cosine(_Weighting):
             B, T = x.size(-3), x.size(-2)
             N = self.config("n_is")
             D = self.config("d_query_key")
+            m = self.config("exponent")
             p = self.config("length_is")
             att_mat = torch.empty((B, N, p, T, T)).to(x.device)
             for l in range(p):
@@ -593,7 +594,7 @@ class Cosine(_Weighting):
                 )
                 K_ = K[*ind, ..., ik, :, 0, 0].unsqueeze(1)
                 att_mat[:, :, l] = torch.prod(
-                    torch.cos(Q_ - K_).moveaxis(3, 1),
+                    torch.cos(Q_ - K_).moveaxis(3, 1) ** m,
                     dim=-1,
                 )
             self.hook("Att", att_mat)

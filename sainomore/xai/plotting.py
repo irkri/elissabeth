@@ -85,7 +85,7 @@ def plot_parameter_matrix(
 
 def plot_time_parameters(
     parameter: torch.Tensor | tuple[torch.Tensor, ...],
-    x_axis: Optional[torch.Tensor] = None,
+    x_axis: Optional[Sequence[str] | torch.Tensor] = None,
     names: Optional[tuple[str, ...]] = None,
     cmap: str = "tab20",
     **kwargs,
@@ -129,7 +129,7 @@ def plot_time_parameters(
                     )
                 if x_axis is not None:
                     ax[l, d].set_xticks(np.arange(len(x_axis)))
-                    ax[l, d].set_xticklabels(x_axis.numpy())
+                    ax[l, d].set_xticklabels(x_axis)
 
     fig.tight_layout()
     fig.legend(title="Dimension")

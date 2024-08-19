@@ -43,6 +43,7 @@ def get_attention_matrices(
     length: int = 0,
     only_kernels: Optional[tuple[int, ...]] = None,
     value_direction: Optional[int | tuple[int, int]] = None,
+    all_but_first_value: bool = False,
     total: bool = False,
     project_heads: tuple[int, ...] | bool = False,
 ) -> torch.Tensor:
@@ -60,6 +61,13 @@ def get_attention_matrices(
             the attention matrices from. Defaults to 0.
         only_kernels (tuple of int, optional): Restricts the attention
             matrix to kernels with the given indices. Defaults to None.
+        value_direction (int or tuple of int, optional): If given,
+            multiplies the given value dimension of time step ``s`` to
+            the corresponding kernel ``K(t,s)``.
+        all_but_first_value (bool, optional): If set to True, does not
+            multiply the value corresponding to the most inner index of
+            the iterated sum to the corresponding kernel. Defaults to
+            False.
         total (bool, optional): If set to True, also calculates the
             attention matrix for the whole iterated sum ``Att_{t_1,t}``
             by calculating the iterated sum of all weightings. Defaults
@@ -111,7 +119,10 @@ def get_attention_matrices(
         v = v[..., *value_direction].moveaxis(-3, -1).unsqueeze(-2)
         while v.ndim > 4:
             v = v.squeeze(0)
-        att_mat = att_mat * v
+        if all_but_first_value:
+            att_mat[:, 1:, :, :] = att_mat[:, 1:, :, :] * v[:, 1:, :, :]
+        else:
+            att_mat = att_mat * v
 
     if isinstance(project_heads, tuple):
         att_mat = torch.tensordot(
@@ -378,12 +389,17 @@ def get_alphabet_projection(
     k: bool = True,
     v: bool = True,
     tokens: Optional[torch.Tensor] = None,
+    positions: Optional[int] = None,
 ) -> tuple[torch.Tensor, ...]:
     if tokens is None:
         x = torch.arange(model.config("input_vocab_size"))
     else:
         x = tokens.clone()
-    x = x.unsqueeze(1).repeat(1, model.config("context_length"))
+    x = x.unsqueeze(1)
+    if positions is not None:
+        x = x.repeat(1, positions)
+    else:
+        x = x.repeat(1, model.config("context_length"))
     if q or k:
         kernel = model.layers[layer].levels[length].weightings[weighting]
     if q:

@@ -69,6 +69,7 @@ class ElissabethWatcher:
         length: int = 0,
         only_kernels: Optional[tuple[int, ...]] = None,
         value_direction: Optional[int | tuple[int, int]] = None,
+        all_but_first_value: bool = False,
         total: bool = False,
         project_heads: tuple[int, ...] | bool = False,
         reduce_dims: dict[int, int] | bool = False,
@@ -83,6 +84,7 @@ class ElissabethWatcher:
             length=length,
             only_kernels=only_kernels,
             value_direction=value_direction,
+            all_but_first_value=all_but_first_value,
             total=total,
             project_heads=project_heads,
         )
@@ -164,7 +166,7 @@ class ElissabethWatcher:
     def plot_iss_time(
         self,
         x: torch.Tensor,
-        x_axis: Optional[torch.Tensor] = None,
+        x_axis: Optional[Sequence[str] | torch.Tensor] = None,
         layer: int = 0,
         length: int = 0,
         project_heads: tuple[int, ...] | bool = False,
@@ -217,7 +219,7 @@ class ElissabethWatcher:
     def plot_values_time(
         self,
         x: torch.Tensor,
-        x_axis: Optional[torch.Tensor] = None,
+        x_axis: Optional[Sequence[str] | torch.Tensor] = None,
         layer: int = 0,
         length: int = 0,
         project_heads: tuple[int, ...] | bool = False,
@@ -272,7 +274,7 @@ class ElissabethWatcher:
     def plot_query_key_time(
         self,
         x: torch.Tensor,
-        x_axis: Optional[torch.Tensor] = None,
+        x_axis: Optional[Sequence[str] | torch.Tensor] = None,
         layer: int = 0,
         length: int = 0,
         weighting: int = 0,
@@ -306,6 +308,7 @@ class ElissabethWatcher:
         k: bool = True,
         v: bool = True,
         tokens: Optional[torch.Tensor] = None,
+        positions: Optional[int] = None,
         transpose: bool = True,
         annotate_axes: bool = True,
         reduce_dims: dict[int, int] | bool = False,
@@ -323,6 +326,7 @@ class ElissabethWatcher:
             k=k,
             v=v,
             tokens=tokens,
+            positions=positions,
         )
         qkv = tuple(map(
             lambda x: reduce_append_dims(x, None, reduce_dims, append_dims),

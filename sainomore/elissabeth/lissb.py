@@ -48,7 +48,6 @@ class LISSBLevel(HookedModule):
         self.pos_encs.append(pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        T = x.size(1)
         for weighting in self.weightings:
             x = weighting.on_forward_start(x)
 
