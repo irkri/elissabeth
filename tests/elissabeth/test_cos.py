@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import randn
 
-from sainomore.elissabeth import Elissabeth, Weighting
+from sainomore.elissabeth import Elissabeth
 
 
 def test_cosine_weighting() -> None:
