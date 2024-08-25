@@ -60,6 +60,23 @@ class ElissabethWatcher:
             raise FileExistsError("Given id does not point to a saved model")
         return cls(model)
 
+    def get_values(
+        self,
+        x: torch.Tensor,
+        layer: int = 0,
+        length: int = 0,
+        project_heads: tuple[int, ...] | bool = False,
+        project_values: bool = False,
+    ) -> torch.Tensor:
+        return get_values(
+            self.model,
+            x,
+            layer=layer,
+            length=length,
+            project_heads=project_heads,
+            project_values=project_values,
+        )
+
     def plot_attention_matrices(
         self,
         example: torch.Tensor,

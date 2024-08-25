@@ -3,12 +3,12 @@ Extended Learnable Iterated Sums Signature Architecture
 
 Elissabeth is a deep learning sequence-to-sequence model consisting of LISS layers.
 
-![ELISSABETH outer](resources/elissabeth_outer.pdf)
+![ELISSABETH outer](resources/elissabeth.png)
 
 ## LISS Layer
 A single LISS layer computes weighted iterated sums with learnable parameters.
 
-![ELISSABETH inner](resources/elissabeth_pipeline.pdf)
+![ELISSABETH inner](resources/liss.png)
 
 ## sainomore
 The package sainomore implements **Elissabeth** and a pipeline for deep learning around it. We use
@@ -17,6 +17,24 @@ The package sainomore implements **Elissabeth** and a pipeline for deep learning
 implements specific callbacks for managing the logging. We developed a complex hooking mechanism
 for accessing parameters in our models.
 
+### Installation
+
+We recommend to use [Poetry](https://python-poetry.org/) for installing and testing sainomore.
+
+    $ git clone https://github.com/irkri/elissabeth
+    $ cd elissabeth
+    $ poetry install          (or: $ python -m pip install -e .)
+
+
+Without cloning the repository, use instead:
+
+    $ pip install git+https://github.com/irkri/elissabeth
+
+### Experiments
+
+The [projects](projects) folder contains some experiments we tested Elissabeth thoroughly on.
+
+### Short module description
 - `sainomore.elissabeth` implements everthing needed to make a flexible general **Elissabeth**
   model work
     - `sainomore.elissabeth.elissabeth` contains code for the outer model, consisting of embedding,

@@ -5,30 +5,27 @@ from typing import Optional
 
 import lightning.pytorch as L
 import numpy as np
-import pandas as pd
 import torch
 import wandb
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers.wandb import WandbLogger
-from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
-                                 GeneralConfigCallback, WeightHistory)
-from sainomore.data import GivenDataModule, copying
-from sainomore.elissabeth import Elissabeth, Weighting
+from sainomore.callbacks import GeneralConfigCallback
+from sainomore.data import GivenDataModule
+from sainomore.elissabeth import Elissabeth
 from sainomore.lightning import TokenPredictionModule
-from sainomore.positional import PositionalEncoding
+
+from data import copying
 
 torch.set_float32_matmul_precision('high')
-
-SAVE_PATH: Optional[str] = None
 
 config = {
     "n_samples": 1000,
     "context_length": 100,
     "n_categories": 10,
     "to_copy": 10,
+    "max_dilute": 5,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
@@ -73,6 +70,7 @@ def train(
             length=config["context_length"],
             n_categories=config["n_categories"],
             to_copy=config["to_copy"],
+            max_dilute=config["max_dilute"],
         ),
         val_size=config["val_size"],
         batch_size=config["batch_size"],
@@ -98,12 +96,6 @@ def train(
 
         wandb_logger.watch(lightning_module, log="all")
 
-    x, _ = copying(
-        n_samples=1,
-        length=config["context_length"],
-        n_categories=config["n_categories"],
-        to_copy=config["to_copy"],
-    )
     callbacks: list[Callback] = [
         GeneralConfigCallback(),
         ModelCheckpoint(monitor="validation/loss", mode="min"),
@@ -114,9 +106,7 @@ def train(
         accelerator="auto",
         callbacks=callbacks if not only_test else None,
         logger=wandb_logger if not only_test else None,
-        default_root_dir=SAVE_PATH,
         enable_progress_bar=progress_bar,
-        # overfit_batches=10,
     )
 
     if only_test:
@@ -128,73 +118,10 @@ def train(
         wandb.finish()
 
 
-def battery(lightning_module: TokenPredictionModule) -> None:
-    lengths = [10, 25, 100, 150, 200, 250, 500, 750, 1000, 10_000]
-    samples = 5
-    trainit = True
-
-    accuracy = np.zeros((len(lengths), samples, 2))
-    trainer = L.Trainer(max_epochs=500)
-    for l in range(len(lengths)):
-        print(f"Starting Length {lengths[l]}", end="", flush=True)
-        lightning_module = build_model(lengths[l])
-        if trainit:
-            data_module = GivenDataModule(
-                copying(
-                    n_samples=1000,
-                    length=lengths[l],
-                    n_categories=config["n_categories"],
-                    to_copy=config["to_copy"],
-                ),
-                val_size=0.0,
-                batch_size=config["batch_size"],
-                num_workers=5,
-                # somehow this option is important, atleast on CPU
-                # (no more waiting between epochs)
-                persistent_workers=True,
-            )
-            trainer.fit(
-                lightning_module,
-                train_dataloaders=data_module,
-            )
-        for i in range(samples):
-            print(".", end="", flush=True)
-            data_module = GivenDataModule(
-                copying(
-                    n_samples=100,
-                    length=lengths[l],
-                    n_categories=config["n_categories"],
-                    to_copy=config["to_copy"],
-                ),
-                val_size=1.0,
-                batch_size=config["batch_size"],
-                num_workers=5,
-                # somehow this option is important, atleast on CPU
-                # (no more waiting between epochs)
-                persistent_workers=True,
-            )
-            out = trainer.validate(
-                lightning_module,
-                data_module,
-                verbose=False,
-            )[0]
-            accuracy[l, i, 0] = out["validation/loss"]
-            accuracy[l, i, 1] = out["validation/accuracy"]
-        pd.DataFrame(
-            accuracy[:(l+1), :, 0].T,
-            columns=[f"Length {k}" for k in lengths[:(l+1)]],
-        ).to_csv("battery_loss.csv")
-        pd.DataFrame(
-            accuracy[:(l+1), :, 1].T,
-            columns=[f"Length {k}" for k in lengths[:(l+1)]],
-        ).to_csv("battery_accuracy.csv")
-        print()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("mode", choices=["train", "test", "battery"])
+    parser.add_argument("mode", choices=["train", "test"])
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--load", default=None)
 
@@ -229,8 +156,6 @@ def main() -> None:
         )
     elif args.mode == "test":
         train(lightning_module, only_test=True)
-    elif args.mode == "battery":
-        battery(lightning_module)
 
 
 if __name__ == '__main__':

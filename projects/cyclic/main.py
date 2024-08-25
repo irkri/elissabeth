@@ -4,30 +4,25 @@ from pathlib import Path
 from typing import Optional
 
 import lightning.pytorch as L
-import numpy as np
-import pandas as pd
 import torch
 import wandb
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers.wandb import WandbLogger
-from matplotlib import pyplot as plt
 from torchmetrics.classification import MulticlassAccuracy
 
-from sainomore.callbacks import (ElissabethISTracker, ElissabethWeighting,
-                                 GeneralConfigCallback, WeightHistory)
-from sainomore.data import GivenDataModule, cyclic
-from sainomore.elissabeth import Elissabeth, Weighting
+from sainomore.callbacks import GeneralConfigCallback
+from sainomore.data import GivenDataModule
+from sainomore.elissabeth import Elissabeth
 from sainomore.lightning import TokenPredictionModule
-from sainomore.positional import PositionalEncoding
+
+from data import cyclic
 
 torch.set_float32_matmul_precision('high')
 
-SAVE_PATH: Optional[str] = None
-
 config = {
     "n_samples": 1000,
-    "context_length": 25,
-    "characters": 5,
+    "context_length": 100,
+    "characters": 6,
 
     "lr": 5e-3,
     "weight_decay": 1e-4,
@@ -49,79 +44,7 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     model_config["output_vocab_size"] = 2
 
     model = Elissabeth.build(model_config)
-
-    state_dict = model.state_dict()
-
-    state_dict["embedding.weight"] = torch.eye(5)
-    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.Tensor([
-        [1, 1, 1, 1, 1],
-
-        [1, 1, 1, 1, 1],
-
-        [1, 1, 1, 1, 1],
-    ])
-
-    state_dict["layers.0.W_O"] = torch.Tensor([
-        [1, 0, 0, 0, 0],
-    ]).unsqueeze(1)
-    state_dict["layers.0.W_H"] = torch.Tensor([[1]])
-    state_dict["unembedding.weight"] = torch.Tensor([
-        [0, 0, 0, 0, 0],
-        [1, 1, 1, 1, 1],
-    ])
-
-    d = torch.pi / 2
-    state_dict["layers.0.levels.0.weightings.0.P_Q.transform.weight"] = (
-        torch.Tensor([
-            [0, d, 0, 0, d],
-            [0, 0, d, 0, d],
-            [0, 0, 0, d, 0],
-
-            [0, d, 0, 0, d],
-            [0, 0, d, 0, d],
-            [0, 0, 0, d, 0],
-
-            [0, d, 0, 0, d],
-            [0, 0, d, 0, d],
-            [0, 0, 0, d, 0],
-
-            # [0, d, 0, 0, d],
-            # [0, 0, d, 0, d],
-            # [0, 0, 0, d, 0],
-        ])
-    )
-    state_dict["layers.0.levels.0.weightings.0.P_K.transform.weight"] = (
-        torch.Tensor([
-            [d, 0, 0, d, d],
-            [d, d, 0, d, 0],
-            [d, 0, d, 0, 0],
-
-            [d, 0, 0, d, d],
-            [d, d, 0, d, 0],
-            [d, 0, d, 0, 0],
-
-            [d, 0, 0, d, d],
-            [d, d, 0, d, 0],
-            [d, 0, d, 0, 0],
-        ])
-    )
-
-    model.load_state_dict(state_dict)
-
-    for name in [
-        "layers.0.levels.0.weightings.0.P_Q.transform.weight",
-        "layers.0.levels.0.weightings.0.P_Q.transform.bias",
-        "layers.0.levels.0.weightings.0.P_K.transform.weight",
-        "layers.0.levels.0.weightings.0.P_K.transform.bias",
-        "layers.0.levels.0.P_V.transform.weight",
-        "layers.0.levels.0.P_V.transform.bias",
-        "layers.0.W_H",
-        "layers.0.W_O",
-        "embedding.weight",
-        "unembedding.weight",
-    ]:
-        model.get_parameter(name).requires_grad = False
-
+    # model = implant_exact_solution(model)
 
     lightning_module = TokenPredictionModule(
         model,
@@ -134,6 +57,63 @@ def build_model(l: int | None = None) -> TokenPredictionModule:
     return lightning_module
 
 
+def implant_exact_solution(
+    model: Elissabeth,
+    fix_parameters: bool = False,
+) -> Elissabeth:
+    # only works when cos and sin are rounded in the model
+    state_dict = model.state_dict()
+
+    p = 4
+    state_dict["embedding.weight"] = torch.eye(6)
+    state_dict["layers.0.levels.0.P_V.transform.weight"] = torch.Tensor(p*[
+        [1, 1, 1, 1, 1, 1],
+    ])
+
+    state_dict["layers.0.W_O"] = torch.Tensor([
+        [1, 1, 1, 1, 1, 1],
+    ]).unsqueeze(1)
+    state_dict["layers.0.W_H"] = torch.Tensor([[1]])
+    state_dict["unembedding.weight"] = torch.Tensor([
+        [0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1],
+    ])
+
+    d = torch.pi / 2
+    state_dict["layers.0.levels.0.weightings.0.P_Q.transform.weight"] = (
+        torch.Tensor(p*[
+            [0, d, 0, 0, d, d],
+            [0, 0, d, 0, d, 0],
+            [0, 0, 0, d, 0, d],
+        ])
+    )
+    state_dict["layers.0.levels.0.weightings.0.P_K.transform.weight"] = (
+        torch.Tensor(p*[
+            [d, 0, 0, d, d, d],
+            [d, d, 0, d, 0, 0],
+            [d, 0, d, 0, d, 0],
+        ])
+    )
+
+    model.load_state_dict(state_dict)
+
+    if fix_parameters:
+        for name in [
+            "layers.0.levels.0.weightings.0.P_Q.transform.weight",
+            "layers.0.levels.0.weightings.0.P_Q.transform.bias",
+            "layers.0.levels.0.weightings.0.P_K.transform.weight",
+            "layers.0.levels.0.weightings.0.P_K.transform.bias",
+            "layers.0.levels.0.P_V.transform.weight",
+            "layers.0.levels.0.P_V.transform.bias",
+            "layers.0.W_H",
+            "layers.0.W_O",
+            "embedding.weight",
+            "unembedding.weight",
+        ]:
+            model.get_parameter(name).requires_grad = False
+    return model
+
+
 def train(
     lightning_module: TokenPredictionModule,
     use_wandb: bool = False,
@@ -141,8 +121,6 @@ def train(
     progress_bar: bool = False,
     only_test: bool = False,
 ) -> None:
-    if load_path is not None:
-        load_path = str(load_path)
     data_module = GivenDataModule(
         cyclic(
             n_samples=config["n_samples"],
@@ -183,9 +161,7 @@ def train(
         accelerator="auto",
         callbacks=callbacks if not only_test else None,
         logger=wandb_logger if not only_test else None,
-        default_root_dir=SAVE_PATH,
         enable_progress_bar=progress_bar,
-        # overfit_batches=10,
     )
 
     if only_test:
@@ -197,24 +173,10 @@ def train(
         wandb.finish()
 
 
-def plot(lightning_module: TokenPredictionModule) -> None:
-    # torch.random.manual_seed(662)
-    # np.random.seed(662)
-
-    x, y = cyclic(
-        n_samples=5,
-        length=25,
-        characters=5,
-    )
-    print(x)
-    print(y)
-    print(lightning_module(x)[:, -1, :])
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("mode", choices=["train", "test", "plot", "battery"])
+    parser.add_argument("mode", choices=["train", "test"])
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--load", default=None)
 
@@ -232,7 +194,7 @@ def main() -> None:
                 load_path = load_path / next(load_path.iterdir())
                 saved_ = torch.load(
                     load_path,
-                    # map_location=torch.device("cpu"),
+                    map_location=torch.device("cpu"),
                 )
                 lightning_module.load_state_dict(saved_["state_dict"])
     if args.load is not None and load_path is None:
@@ -249,8 +211,6 @@ def main() -> None:
         )
     elif args.mode == "test":
         train(lightning_module, only_test=True)
-    elif args.mode == "plot":
-        plot(lightning_module)
 
 
 if __name__ == '__main__':

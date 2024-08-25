@@ -2,32 +2,33 @@
     "context_length" : null,
     "input_vocab_size" : null,
     "n_layers" : 1,
-    "d_hidden" : 16,
-    "layer_norm" : true,
-    "residual_stream": true,
+    "d_hidden" : 5,
+    "layer_norm" : false,
+    "residual_stream": false,
+    "semiring": "real",
 
-    "n_is" : 8,
-    "max_length_is" : 3,
-    "sum_normalization" : true,
+    "n_is" : 1,
+    "lengths" : [2],
+    "sum_normalization" : false,
 
     "d_values" : 5,
     "values_2D" : false,
     "pe_value" : false,
-    "v_activation": "relu",
-    "v_latent": 16,
-    "v_include_time": true,
+    "v_norm": false,
 
     "restrict_query_key" : false,
     "exponent": 1,
-    "d_query_key": 1,
+    "d_query_key": 3,
 
-    "exp_alpha_0" : 50,
+    "exp_alpha_0": 50,
 
-    "cos_alpha_0": 1,
-    "d_alpha": 1,
-    "decay_exponent": 1,
+    "v_activation": null,
+    "v_latent": 16,
+    "v_include_time": false,
 
-    "qk_activation": "relu",
+    "qk_activation": null,
     "qk_latent": 16,
-    "qk_include_time": true
+    "qk_include_time": false,
+
+    "weighting": ["Cosine", "ExponentialDecay"]
 }
