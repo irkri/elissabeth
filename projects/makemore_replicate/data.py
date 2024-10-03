@@ -17,9 +17,9 @@ class LetterAssembler:
 
     One possible example of a dataset that can be used is:
         https://huggingface.co/datasets/Abirate/english_quotes
-    Download the `.json` file, transform it to a `quotes.txt` file and
-    erase unwanted characters or samples. Then call this file from the
-    terminal to print the dataset.
+    Download the `.json` file, transform it to a `./quotes.txt` file and
+    erase unwanted characters or samples. Then call this file by
+    ``python data.py`` from the terminal to print the dataset.
 
     This project was inspired by 'makemore':
         https://github.com/karpathy/makemore
