@@ -17,6 +17,17 @@ from .tools import (get_alphabet_projection, get_attention_matrices, get_iss,
 
 
 class ElissabethWatcher:
+    """Class that implements useful methods to analyze trained
+    Elissabeth models by combining and wrapping methods of
+    `sainomore.xai.tools` and `sainomore.xai.plotting`.
+
+    A convenient way of starting a watcher instance is to use
+    `ElissabethWatcher.load` given the string pointing to a trained
+    Elissabeth model.
+
+    Args:
+        model (Elissabeth): The model this class should watch.
+    """
 
     def __init__(
         self,
@@ -31,6 +42,18 @@ class ElissabethWatcher:
         model: Optional[Elissabeth] = None,
         on_cpu: bool = False,
     ) -> Self:
+        """Returns a new ElissabethWatcher instance for a trained model.
+
+        Args:
+            model_id (str): The path of the directory containing
+                checkpoints and the configuration json file of the
+                trained Elissabeth model. This directory typically is a
+                folder named like the id of the model.
+            model (Elissabeth, optional): The class that is used to load
+                the model. Defaults to the standard Elissabeth class.
+            on_cpu (bool, optional): If set to True, forces all
+                parameters to be mapped to CPU. Defaults to False.
+        """
         load_path = None
         directory = Path.cwd()
         for folder in directory.iterdir():
@@ -94,6 +117,77 @@ class ElissabethWatcher:
         index_selection: Optional[Sequence[tuple[int, torch.Tensor]]] = None,
         **kwargs,
     ) -> tuple[Figure, np.ndarray]:
+        """Plots the given attention matrix of the given Elissabeth model.
+
+        Args:
+            example (torch.Tensor): The example the attention matrix is
+                generated for.
+            xlabels (sequence of str, optional): Writes the given
+                strings on horizontal and vertical axes of each
+                attention matrix plot. Defaults to None.
+            show_example (bool, optional): Whether the example is shown
+                in the plot at the edges of the matrices. Defaults to
+                True.
+            layer (int, optional): The index of the LISS layer to
+                extract the attention matrices from. Defaults to 0.
+            length (int, optional): The index of the ISS level to
+                extract the attention matrices from. Defaults to 0.
+            only_kernels (tuple of int, optional): Restricts the
+                attention matrix to kernels with the given indices.
+                Defaults to None.
+            value_direction (int or tuple of int, optional): If given,
+                multiplies the given value dimension of time step ``s``
+                to the corresponding kernel ``K(t,s)``.
+            all_but_first_value (bool, optional): If set to True, does
+                not multiply the value corresponding to the most inner
+                index of the iterated sum to the corresponding kernel.
+                Defaults to False.
+            total (bool, optional): If set to True, also calculates the
+                attention matrix for the whole iterated sum
+                ``Att_{t_1,t}`` by calculating the iterated sum of all
+                weightings. Defaults to False.
+            project_heads (tuple of int | bool, optional): Whether the
+                ``n_is`` iterated sums of the model should be linearly
+                projected using the ``W_H`` matrix in the model. The
+                result then is a tensor with first dimension of size 1.
+                If a tuple of indices is given, only these iterated sums
+                are considered. Defaults to False.
+            contains_total (bool, optional): Whether the last attention
+                matrix in the ``length_is`` axis actually is the total
+                weighting of the iterated sum. Defaults to False.
+            cmap (str, optional): Colormap for the attention matrix.
+                Defaults to "seismic".
+            center_zero (bool, optional): Whether to center the colormap
+                such that zero has color white. Defaults to False.
+            cmap_example (str, optional): Colormap for the example that
+                is plotted besides the matrix plot. Defaults to "Set1".
+            causal_mask (bool, optional): Whether to automatically set a
+                causal mask for the attention matrix. Defaults to True.
+            log_map (bool, optional): Whether to scale the colormap for
+                the attention matrix logarithmically. If a tuple of two
+                floats is given, these are the arguments for matplotlibs
+                ``SymLogNorm`` ``linthresh`` and ``linscale``. This is
+                useful for inputs containing negative numbers. Defaults
+                to False.
+            share_map (bool, optional): Whether to share the colormap
+                across different attention matrices in the same layer.
+                Defaults to True.
+            reduce_dims (dict[int, int] | bool, optional): Reduces the
+                dimensionality of the generated attention matrix to the
+                given shape or automatically forces the matrix into the
+                needed shape for plotting. Defaults to False.
+            append_dims (tuple of int | bool, optional): Increases the
+                dimensionality of the generated attention matrix to the
+                given shape or automatically adds dimensions to the
+                matrix for plotting. Defaults to True.
+            index_selection (sequence of tuple[int, torch.Tensor],
+                optional): Selects only the given indices at the
+                corresponding dimension from the attention matrix before
+                plotting. Defaults to None.
+        Returns:
+            tuple[Figure, np.ndarray]: Figure and array of axes from
+                matplotlib.
+        """
         att = get_attention_matrices(
             self.model,
             example,

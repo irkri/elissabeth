@@ -23,8 +23,6 @@ def test_iterated_sum() -> None:
         "pe_value" : False,
         "v_norm": False,
 
-        "arctic_alpha_0" : 2,
-
         "weighting": []
     }
     model = Elissabeth.build(config)
@@ -48,20 +46,19 @@ def test_iterated_sum() -> None:
 
     model.load_state_dict(state_dict)
 
-    X = torch.randint(0, 5, size=(10, ))
+    X = torch.randint(0, 5, size=(100, ))
     the_result = torch.fill(torch.empty(5), -torch.inf)
-    for t in range(X.shape[0]):
-        for t_3 in range(t+1):
-            for t_2 in range(t_3):
-                for t_1 in range(t_2):
-                    result_ = (
-                          v1[X[t_1]]
-                        + v2[X[t_2]]
-                        + v3[X[t_3]]
-                    )
-                    for i in range(5):
-                        if result_[i] > the_result[i]:
-                            the_result[i] = result_[i]
+    for t_3 in range(X.shape[0]):
+        for t_2 in range(t_3):
+            for t_1 in range(t_2):
+                result_ = (
+                      v1[X[t_1]]
+                    + v2[X[t_2]]
+                    + v3[X[t_3]]
+                )
+                for i in range(5):
+                    if result_[i] > the_result[i]:
+                        the_result[i] = result_[i]
 
     result = model(X.unsqueeze(0))
     torch.testing.assert_close(result[0, -1, :], the_result)
