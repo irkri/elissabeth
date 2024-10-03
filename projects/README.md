@@ -10,7 +10,7 @@ For each project, several files are given:
 
 ## Starting an experiment
 
-We advise to browse through the code to get used to our pipeline. Starting an experiment is
+We advise you to browse through the code to get used to our pipeline. Starting an experiment is
 simple. Below is a walkthrough of a typical test run.
 
 1. Configure the model by modifying the `config.json` file.
@@ -19,6 +19,8 @@ simple. Below is a walkthrough of a typical test run.
 3. Start an experiment run by calling
 
         $ python main.py train
+   If you want to use Weights & Biases for experiment tracking, also supply the option ``--online``
+   after you configured your experiment in the ``WandbLogger`` instance in ``main.py``.
 4. Test the trained model by calling
 
         $ python main.py test --load [your-model-id]
@@ -34,7 +36,7 @@ simple. Below is a walkthrough of a typical test run.
 Below are the most important hyperparameters in the config.json file explained. These parameters
 can be found with the same name in configuration classes of sainomore modules.
 
-- *context_length* - Length $T$ of the longest possible input.,
+- *context_length* - Length $T$ of the longest possible input.
 - *input_type* - Either `"vector"` or `"token"`.
 - *input_vocab_size* - Number of possible input tokens for *input_type*=`"token"`, else vector
 dimensionality.
@@ -43,7 +45,7 @@ specified, it is assumed to be the same as *input_vocab_size*.
 - *n_layers* - Number of layers $L$.,
 - *d_hidden* - Size of the latent space throughout the model $d_{\text{hidden}}$.
 - *layer_norm* - If layer norm should be used, boolean.
-- *residual_stream*: If the residual stream should be used, boolean.
+- *residual_stream* - If the residual stream should be used, boolean.
 - *semiring* - One of `"real"`, `"arctic"` or `"bayesian"`. The semiring throughout the model.
 - *n_is* - Number of iterated sums $N$ in all layers.
 - *lengths* - List of lengths of the ISS that one LISS layer computes. Often this is a list with
@@ -60,7 +62,7 @@ function that depends on the current weighting, boolean.
 - *d_query_key* - Dimensionality of query and key $d_{q,k}$.
 - *exp_alpha_0* - The parameter $\alpha_0$ for the exponential weighting
 *weighting*=``["ExponentialDecay"]``.
-- *qk_activation*: Activation function of the query-key transform. Either ``none`` for linear
+- *qk_activation* - Activation function of the query-key transform. Either ``none`` for linear
 transformation or ``"relu"``/``"sine"`` for an FFN.
 - *qk_latent* - Latent dimension of the FFN when *qk_activation* is set to an activation function.
 - *qk_include_time* - If the time component should be given to the FFN, see above, boolean.
@@ -69,4 +71,4 @@ transformation or ``"relu"``/``"sine"`` for an FFN.
 - *v_include_time* - Same as for query-key.
 - *weighting* - A list of weightings that can be used in an iterated sum. Possible options are
   ``"ExponentialDecay"``, ``"Exponential"``, ``"CosineDecay"``, ``"Cosine"``,
-  ``"ComplexExponential"`` or ``"MSC"``.
+  ``"ComplexExponential"`` and ``"MSC"``.

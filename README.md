@@ -35,6 +35,9 @@ Without cloning the repository, use instead:
 The [projects](projects) folder contains some experiments we tested Elissabeth thoroughly on.
 
 ### Short module description
+
+![sainomore classes](resources/sainomore_classes.png)
+
 - `sainomore.elissabeth` implements everthing needed to make a flexible general **Elissabeth**
   model work
     - `sainomore.elissabeth.elissabeth` contains code for the outer model, consisting of embedding,
