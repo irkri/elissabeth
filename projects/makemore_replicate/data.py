@@ -1,4 +1,3 @@
-import os
 from typing import Optional
 from pathlib import Path
 
@@ -7,6 +6,24 @@ import numpy as np
 
 
 class LetterAssembler:
+    """This class manages a dataset for our 'makemore' replicate. Supply
+    a path to a given `.txt` file where each line represents one sample
+    from the dataset. The LetterAssembler then automatically finds all
+    unique characters and creates an alphabet for the dataset. Each
+    character gets translated to one specific token. Samples can be of
+    varying length and shorter samples are filled with a special
+    character. Target sequences are filled with -1 for marking positions
+    that should be ignored by a loss function when training a model.
+
+    One possible example of a dataset that can be used is:
+        https://huggingface.co/datasets/Abirate/english_quotes
+    Download the `.json` file, transform it to a `quotes.txt` file and
+    erase unwanted characters or samples. Then call this file from the
+    terminal to print the dataset.
+
+    This project was inspired by 'makemore':
+        https://github.com/karpathy/makemore
+    """
 
     def __init__(self, path: Path) -> None:
         with open(path, "r", encoding="utf-8") as f:
