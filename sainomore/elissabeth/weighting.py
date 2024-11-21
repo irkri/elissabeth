@@ -14,6 +14,7 @@ from .qkv import QKGen, Sin
 
 class Weighting(IntFlag):
 
+    Normalization = auto()
     ExponentialDecay = auto()
     ArcticDecay = auto()
     Exponential = auto()
@@ -47,6 +48,50 @@ class _Weighting(ABC, HookedModule):
 
     def add_pe(self, pe: _PositionalEncoding) -> None:
         self.pos_encs.append(pe)
+
+
+class NormalizationConfig(BaseModel):
+    ...
+
+
+class Normalization(_Weighting):
+
+    _config_class = NormalizationConfig
+
+    def __init__(
+        self,
+        parent: Optional["HookedModule"] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent=parent, **kwargs)
+        factor_norm = torch.empty((self.config("context_length"), 1, 1, 1))
+        factor_norm[:, 0, 0, 0] = torch.arange(
+            1, self.config("context_length") + 1
+        )
+        self.register_buffer("norm", factor_norm)
+        self.beta = nn.Parameter(torch.empty((self.config("length_is"), )))
+        nn.init.constant_(self.beta, 5.40988)
+        self._T = self.config("context_length")
+
+    def on_weighting(self, x: torch.Tensor, l: int) -> torch.Tensor:
+        if l == 1:
+            x /= (
+                (0.25*torch.tanh(self.beta[0])+0.75001)**(
+                    torch.log10(self.get_buffer("norm")[:self._T, :, :, :])
+                ) * self.get_buffer("norm")[:self._T, :, :, :]
+            )
+        elif l > 1:
+            x /= nn.functional.pad(
+                (0.25*torch.tanh(self.beta[l-1])+0.75001)**(
+                    torch.log10(self.get_buffer("norm")[:self._T, :, :, :])
+                ) * self.get_buffer("norm")[:self._T, :, :, :],
+                (0, 0, 0, 0, 0, 0, l-1, 0),
+                value=1.0,
+            )[:-(l-1), :, :, :]
+        return x
+
+    def add_pe(self, pe: _PositionalEncoding) -> None:
+        pass
 
 
 class ExponentialDecayConfig(BaseModel):
@@ -722,6 +767,7 @@ class MSC(_Weighting):
 
 
 dict_weighting_id: dict[Weighting, type[_Weighting]] = {
+    Weighting.Normalization: Normalization,
     Weighting.ExponentialDecay: ExponentialDecay,
     Weighting.ArcticDecay: ArcticDecay,
     Weighting.Exponential: Exponential,
@@ -734,6 +780,7 @@ dict_weighting_id: dict[Weighting, type[_Weighting]] = {
 
 
 dict_weighting_str: dict[str, type[_Weighting]] = {
+    "Normalization": Normalization,
     "ExponentialDecay": ExponentialDecay,
     "ArcticDecay": ArcticDecay,
     "Exponential": Exponential,

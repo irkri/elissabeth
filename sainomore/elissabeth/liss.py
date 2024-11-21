@@ -17,7 +17,6 @@ class LISSLevelConfig(BaseModel):
     n_is: int = 1
     length_is: int = 2
     values_2D: bool = False
-    sum_normalization: bool = True
 
     share_values: bool = False
     pe_value: bool = False
@@ -35,16 +34,6 @@ class LISSLevel(HookedModule):
     ) -> None:
         super().__init__(parent, **kwargs)
         self.P_V = VGen(self, **kwargs)
-
-        self.beta = None
-        if self.config("sum_normalization"):
-            factor_norm = torch.empty((self.config("context_length"), 1, 1, 1))
-            factor_norm[:, 0, 0, 0] = torch.arange(
-                1, self.config("context_length") + 1
-            )
-            self.register_buffer("norm", factor_norm)
-            self.beta = nn.Parameter(torch.empty((self.config("length_is"), )))
-            nn.init.constant_(self.beta, 5.40988)
 
         self.weightings: list[_Weighting] = nn.ModuleList()  # type: ignore
         self.pos_encs = nn.ModuleList()
@@ -73,13 +62,6 @@ class LISSLevel(HookedModule):
             result = weighting.on_weighting(result, 0)
         result = torch.cumsum(result, dim=-4)
 
-        if self.beta is not None:
-            result /= (
-                (0.25*torch.tanh(self.beta[0])+0.75001)**(
-                    torch.log10(self.get_buffer("norm")[:T, :, :, :])
-                ) * self.get_buffer("norm")[:T, :, :, :]
-            )
-
         for l in range(1, self.p):
             result = nn.functional.pad(
                 result[..., :, :-1, :, :, :],
@@ -94,15 +76,6 @@ class LISSLevel(HookedModule):
             for weighting in self.weightings:
                 result = weighting.on_weighting(result, l)
             result = torch.cumsum(result, dim=-4)
-
-            if self.beta is not None:
-                result /= nn.functional.pad(
-                    (0.25*torch.tanh(self.beta[l])+0.75001)**(
-                        torch.log10(self.get_buffer("norm")[:T, :, :, :])
-                    ) * self.get_buffer("norm")[:T, :, :, :],
-                    (0, 0, 0, 0, 0, 0, l, 0),
-                    value=1.0,
-                )[:-l, :, :, :]
 
         for weighting in self.weightings:
             result = weighting.on_weighting(result, self.p)
