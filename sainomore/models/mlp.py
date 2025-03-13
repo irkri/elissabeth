@@ -1,13 +1,11 @@
 from typing import Optional
 
 import torch
-from pydantic import BaseModel
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
 
-from ..base import HookedModule
 
-
-class MLPConfig(BaseModel):
+class MLPConfig(HookedModuleConfig):
 
     mlp_size: int
     d_hidden: int

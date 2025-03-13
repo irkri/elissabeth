@@ -1,9 +1,8 @@
 from typing import Literal, Optional
 
 import torch
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
-
-from ..base import BaseModel, HookedModule
 
 
 class Sin(nn.Module):
@@ -12,7 +11,7 @@ class Sin(nn.Module):
         return torch.sin(input)
 
 
-class QKGenConfig(BaseModel):
+class QKGenConfig(HookedModuleConfig):
 
     qk_activation: Optional[Literal["sin", "relu"]] = None
     qk_latent: Optional[int] = None
@@ -81,7 +80,7 @@ class QKGen(HookedModule):
         return self.transform(y).reshape(*x.shape[:-1], *self._shape)
 
 
-class VGenConfig(BaseModel):
+class VGenConfig(HookedModuleConfig):
 
     v_activation: Optional[Literal["sin", "relu", "timegate"]] = None
     v_latent: Optional[int] = None

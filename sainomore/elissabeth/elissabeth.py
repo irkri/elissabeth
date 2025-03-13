@@ -4,10 +4,10 @@ from enum import IntFlag
 from typing import Any, Literal, Self
 
 import torch
-from pydantic import BaseModel, validator
+from hooked import HookedModule, HookedModuleConfig
+from pydantic import validator
 from torch import nn
 
-from ..base import SAINoMoreModule
 from ..models.mlp import MLP
 from ..positional import PositionalEncoding, get_pe
 from .liss import LISS
@@ -16,7 +16,8 @@ from .lissb import LISSB
 from .weighting import Weighting, get_weighting
 
 
-class ElissabethConfig(BaseModel):
+class ElissabethConfig(HookedModuleConfig):
+
     context_length: int
     input_vocab_size: int
     input_type: Literal["token", "vector"] = "token"
@@ -43,7 +44,7 @@ class ElissabethConfig(BaseModel):
         return output_vocab_size
 
 
-class Elissabeth(SAINoMoreModule):
+class Elissabeth(HookedModule):
     """Extended Learnable Iterated Sums Signature Architecture"""
 
     _config_class = ElissabethConfig
@@ -148,27 +149,14 @@ class Elissabeth(SAINoMoreModule):
     def build(
         cls: type[Self],
         config: dict[str, Any],
-        *flags: IntFlag,
     ) -> Self:
         model = cls(**config)
         weightings = []
-        pos_encs = []
-        model.flags = flags
         if "weighting" in config:
             weightings.extend(get_weighting(config["weighting"]))
-        else:
-            for flag in flags:
-                if isinstance(flag, PositionalEncoding):
-                    pos_encs.extend(get_pe(flag))
-                if isinstance(flag, Weighting):
-                    weightings.extend(get_weighting(flag))
         for layer in model.layers:
             for level in layer.levels:
-                for pe in pos_encs:
-                    level.add_pe(pe(**config))
                 for weighting in weightings:
                     weighting_module = weighting(level, **config)
-                    for pe in pos_encs:
-                        weighting_module.add_pe(pe(**config))
                     level.add_weighting(weighting_module)
         return model

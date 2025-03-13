@@ -3,10 +3,8 @@ from enum import IntFlag, auto
 
 import numpy as np
 import torch
-from pydantic import BaseModel
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
-
-from .base import HookedModule
 
 
 class PositionalEncoding(IntFlag):
@@ -21,7 +19,7 @@ class _PositionalEncoding(ABC, HookedModule):
     pass
 
 
-class RoPEConfig(BaseModel):
+class RoPEConfig(HookedModuleConfig):
 
     context_length: int
     d_hidden: int

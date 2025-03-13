@@ -3,16 +3,16 @@ __all__ = ["LISSB", "LISSBConfig"]
 from typing import Optional, Sequence
 
 import torch
-from pydantic import BaseModel
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
 
-from ..base import HookedModule
 from ..positional import _PositionalEncoding
 from .qkv import VGen
 from .weighting import _Weighting
 
 
-class LISSBLevelConfig(BaseModel):
+class LISSBLevelConfig(HookedModuleConfig):
+
     d_values: int
     n_is: int = 1
     length_is: int = 2
@@ -86,7 +86,8 @@ class LISSBLevel(HookedModule):
         return result
 
 
-class LISSBConfig(BaseModel):
+class LISSBConfig(HookedModuleConfig):
+
     d_values: int
     values_2D: bool = False
     n_is: int = 1

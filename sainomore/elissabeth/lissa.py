@@ -3,16 +3,16 @@ __all__ = ["LISSA", "LISSAConfig"]
 from typing import Optional, Sequence
 
 import torch
-from pydantic import BaseModel
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
 
-from ..base import HookedModule
 from ..positional import _PositionalEncoding
 from .qkv import VGen
 from .weighting import _Weighting
 
 
-class LISSALevelConfig(BaseModel):
+class LISSALevelConfig(HookedModuleConfig):
+
     d_values: int
     n_is: int = 1
     length_is: int = 2
@@ -84,7 +84,8 @@ class LISSALevel(HookedModule):
         return result
 
 
-class LISSAConfig(BaseModel):
+class LISSAConfig(HookedModuleConfig):
+
     d_values: int
     values_2D: bool = False
     n_is: int = 1

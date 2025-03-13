@@ -1,18 +1,16 @@
-from enum import IntFlag
 from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
-from pydantic import BaseModel, validator
+from hooked import HookedModule, HookedModuleConfig
+from pydantic import validator
 from torch import nn
 
-from ..base import HookedModule, SAINoMoreModule
-from ..hooks import HookCollection
-from ..positional import PositionalEncoding, _PositionalEncoding, get_pe
+from ..positional import _PositionalEncoding
 from .mlp import MLP
 
 
-class MHAConfig(BaseModel):
+class MHAConfig(HookedModuleConfig):
 
     d_head: int
     n_heads: int
@@ -56,7 +54,7 @@ class MHA(HookedModule):
         T = self.config("context_length")
         self.register_buffer("mask", torch.tril(torch.ones(1, 1, T, T)).bool())
 
-        self.hooks = HookCollection("Q", "K", "V", "A_pre", "A", "heads")
+        self.add_hooks("Q", "K", "V", "A_pre", "A", "heads")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
@@ -92,7 +90,8 @@ class MHA(HookedModule):
         self.pos_encs.append(pe)
 
 
-class TransformerLayerConfig(BaseModel):
+class TransformerLayerConfig(HookedModuleConfig):
+
     pass
 
 
@@ -125,7 +124,8 @@ class TransformerLayer(HookedModule):
         self.mha.add_pe(pe)
 
 
-class TransformerConfig(BaseModel):
+class TransformerConfig(HookedModuleConfig):
+
     context_length: int
     input_vocab_size: int
     input_type: Literal["token", "vector"] = "token"
@@ -144,7 +144,7 @@ class TransformerConfig(BaseModel):
         return output_vocab_size
 
 
-class Transformer(SAINoMoreModule):
+class Transformer(HookedModule):
     """Decoder-only Transformer"""
 
     _config_class = TransformerConfig
@@ -184,17 +184,3 @@ class Transformer(SAINoMoreModule):
         if self.final_norm is not None:
             x = self.final_norm(x)
         return self.unembedding(x)
-
-    @staticmethod
-    def build(config: dict[str, Any], *flags: IntFlag) -> "Transformer":
-        model = Transformer(**config)
-        pos_encs = []
-        if "pe" in config:
-            pos_encs.extend(get_pe(config["pe"]))
-        for flag in flags:
-            if isinstance(flag, PositionalEncoding):
-                pos_encs.extend(get_pe(flag))
-        for layer in model.layers:
-            for pe in pos_encs:
-                layer.add_pe(pe(**config))
-        return model

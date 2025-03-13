@@ -4,10 +4,9 @@ from enum import IntFlag, auto
 from typing import Literal, Optional
 
 import torch
-from pydantic import BaseModel
+from hooked import HookedModule, HookedModuleConfig
 from torch import nn
 
-from ..base import HookedModule
 from ..positional import _PositionalEncoding
 from .qkv import QKGen, Sin
 
@@ -50,7 +49,8 @@ class _Weighting(ABC, HookedModule):
         self.pos_encs.append(pe)
 
 
-class NormalizationConfig(BaseModel):
+class NormalizationConfig(HookedModuleConfig):
+
     ...
 
 
@@ -94,7 +94,7 @@ class Normalization(_Weighting):
         pass
 
 
-class ExponentialDecayConfig(BaseModel):
+class ExponentialDecayConfig(HookedModuleConfig):
 
     share_queries: bool = False
     share_keys: bool = False
@@ -163,7 +163,7 @@ class ExponentialDecay(_Weighting):
         pass
 
 
-class ArcticDecayConfig(BaseModel):
+class ArcticDecayConfig(HookedModuleConfig):
 
     share_queries: bool = False
     share_keys: bool = False
@@ -224,7 +224,7 @@ class ArcticDecay(_Weighting):
         pass
 
 
-class ExponentialConfig(BaseModel):
+class ExponentialConfig(HookedModuleConfig):
 
     share_queries: bool = False
     share_keys: bool = False
@@ -356,7 +356,7 @@ class ComplexExponential(Exponential):
         return x.real * self.W_O_real + x.imag * self.W_O_imag
 
 
-class ControlledExponentialConfig(BaseModel):
+class ControlledExponentialConfig(HookedModuleConfig):
 
     share_control: bool = False
     activation: Literal["sin", "relu"] = "sin"
@@ -429,7 +429,7 @@ class ControlledExponential(_Weighting):
         pass
 
 
-class CosineDecayConfig(BaseModel):
+class CosineDecayConfig(HookedModuleConfig):
 
     share_queries: bool = False
     share_keys: bool = False

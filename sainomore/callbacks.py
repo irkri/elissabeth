@@ -1,19 +1,19 @@
-from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Sequence
 import json
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence
 
 import lightning.pytorch as L
 import numpy as np
 import torch
 import wandb
-from lightning.pytorch.callbacks import Callback, ModelCheckpoint
+from hooked import HookedModule
+from hooked.lightning import TaskedModule
+from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
 from torch.utils.data import DataLoader
 
-from .base import HookedModule
 from .elissabeth import Elissabeth
-from .lightning import SAILearningModule
 
 
 class GeneralConfigCallback(Callback):
@@ -26,7 +26,7 @@ class GeneralConfigCallback(Callback):
     def on_train_start(
         self,
         trainer: L.Trainer,
-        pl_module: SAILearningModule,
+        pl_module: TaskedModule,
     ) -> None:
         model_summary = summarize(pl_module, max_depth=self._max_depth)
 
