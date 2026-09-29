@@ -1,24 +1,38 @@
-[tool.poetry]
-name = "sainomore"
-version = "1.0.0"
-description = ""
-authors = ["alienkrieg <alienkrieg@gmail.com>"]
-readme = "README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.11,<3.12"
-torch = "2.2.0"
-torchvision = "0.17.0"
-lightning = "^2.0.8"
-numpy = "^1.25.2"
-wandb = "^0.15.10"
-matplotlib = "^3.7.3"
-pydantic = "^2.6.3"
-
-[tool.poetry.group.dev.dependencies]
-ipykernel = "^6.29.5"
-pytest = "^8.3.2"
-
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "elissabeth"
+version = "2.0.0"
+authors = [
+  { name="Richard Krieg", email="irkri@irkri.net" },
+]
+description = "Extended learnable iterated sums signature architecture."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "torch>=2.12",
+    "lightning>=2.6",
+    "pydantic>=2",
+    "numpy",
+    "pyyaml",
+    "rich",
+]
+
+[project.optional-dependencies]
+analysis = ["matplotlib"]
+online = ["wandb"]
+test = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["elissabeth"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project.urls]
+Homepage = "https://github.com/irkri/elissabeth"
+Issues = "https://github.com/irkri/elissabeth/issues"

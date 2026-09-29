@@ -1,0 +1,30 @@
+# Makemore replicate (thesis): character-level language model on quotes,
+# one line per sample. Depth-3 iterated sums without any kernel between
+# the indices, 8 heads, values from a small ReLU network.
+model:
+  d_hidden: 16
+  n_layers: 1
+  layer_norm: true
+  residual: true
+  liss:
+    n_is: 8
+    lengths: [3]
+    d_values: 8
+    normalize: learnable
+    values:
+      norm: true
+      activation: relu
+      latent: 32
+
+dataset:
+  task:
+    name: text
+    path: data/quotes.txt
+  val_size: 0.05
+  batch_size: 32
+
+trainer:
+  epochs: 501
+  lr: 5.0e-3
+  weight_decay: 1.0e-4
+  gradient_clip_norm: null

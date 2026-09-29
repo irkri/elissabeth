@@ -1,0 +1,33 @@
+# Cyclic (thesis): does 1..5 occur, in some cyclic rotation, as a
+# subsequence? One LISS level of depth 4 with a cosine kernel and a single
+# value channel, no norm and no residual stream.
+model:
+  d_hidden: 6
+  n_layers: 1
+  layer_norm: false
+  residual: false
+  liss:
+    n_is: 1
+    lengths: [4]
+    d_values: 1
+    values:
+      norm: false
+    kernels:
+      - type: cosine
+        d_qk: 3
+        exponent: 1
+
+dataset:
+  task:
+    name: cyclic
+    length: 100
+    characters: 6
+  n_samples: 1000
+  val_size: 0.2
+  batch_size: 32
+
+trainer:
+  epochs: 1001
+  lr: 5.0e-3
+  weight_decay: 1.0e-4
+  gradient_clip_norm: null

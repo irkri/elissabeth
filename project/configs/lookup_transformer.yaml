@@ -1,0 +1,26 @@
+# The transformer baseline for lookup.yaml: the same model with causal
+# softmax attention (RoPE) as the mixer. An induction head needs two
+# attention layers; with one it should fail.
+model:
+  d_hidden: 32
+  n_layers: 1
+  attention:
+    n_heads: 2
+    rope: true
+  ffn:
+    units: 64
+
+dataset:
+  task:
+    name: lookup
+    length: 25
+    characters: 5
+    multiple_keys: false
+  n_samples: 1000
+  val_size: 0.2
+  batch_size: 64
+
+trainer:
+  epochs: 1000
+  lr: 1.0e-3
+  weight_decay: 1.0e-4

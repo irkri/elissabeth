@@ -1,0 +1,43 @@
+# Copying (thesis): reproduce 10 tokens scattered over the first 60
+# positions after a marker. One LISS layer of depth 1 (causal linear
+# attention with a learned cosine kernel), 16 heads, time as an input.
+model:
+  d_hidden: 10
+  n_layers: 1
+  layer_norm: true
+  residual: true
+  liss:
+    n_is: 16
+    lengths: [1]
+    d_values: 8
+    normalize: learnable
+    values:
+      norm: true
+      activation: relu
+      latent: 32
+      include_time: true
+    kernels:
+      - type: cosine
+        d_qk: 3
+        exponent: 1
+        projection:
+          activation: relu
+          latent: 32
+          include_time: true
+
+dataset:
+  task:
+    name: copying
+    length: 100
+    n_categories: 10
+    to_copy: 10
+    max_dilute: 5
+  n_samples: 1000
+  val_size: 0.2
+  batch_size: 64
+
+trainer:
+  epochs: 1001
+  lr: 5.0e-3
+  weight_decay: 1.0e-4
+  gradient_clip_norm: null

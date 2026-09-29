@@ -10,56 +10,41 @@ A single LISS layer computes weighted iterated sums with learnable parameters.
 
 ![ELISSABETH inner](resources/liss.png)
 
-## sainomore
-The package sainomore implements **Elissabeth** and a pipeline for deep learning around it. We use
-`pytorch` for implementing all algorithms and train our models with the help of
-`pytorch-lightning`. Additionally, we use `wandb`for logging our data online. Our package
-implements specific callbacks for managing the logging. We developed a complex hooking mechanism
-for accessing parameters in our models.
+A LISS level of depth $p$ computes, in a semiring (reals, max-plus "arctic", log or Viterbi),
 
-### Installation
+$$\mathrm{ISS}_t = \bigoplus_{t_1 < \dots < t_p \le t} \ \bigotimes_{l=1}^{p} v_l(x_{t_l}) \otimes \kappa_l(t_{l+1}, t_l), \qquad t_{p+1} = t,$$
 
-We recommend to use [Poetry](https://python-poetry.org/) for installing and testing sainomore.
+with learned values $v_l$ and learned kernels $\kappa_l$ (exponential decay, $e^{q-k}$, a product
+of cosines). Every kernel factorises, so a level is $p$ scans and costs $O(T)$.
+
+## Installation
 
     $ git clone https://github.com/irkri/elissabeth
     $ cd elissabeth
-    $ poetry install          (or: $ python -m pip install -e .)
+    $ python -m pip install -e ".[analysis,online,test]"
 
+## Usage
 
-Without cloning the repository, use instead:
+A model is described by one YAML file: the model, the task it trains on and the trainer.
 
-    $ pip install git+https://github.com/irkri/elissabeth
+    $ cd project
+    $ python train.py configs/lookup.yaml
+    $ python train.py configs/lookup.yaml -o model.liss.semiring=arctic -o trainer.epochs=100
+    $ python train.py configs/copying.yaml --online team/elissabeth
+    $ python analysis/kernels.py run_0001 --total
 
-### Experiments
+In Python, `Elissabeth(config.model, input_dim, output_dim)` builds the network from a
+`ElissabethConfig`.
 
-The [projects](projects) folder contains some experiments we tested Elissabeth thoroughly on.
+## Layout
 
-### Short module description
-
-![sainomore classes](resources/sainomore_classes.png)
-
-- `sainomore.elissabeth` implements everthing needed to make a flexible general **Elissabeth**
-  model work
-    - `sainomore.elissabeth.elissabeth` contains code for the outer model, consisting of embedding,
-      multiple LISS layers and unembedding
-    - `sainomore.elissabeth.liss` implements the LISS layer and a LISS level, which computes
-      iterated sums of one specific depth (word length)
-    - `sainomore.elissabeth.lissa` implements the arctic LISS layer
-    - `sainomore.elissabeth.lissb` implements the bayesian LISS layer
-    - `sainomore.elissabeth.qkv` implements the query, key and value projections
-    - `sainomore.elissabeth.weighting` implements all kernels available for LISS layers
-- `sainomore.models` is a convenience module containing code for a simple MLP and Transformer
-  implementation
-- `sainomore.xai` implements methods vor analyzing a trained **Elissabeth** model
-    - `sainomore.xai.tools` contains methods for extracting data from the model
-    - `sainomore.xai.plotting` contains methods for plotting the extracted data
-    - `sainomore.xai.watcher` implements the `ElissabethWatcher`, which is a convenience class for
-      analyzing a specific model
-- `sainomore.base` implements the base classes for our models
-- `sainomore.callback` implements callbacks used for watching a training run
-- `sainomore.data` implements `pytorch-lightning` data modules
-- `sainomore.hooks` contains code for sainomore hooks
-- `sainomore.lightning` implements `pytorch-lightning` modules
-- `sainomore.positional` implements positional encoding techniques
-
-Some [tests](tests) are available for LISS layers and kernels.
+- `elissabeth/elissabeth.py`: the model, `embedding -> n_layers x [mixer, SwiGLU] -> norm ->
+  unembedding`
+- `elissabeth/liss/`: the LISS layer (`layer.py`), its kernels (`kernels.py`), the value, query and
+  key projections (`projection.py`) and the semiring scans (`semiring.py`)
+- `elissabeth/attention.py`: causal softmax attention with RoPE, the transformer baseline
+- `elissabeth/data.py`: the tasks (copying, cyclic, lookup, text) and the data module
+- `elissabeth/lightning.py`: the training module and callbacks
+- `elissabeth/config.py`: the run config (`model`, `dataset`, `trainer`), YAML loading, overrides
+- `project/`: `train.py`, the task configs and the analysis scripts
+- `tests/`: the LISS recursion against brute force, and the model around it

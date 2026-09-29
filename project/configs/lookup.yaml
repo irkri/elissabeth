@@ -1,0 +1,37 @@
+# Long lookup (thesis): answer the token right before the first
+# occurrence of the last token -- an induction head, in one layer. Depth 2:
+# a strong decay ties t_1 to t_2 - 1, a cosine kernel matches x_{t_2}
+# against x_t.
+model:
+  d_hidden: 5
+  n_layers: 1
+  layer_norm: false
+  residual: false
+  liss:
+    n_is: 1
+    lengths: [2]
+    d_values: 5
+    values:
+      norm: false
+    kernels:
+      - type: cosine
+        d_qk: 3
+        exponent: 1
+      - type: decay
+        alpha_0: 50
+
+dataset:
+  task:
+    name: lookup
+    length: 25
+    characters: 5
+    multiple_keys: false
+  n_samples: 1000
+  val_size: 0.2
+  batch_size: 64
+
+trainer:
+  epochs: 10001
+  lr: 5.0e-3
+  weight_decay: 1.0e-4
+  gradient_clip_norm: null
