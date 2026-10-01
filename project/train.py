@@ -7,9 +7,8 @@ from pathlib import Path
 import lightning.pytorch as L
 import torch
 
-from elissabeth.config import (deep_update, load_runconfig,
-                               load_saved_runconfig, parse_overrides,
-                               read_mapping, save_runconfig)
+from elissabeth.config import (load_runconfig, load_saved_runconfig,
+                               parse_overrides, read_mapping, save_runconfig)
 from elissabeth.data import ElissabethDataModule
 from elissabeth.lightning import (CONFIG_NAME, ElissabethLightningModule,
                                   find_run_dir, latest_checkpoint,
@@ -34,13 +33,12 @@ def wandb_id() -> str:
 
 
 def run(args: argparse.Namespace) -> None:
-    overrides: dict = {}
+    # Each file in order, then -o: the command line wins over every file.
+    overrides = [read_mapping(path) for path in args.overrideconfig]
     if args.override:
-        overrides = deep_update(overrides, parse_overrides(args.override))
-    for path in args.overrideconfig:
-        overrides = deep_update(overrides, read_mapping(path))
-    if overrides:
-        print(f"Applied overrides to config: {overrides}")
+        overrides.append(parse_overrides(args.override))
+    for layer in overrides:
+        print(f"Applied overrides to config: {layer}")
 
     online = args.online is not None
     ckpt_path: Path | None = None
@@ -129,7 +127,8 @@ def main() -> None:
     )
     parser.add_argument(
         "-oc", "--overrideconfig", action="append", default=[],
-        help="YAML or JSON file of overrides (repeatable; later files win)",
+        help="YAML or JSON file of overrides (repeatable; later files win;"
+             " -o wins over all of them)",
     )
     parser.add_argument(
         "--online", type=str, default=None,

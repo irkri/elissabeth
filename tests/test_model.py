@@ -62,6 +62,19 @@ def test_overrides(tmp_path: Path) -> None:
                        overrides=parse_overrides(["model.unknown=1"]))
 
 
+def test_override_layers_apply_in_order() -> None:
+    """train.py passes every -oc file and then the -o overrides as layers:
+    the command line wins, and its [i] indices address the list the files
+    left (here one the file does not mention)."""
+    file = {"trainer": {"epochs": 1000}, "model": {"liss": {"n_is": 3}}}
+    cli = parse_overrides(["trainer.epochs=100",
+                           "model.liss.kernels[1].alpha_0=7"])
+    config = load_runconfig(CONFIGS / "lookup.yaml", overrides=[file, cli])
+    assert config.trainer.epochs == 100
+    assert config.model.liss.n_is == 3
+    assert config.model.liss.kernels[1].alpha_0 == 7
+
+
 MIXERS = {
     "reals": {"liss": {"d_values": 4, "n_is": 2, "lengths": [1, 3],
                        "normalize": "mean", "bidirectional": False,

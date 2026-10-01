@@ -2,7 +2,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Sequence
 
 import yaml
 from pydantic import AfterValidator, BaseModel, model_validator
@@ -189,21 +189,28 @@ def read_mapping(path: str | Path) -> dict:
     return data
 
 
-def load_runconfig(
-    path: str | Path,
-    overrides: dict | None = None,
-) -> RunConfig:
+T_Overrides = dict | Sequence[dict] | None
+"""A nested override dictionary, or several applied in order (a later one
+wins, and its ``[i]`` indices address the lists the earlier ones left)."""
+
+
+def apply_overrides(data: dict, overrides: T_Overrides) -> dict:
+    if isinstance(overrides, dict):
+        overrides = [overrides]
+    for layer in overrides or ():
+        data = deep_update(data, layer)
+    return data
+
+
+def load_runconfig(path: str | Path, overrides: T_Overrides = None) -> RunConfig:
     """Load a :class:`RunConfig` from a YAML or JSON file, optionally
-    applying a nested ``overrides`` dictionary on top of it."""
-    data = read_mapping(path)
-    if overrides:
-        data = deep_update(data, overrides)
-    return RunConfig(**data)
+    applying nested ``overrides`` on top of it."""
+    return RunConfig(**apply_overrides(read_mapping(path), overrides))
 
 
 def load_saved_runconfig(
     path: str | Path,
-    overrides: dict | None = None,
+    overrides: T_Overrides = None,
 ) -> RunConfig:
     """Load the ``config.yaml`` of a run directory. :func:`save_runconfig`
     writes every field, so a missing one is newer than the run and is set
@@ -214,9 +221,7 @@ def load_saved_runconfig(
     liss = data.get("model", {}).get("liss")
     if isinstance(liss, dict) and "bidirectional" not in liss:
         liss["bidirectional"] = False
-    if overrides:
-        data = deep_update(data, overrides)
-    return RunConfig(**data)
+    return RunConfig(**apply_overrides(data, overrides))
 
 
 def save_runconfig(config: RunConfig, path: str | Path) -> None:
