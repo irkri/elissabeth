@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 
-from .config import RunConfig, load_runconfig
+from .config import RunConfig, load_saved_runconfig
 from .lightning import (CONFIG_NAME, ElissabethLightningModule, find_run_dir,
                         latest_checkpoint)
 from .elissabeth import Elissabeth
@@ -16,13 +16,13 @@ def load_model(
 ) -> tuple[Elissabeth, RunConfig, Path]:
     """Rebuild a trained model from a run directory holding a
     ``config.yaml`` and a checkpoint (the latest one unless ``weight_name``
-    is given). ``run`` is a path or a directory name below ``model_dir``
-    (``./checkpoints`` by default). Returns the model in eval mode on the
-    CPU, its config and its run directory.
+    is given, e.g. ``best.ckpt``). ``run`` is a path or a directory name
+    below ``model_dir`` (``./checkpoints`` by default). Returns the model in
+    eval mode on the CPU, its config and its run directory.
     """
     root = Path("checkpoints") if model_dir is None else Path(model_dir)
     run_dir = find_run_dir(root, str(run))
-    config = load_runconfig(run_dir / CONFIG_NAME, overrides=overrides)
+    config = load_saved_runconfig(run_dir / CONFIG_NAME, overrides=overrides)
     if weight_name is None:
         latest = latest_checkpoint(run_dir)
         if latest is None:
@@ -33,6 +33,7 @@ def load_model(
     module = ElissabethLightningModule(
         config.model, config.trainer,
         config.dataset.input_dim, config.dataset.output_dim,
+        objective=config.dataset.objective,
     )
     checkpoint = torch.load(weights, map_location="cpu", weights_only=False)
     module.load_state_dict(checkpoint["state_dict"])

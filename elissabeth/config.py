@@ -64,6 +64,28 @@ class RunConfig(ModelConfig):
             self.model.context_length = self.dataset.length
         return self
 
+    @model_validator(mode="after")
+    def _match_task(self) -> "RunConfig":
+        """The model reads what the task produces (``model.input_type`` is
+        filled in unless given), and a task whose targets are later inputs
+        gets a causal model."""
+        if "input_type" not in self.model.model_fields_set:
+            self.model.input_type = self.dataset.input_type
+        elif self.model.input_type != self.dataset.input_type:
+            raise ValueError(
+                f"model.input_type is {self.model.input_type!r}, but the"
+                f" {self.dataset.task.name} task has {self.dataset.input_type}"
+                " inputs."
+            )
+        if self.dataset.task.causal and self.model.bidirectional:
+            raise ValueError(
+                f"The {self.dataset.task.name} task predicts later inputs, so"
+                " a bidirectional model sees its targets: set"
+                " model.liss.bidirectional (or model.attention.bidirectional)"
+                " to false."
+            )
+        return self
+
 
 def deep_update(base: dict, updates: dict, path: str = "") -> dict:
     """Recursively merges ``updates`` into ``base`` in place. An **int**
@@ -174,6 +196,24 @@ def load_runconfig(
     """Load a :class:`RunConfig` from a YAML or JSON file, optionally
     applying a nested ``overrides`` dictionary on top of it."""
     data = read_mapping(path)
+    if overrides:
+        data = deep_update(data, overrides)
+    return RunConfig(**data)
+
+
+def load_saved_runconfig(
+    path: str | Path,
+    overrides: dict | None = None,
+) -> RunConfig:
+    """Load the ``config.yaml`` of a run directory. :func:`save_runconfig`
+    writes every field, so a missing one is newer than the run and is set
+    to what the run had: ``model.liss.bidirectional`` to false (a LISS was
+    causal before the field existed, and is bidirectional by default now).
+    """
+    data = read_mapping(path)
+    liss = data.get("model", {}).get("liss")
+    if isinstance(liss, dict) and "bidirectional" not in liss:
+        liss["bidirectional"] = False
     if overrides:
         data = deep_update(data, overrides)
     return RunConfig(**data)

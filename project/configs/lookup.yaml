@@ -8,6 +8,7 @@ model:
   layer_norm: false
   residual: false
   liss:
+    bidirectional: false   # the thesis setup: a causal LISS
     n_is: 1
     lengths: [2]
     d_values: 5

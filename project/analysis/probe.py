@@ -23,7 +23,7 @@ def main() -> None:
     model, config = load(args)
     if args.layer != 0:
         raise SystemExit("Only the first layer reads the embedding directly.")
-    level = liss_level(model, 0, args.level)
+    level = liss_level(model, 0, args.level, args.backward)
     vocab = config.dataset.input_dim
     # every token at every position up to --position; read the last one
     x = torch.arange(vocab).unsqueeze(1).repeat(1, args.position + 1)
@@ -31,7 +31,7 @@ def main() -> None:
     hook = owner.hooks.get(args.what)
     hook.attach()
     with torch.no_grad():
-        level(layer_input(model, x, 0))
+        level(layer_input(model, x, 0, args.backward))
     data = hook.data[:, -1]                          # (vocab, N, p, ...)
     hook.release()
     data = data.flatten(3) if data.ndim > 3 else data.unsqueeze(-1)

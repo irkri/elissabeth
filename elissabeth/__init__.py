@@ -1,15 +1,16 @@
-from .config import (RunConfig, load_runconfig, parse_overrides,  # isort: skip
-                     save_runconfig)
-from .attention import AttentionConfig, CausalSelfAttention
+from .config import (RunConfig, load_runconfig,  # isort: skip
+                     load_saved_runconfig, parse_overrides, save_runconfig)
+from .attention import AttentionConfig, SelfAttention
 from .data import DatasetConfig, ElissabethDataModule
 from .lightning import ElissabethLightningModule, TrainerConfig
-from .liss import LISS, LISSConfig, LISSLevel
+from .liss import LISS, BidirectionalLISS, LISSConfig, LISSLevel
 from .elissabeth import Elissabeth, ElissabethConfig, FFNConfig, SwiGLU
 from .util import load_model
 
 __all__ = [
     "RunConfig",
     "load_runconfig",
+    "load_saved_runconfig",
     "save_runconfig",
     "parse_overrides",
     "Elissabeth",
@@ -17,10 +18,11 @@ __all__ = [
     "FFNConfig",
     "SwiGLU",
     "LISS",
+    "BidirectionalLISS",
     "LISSConfig",
     "LISSLevel",
     "AttentionConfig",
-    "CausalSelfAttention",
+    "SelfAttention",
     "DatasetConfig",
     "ElissabethDataModule",
     "TrainerConfig",

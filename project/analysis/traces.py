@@ -24,12 +24,12 @@ def main() -> None:
     args = p.parse_args()
     model, config = load(args)
     x, _ = example(args, config)
-    level = liss_level(model, args.layer, args.level)
+    level = liss_level(model, args.layer, args.level, args.backward)
     owner = level if args.what in ("values", "iss") else level.kernels[args.kernel]
     hook = owner.hooks.get(args.what)
     hook.attach()
     with torch.no_grad():
-        level(layer_input(model, x, args.layer))
+        level(layer_input(model, x, args.layer, args.backward))
     data = hook.data[0]
     hook.release()
     if args.what == "iss":

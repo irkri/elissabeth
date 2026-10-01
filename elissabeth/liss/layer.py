@@ -17,7 +17,12 @@ is evaluated by ``p`` scans instead of over all ``O(T^p)`` tuples:
 
 Each ``S_l`` holds ``R_l`` features, so the cost is linear in ``T`` and in
 ``p``. (The query features are contracted level by level; expanding them
-over all pairs at once would carry ``R^p`` terms.)
+over all pairs at once would carry ``R^p`` terms.) The contraction
+``<phi, S>`` is the semiring's own sum over the features, a maximum in the
+arctic semiring.
+
+:class:`BidirectionalLISS`, the default, adds a second LISS over the
+time-reversed sequence.
 """
 from typing import Literal
 
@@ -27,10 +32,11 @@ from torch import nn
 
 from ..config import ModelConfig
 from ..hooks import HookedModule
-from .kernels import RANK_R_KERNELS, Kernel, T_KernelConfig, build_kernel
+from .kernels import (REALS_ONLY_KERNELS, Kernel, T_KernelConfig,
+                      build_kernel)
 from .projection import Projection, ValuesConfig
-from .semiring import (LOG_DOMAIN, T_Semiring, multiply, scan, scan_indices,
-                       shift)
+from .semiring import (LOG_DOMAIN, T_Semiring, add, multiply, scan,
+                       scan_indices, shift)
 
 
 class LISSConfig(ModelConfig):
@@ -52,6 +58,12 @@ class LISSConfig(ModelConfig):
     """The same value projection for every index of a level."""
     values: ValuesConfig = ValuesConfig()
     kernels: list[T_KernelConfig] = []
+    bidirectional: bool = True
+    """A second LISS of its own reads the sequence backwards and the two
+    outputs are added (:class:`BidirectionalLISS`). Turn it off for a
+    causal model: next-token targets, or a per-sequence target read at the
+    last position, where the backward direction has no tuple of depth
+    ``p > 1``."""
 
     @model_validator(mode="after")
     def _check(self) -> "LISSConfig":
@@ -63,7 +75,7 @@ class LISSConfig(ModelConfig):
                 f" not for {self.semiring!r}."
             )
         for kernel in self.kernels:
-            if kernel.type in RANK_R_KERNELS and self.semiring != "reals":
+            if kernel.type in REALS_ONLY_KERNELS and self.semiring != "reals":
                 raise ValueError(
                     f"The {kernel.type!r} kernel only works in the reals,"
                     f" not in the {self.semiring!r} semiring."
@@ -71,10 +83,17 @@ class LISSConfig(ModelConfig):
         return self
 
 
-def _outer(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Tensor product of the feature axes: ``(..., R1), (..., R2) ->
-    (..., R1 R2)``."""
-    return (a.unsqueeze(-1) * b.unsqueeze(-2)).flatten(-2)
+def _outer(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    semiring: T_Semiring,
+) -> torch.Tensor:
+    """Semiring tensor product of the feature axes: ``(..., R1), (..., R2)
+    -> (..., R1 R2)``; the product of two kernels ``(+)_i a_i (x) (+)_j b_j
+    = (+)_{ij} a_i (x) b_j``."""
+    return multiply(
+        a.unsqueeze(-1), b.unsqueeze(-2), semiring, False,
+    ).flatten(-2)
 
 
 class LISSLevel(HookedModule):
@@ -155,10 +174,9 @@ class LISSLevel(HookedModule):
             q, k = factors
             if query is None or key is None:
                 query, key = q, k
-            elif self.semiring in LOG_DOMAIN:
-                query, key = query + q, key + k
             else:
-                query, key = _outer(query, q), _outer(key, k)
+                query = _outer(query, q, self.semiring)
+                key = _outer(key, k, self.semiring)
         return rate, query, key
 
     def _values(self, x: torch.Tensor) -> torch.Tensor:
@@ -184,16 +202,27 @@ class LISSLevel(HookedModule):
         state: torch.Tensor,
         query: torch.Tensor | None,
     ) -> torch.Tensor:
-        """``<phi(t), S(t)>``: ``(B, T, N, R, d_v, w) -> (B, T, N, d_v, w)``.
-        Outside the reals the factors are rank one (``R = 1``)."""
+        """``<phi(t), S(t)> = (+)_r phi_r(t) (x) S_r(t)``:
+        ``(B, T, N, R, d_v, w) -> (B, T, N, d_v, w)``."""
         if query is None:
             return state.squeeze(3)
-        query = query[..., None, None]
-        if self.semiring in LOG_DOMAIN:
-            return (state + query).squeeze(3)
-        if self.semiring == "bayesian":
-            return (state * query).squeeze(3)
-        return (state * query).sum(3)
+        terms = multiply(state, query[..., None, None], self.semiring, False)
+        return add(terms, self.semiring, 3)
+
+    def _contract_argmax(
+        self,
+        state: torch.Tensor,
+        query: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """:meth:`_contract` in a max semiring, with the maximising feature
+        ``r``, ``(B, T, N, d_v)``."""
+        if query is None:
+            return state.squeeze(3), torch.zeros_like(
+                state[:, :, :, 0, :, 0], dtype=torch.long,
+            )
+        terms = multiply(state, query[..., None, None], self.semiring, False)
+        values, feature = terms.max(3)
+        return values, feature[..., 0]
 
     def _normalize(self, state: torch.Tensor, l: int) -> torch.Tensor:
         if self.normalize == "none":
@@ -260,28 +289,44 @@ class LISSLevel(HookedModule):
         v = self._values(x)
         rate, query, key = self.factors(x)
         state = torch.empty(0)
+        # Per pair l: the argmax s <= t of every feature's scan,
+        # (B, T, N|1, R|1, d_v), and the feature the next contraction took,
+        # (B, T, N|1, d_v), at the position it contracted.
         argmax: list[torch.Tensor] = []
+        feature: list[torch.Tensor] = []
         for l in range(self.p):
             u = v[:, :, :, 0 if v.shape[3] == 1 else l]
             if l > 0:
-                prev = self._contract(
+                prev, best = self._contract_argmax(
                     shift(state, self.semiring), self._pair(query, l - 1),
                 )
+                feature.append(best)
                 u = multiply(prev, u, self.semiring, False)
             state = self._expand(u, self._pair(key, l))
             state, index = scan_indices(
                 state, self.semiring, None if rate is None else rate[:, l],
             )
-            argmax.append(index[:, :, :, 0, :, 0])
+            argmax.append(index[..., 0])
+        feature.append(
+            self._contract_argmax(state, self._pair(query, self.p - 1))[1]
+        )
         B, T = x.shape[:2]
-        shape = (B, T, self.n_is, argmax[0].shape[-1])
+        shape = (B, T, self.n_is, v.shape[-2])
+        # The contraction reading scan l happened at t (last pair) or at
+        # t_{l+1}, where it read the shifted state at t_{l+1} - 1.
         position = torch.arange(T, device=x.device).view(1, -1, 1, 1)
         position = position.expand(shape)
         path = []
-        for index in reversed(argmax):
-            t_l = index.expand(shape).gather(1, position)
+        for l in reversed(range(self.p)):
+            best = feature[l].expand(shape).gather(1, position)
+            read = position if l == self.p - 1 else (position - 1).clamp_min(0)
+            index = argmax[l]
+            index = index.expand(B, T, self.n_is, index.shape[3], shape[-1])
+            t_l = index.gather(
+                1, read.unsqueeze(3).expand(-1, -1, -1, index.shape[3], -1),
+            ).gather(3, best.unsqueeze(3)).squeeze(3)
             path.append(t_l)
-            position = (t_l - 1).clamp_min(0)
+            position = t_l
         tuples = torch.stack(path[::-1], dim=-1)
         valid = (torch.arange(T, device=x.device) >= self.p - 1)
         return torch.where(valid.view(1, -1, 1, 1, 1), tuples, -1)
@@ -306,14 +351,13 @@ class LISSLevel(HookedModule):
         )
         if query is not None and key is not None:
             shape = (B, T, self.n_is, self.p, query.shape[-1])
-            q, k = query.expand(shape), key.expand(shape)
-            if log:
-                kernel = kernel + (
-                    q[..., 0].permute(0, 2, 3, 1).unsqueeze(-1)
-                    + k[..., 0].permute(0, 2, 3, 1).unsqueeze(-2)
-                )
-            else:
-                kernel = kernel * torch.einsum("btnpr,bsnpr->bnpts", q, k)
+            q = query.expand(shape).permute(0, 2, 3, 1, 4)   # (B, N, p, T, R)
+            k = key.expand(shape).permute(0, 2, 3, 1, 4)
+            kernel = add(
+                multiply(q.unsqueeze(-2), k.unsqueeze(-3), self.semiring,
+                         False),
+                self.semiring, -1,
+            )
         t = torch.arange(T, device=x.device, dtype=x.dtype)
         delta = torch.ones(self.p, device=x.device, dtype=x.dtype)
         delta[-1] = 0
@@ -359,3 +403,41 @@ class LISS(HookedModule):
         iss = torch.stack([level(x) for level in self.levels])
         mixed = torch.einsum("ln,lbtnvw->btvw", self.W_H, iss)
         return torch.einsum("vwd,btvw->btd", self.W_O, mixed)
+
+
+class BidirectionalLISS(HookedModule):
+    """A LISS layer reading the sequence in both directions: ``fw`` over the
+    past and ``bw``, a LISS of its own, over the time-reversed sequence,
+
+        y_t = LISS_fw(x)_t + LISS_bw(reverse(x))_{T-1-t},
+
+    so a level of ``bw`` sums over the tuples ``t <= t_p < ... < t_1`` read
+    from the end, and its time features (``include_time``) count from the
+    end. Neither direction covers a tuple with indices on both sides of
+    ``t``; a second layer composes them.
+    """
+
+    def __init__(
+        self,
+        config: LISSConfig,
+        d_in: int,
+        context_length: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.fw = LISS(config, d_in, context_length)
+        self.bw = LISS(config, d_in, context_length)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """``(B, T, d_in) -> (B, T, d_in)``."""
+        return self.fw(x) + self.bw(x.flip(1)).flip(1)
+
+
+def build_liss(
+    config: LISSConfig,
+    d_in: int,
+    context_length: int | None = None,
+) -> LISS | BidirectionalLISS:
+    if config.bidirectional:
+        return BidirectionalLISS(config, d_in, context_length)
+    return LISS(config, d_in, context_length)

@@ -9,8 +9,9 @@ import numpy as np
 import torch
 from matplotlib.colors import CenteredNorm
 
-from common import example, finish, layer_input, liss_level, load, parser
-from elissabeth.attention import CausalSelfAttention
+from common import (example, finish, layer_input, liss_layer, liss_level,
+                    load, parser)
+from elissabeth.attention import SelfAttention
 from elissabeth.liss.semiring import LOG_DOMAIN, multiply, zero
 
 
@@ -63,11 +64,13 @@ def main() -> None:
     args = p.parse_args()
     model, config = load(args)
     x, target = example(args, config)
-    if isinstance(model.mixers[args.layer], CausalSelfAttention):
+    if isinstance(model.mixers[args.layer], SelfAttention):
         attention(model, x, args.layer, args.out)
         return
-    level = liss_level(model, args.layer, args.level)
-    kernel, support = level.pair_matrices(layer_input(model, x, args.layer))
+    level = liss_level(model, args.layer, args.level, args.backward)
+    kernel, support = level.pair_matrices(
+        layer_input(model, x, args.layer, args.backward),
+    )
     kernel = kernel[0]                                   # (N, p, T, T)
     columns = [f"pair {l}: t_{l} -> t_{l + 1}" for l in range(level.p)]
     columns[-1] = f"pair {level.p - 1}: t_{level.p - 1} -> t"
@@ -79,7 +82,8 @@ def main() -> None:
         support = torch.cat((support, support[-1:]))
         columns.append("total: t_0 -> t")
     if args.project_heads:
-        weights = model.mixers[args.layer].W_H[args.level].detach()
+        weights = liss_layer(model, args.layer, args.backward) \
+            .W_H[args.level].detach()
         kernel = torch.einsum("n,nltu->ltu", weights, kernel)[None]
     rows = kernel.shape[0]
     fig, ax = plt.subplots(

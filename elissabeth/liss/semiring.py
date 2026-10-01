@@ -45,6 +45,16 @@ def shift(x: torch.Tensor, semiring: T_Semiring) -> torch.Tensor:
     return torch.cat((pad, x[:, :-1]), dim=1)
 
 
+def add(x: torch.Tensor, semiring: T_Semiring, dim: int) -> torch.Tensor:
+    """The semiring sum ``(+)`` over one dimension: ``sum``, ``max`` or
+    ``logsumexp``."""
+    if semiring == "reals":
+        return x.sum(dim)
+    if semiring == "log":
+        return torch.logsumexp(x, dim=dim)
+    return x.amax(dim)
+
+
 def multiply(
     a: torch.Tensor,
     b: torch.Tensor,
@@ -57,12 +67,10 @@ def multiply(
         return a + b if semiring in LOG_DOMAIN else a * b
     if semiring == "reals":
         return a @ b
-    if semiring == "bayesian":
-        return (a.unsqueeze(-1) * b.unsqueeze(-3)).amax(-2)
-    pairs = a.unsqueeze(-1) + b.unsqueeze(-3)
-    if semiring == "arctic":
-        return pairs.amax(-2)
-    return torch.logsumexp(pairs, dim=-2)
+    return add(
+        multiply(a.unsqueeze(-1), b.unsqueeze(-3), semiring, False),
+        semiring, -2,
+    )
 
 
 def _cumulate_eager(x: torch.Tensor, semiring: str) -> torch.Tensor:

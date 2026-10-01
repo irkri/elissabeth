@@ -8,15 +8,12 @@ model:
   residual: false
   liss:
     bidirectional: false   # the thesis setup: a causal LISS
-    n_is: 1
-    lengths: [4]
+    n_is: 16
+    semiring: arctic
+    lengths: [2]
     d_values: 1
     values:
       norm: false
-    kernels:
-      - type: cosine
-        d_qk: 3
-        exponent: 1
 
 dataset:
   task:

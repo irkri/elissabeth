@@ -8,8 +8,9 @@ import pytest
 import torch
 import yaml
 
-from elissabeth import (Elissabeth, ElissabethConfig, ElissabethDataModule,
-                        ElissabethLightningModule, load_runconfig,
+from elissabeth import (BidirectionalLISS, Elissabeth, ElissabethConfig,
+                        ElissabethDataModule, ElissabethLightningModule,
+                        LISSConfig, load_runconfig, load_saved_runconfig,
                         parse_overrides, save_runconfig)
 from elissabeth.data import CopyingTask, CyclicTask, LookupTask
 
@@ -63,17 +64,20 @@ def test_overrides(tmp_path: Path) -> None:
 
 MIXERS = {
     "reals": {"liss": {"d_values": 4, "n_is": 2, "lengths": [1, 3],
-                       "normalize": "mean",
+                       "normalize": "mean", "bidirectional": False,
                        "kernels": [{"type": "decay", "alpha_0": 5},
                                    {"type": "cosine", "d_qk": 2,
                                     "projection": {"include_time": True}}]}},
     "arctic": {"liss": {"d_values": 4, "n_is": 2, "lengths": [2],
                         "semiring": "arctic", "values_2D": True,
+                        "bidirectional": False,
                         "kernels": [{"type": "decay"},
-                                    {"type": "exponential"}]}},
+                                    {"type": "exponential", "d_qk": 3}]}},
     "log": {"liss": {"d_values": 4, "n_is": 2, "lengths": [3],
                      "semiring": "log", "normalize": "learnable",
-                     "kernels": [{"type": "exponential", "restrict": True}]}},
+                     "bidirectional": False,
+                     "kernels": [{"type": "exponential", "restrict": True,
+                                  "d_qk": 2}]}},
     "attention": {"attention": {"n_heads": 2}},
 }
 
@@ -101,19 +105,107 @@ def test_causal(mixer: str) -> None:
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
 
 
+@pytest.mark.parametrize("mixer", ["reals", "arctic", "attention"])
+def test_bidirectional(mixer: str) -> None:
+    """A bidirectional LISS is a causal LISS plus a second one over the
+    reversed sequence; the output at t then depends on the future, while the
+    backward direction alone depends on nothing before t."""
+    torch.manual_seed(0)
+    spec = {key: dict(value) for key, value in MIXERS[mixer].items()}
+    for value in spec.values():
+        value["bidirectional"] = True
+    config = ElissabethConfig(d_hidden=8, n_layers=1, context_length=12,
+                              **spec)
+    assert config.bidirectional
+    model = Elissabeth(config, input_dim=6)
+    x = torch.randint(0, 6, (2, 12))
+    y = x.clone()
+    y[:, 7:] = torch.randint(0, 6, (2, 5))
+    assert not torch.allclose(model(x)[:, :7], model(y)[:, :7])
+    if mixer == "attention":
+        return
+    mixer_module = model.mixers[0]
+    assert isinstance(mixer_module, BidirectionalLISS)
+    stream = torch.randn(2, 12, 8)
+    torch.testing.assert_close(
+        mixer_module(stream),
+        mixer_module.fw(stream) + mixer_module.bw(stream.flip(1)).flip(1),
+    )
+    changed = stream.clone()
+    changed[:, :5] = torch.randn(2, 5, 8)
+    backward = lambda z: mixer_module.bw(z.flip(1)).flip(1)
+    torch.testing.assert_close(backward(stream)[:, 5:],
+                               backward(changed)[:, 5:])
+
+
+def test_bidirectional_is_the_default() -> None:
+    assert LISSConfig(d_values=2).bidirectional
+    assert not ElissabethConfig(d_hidden=4, attention={}).bidirectional
+
+
+def test_causal_tasks_refuse_a_bidirectional_model(tmp_path: Path) -> None:
+    """Next-token targets are later inputs; a model that sees the future
+    would read them."""
+    with pytest.raises(ValueError, match="bidirectional"):
+        load_runconfig(config_path("makemore.yaml", tmp_path),
+                       overrides={"model": {"liss": {"bidirectional": True}}})
+    lookup = parse_overrides(["dataset.task.only_last=false",
+                              "model.liss.bidirectional=true"])
+    with pytest.raises(ValueError, match="bidirectional"):
+        load_runconfig(CONFIGS / "lookup.yaml", overrides=lookup)
+    # a per-sequence target cannot be read off the future
+    load_runconfig(CONFIGS / "lookup.yaml", overrides=parse_overrides([
+        "model.liss.bidirectional=true",
+    ]))
+
+
+def test_input_type_follows_the_task() -> None:
+    config = load_runconfig(CONFIGS / "cyclic.yaml")
+    assert config.model.input_type == "token"
+    with pytest.raises(ValueError, match="input_type"):
+        load_runconfig(CONFIGS / "cyclic.yaml",
+                       overrides={"model": {"input_type": "vector"}})
+
+
+def test_old_run_configs_stay_causal(tmp_path: Path) -> None:
+    """A run saved before ``bidirectional`` existed trained a causal LISS;
+    loading its config.yaml must rebuild that model, not the new default."""
+    config = load_runconfig(CONFIGS / "cyclic.yaml")
+    save_runconfig(config, tmp_path / "config.yaml")
+    data = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    del data["model"]["liss"]["bidirectional"]
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(data))
+    assert not load_saved_runconfig(tmp_path / "config.yaml") \
+        .model.liss.bidirectional
+    assert load_runconfig(tmp_path / "config.yaml").model.liss.bidirectional
+
+
 def test_longer_than_context_length() -> None:
     """Positions are computed on the fly, so any length works."""
     model = model_for("reals")
     assert model(torch.randint(0, 6, (1, 50))).shape == (1, 50, 6)
 
 
-@pytest.mark.parametrize("mixer", ["reals", "attention"])
+@pytest.mark.parametrize("mixer", ["reals", "attention", "bidirectional"])
 def test_compile_fullgraph_dynamic_batch(mixer: str) -> None:
     torch._dynamo.reset()
-    model = model_for(mixer)
+    if mixer == "bidirectional":
+        # the Tropical Attention setup: vectors in, a bidirectional arctic
+        # layer with a rank-R kernel
+        config = ElissabethConfig(
+            d_hidden=8, context_length=12, input_type="vector",
+            liss={"d_values": 4, "n_is": 2, "lengths": [2, 3],
+                  "semiring": "arctic",
+                  "kernels": [{"type": "exponential", "d_qk": 2}]},
+        )
+        model = Elissabeth(config, input_dim=3, output_dim=1)
+        make = lambda batch: torch.randn(batch, 12, 3)
+    else:
+        model = model_for(mixer)
+        make = lambda batch: torch.randint(0, 6, (batch, 12))
     compiled = torch.compile(model, fullgraph=True)
     for batch in (3, 5):
-        x = torch.randint(0, 6, (batch, 12))
+        x = make(batch)
         torch._dynamo.mark_dynamic(x, 0)
         torch.testing.assert_close(compiled(x), model(x), rtol=1e-4,
                                    atol=1e-5)

@@ -8,13 +8,16 @@ here is separable, which is what makes the level linear in ``T``:
   with ``delta_l = 1`` for inner pairs and 0 for the last one; the level
   folds it into its scans,
 - a *feature* kernel contributes a query factor at ``t_{l+1}`` and a key
-  factor at ``t_l`` with ``kappa(t', t) = <phi(t'), psi(t)>`` over ``R``
-  features (``R = 1`` for the rank-one kernels).
+  factor at ``t_l`` with ``kappa(t', t) = (+)_r phi_r(t') (x) psi_r(t)``
+  over ``R`` features. ``R`` is the kernel's rank: the number of separable
+  terms of ``kappa`` as a function of its two arguments (``Kernel.rank``).
 
 Factors are returned in the semiring's product domain: multiplicative for
-``reals``/``bayesian``, additive (log-factors) for ``arctic``/``log``. Only
-rank-one factors distribute over ``max``/``logsumexp``, so the rank-``R``
-cosine kernels are restricted to the reals.
+``reals``/``bayesian``, additive (log-factors) for ``arctic``/``log``. The
+level contracts the features with the semiring's own sum, which
+distributes over its scans in every semiring. The cosine kernels are
+restricted to the reals because their features are signed and only add up
+to ``cos`` under an ordinary sum.
 """
 import math
 from typing import Annotated, Literal
@@ -42,10 +45,21 @@ class DecayConfig(ModelConfig):
 
 
 class ExponentialConfig(ModelConfig):
-    """``exp(q_l(x_{t_{l+1}}) - k_l(x_{t_l}))`` with scalar queries and
-    keys, in every semiring (``q_l - k_l`` in the log domain)."""
+    """``(+)_{d=1}^{d_qk} exp(q_{l,d}(x_{t_{l+1}}) - k_{l,d}(x_{t_l}))``,
+    in every semiring: ``sum_d exp(q_d - k_d)`` in the reals, the tropical
+    polynomial ``max_d (q_d - k_d)`` in the arctic semiring,
+    ``logsumexp_d (q_d - k_d)`` in the log semiring.
+
+    The ``d_qk`` query/key components are summed (with the semiring's
+    ``(+)``), each term separable, so the rank is ``d_qk``. (The cosine
+    kernel multiplies its components instead, rank ``(m+1)^d_qk``; a
+    product of exponentials, ``exp(sum_d q_d - sum_d k_d)``, would stay
+    rank one.) ``d_qk = 1`` is ``exp(q - k)``; more lets an arctic or log
+    level relate the tokens at two indices."""
 
     type: Literal["exponential"] = "exponential"
+    d_qk: int = Field(1, ge=1)
+    """Query/key components, summed: the kernel's rank."""
     restrict: bool = False
     """Bound queries and keys by ``tanh``."""
     share_queries: bool = False
@@ -84,7 +98,7 @@ T_KernelConfig = Annotated[
     Field(discriminator="type"),
 ]
 
-RANK_R_KERNELS = ("cosine", "cosine_decay")
+REALS_ONLY_KERNELS = ("cosine", "cosine_decay")
 
 
 def cosine_features(angle: torch.Tensor, exponent: int) -> torch.Tensor:
@@ -126,7 +140,8 @@ class Kernel(HookedModule):
     """
 
     rank: int = 1
-    """Number of features ``R`` of the factors."""
+    """The rank ``R``: separable terms of the kernel, the features its
+    factors carry."""
     max_rate: float = 0.0
     """Static bound on the decay rate per step."""
 
@@ -189,13 +204,16 @@ class Exponential(Kernel):
         super().__init__(n_is, p, semiring)
         self.hooks.add_hooks("query", "key")
         self.restrict = config.restrict
+        self.rank = config.d_qk
         self.query = Projection(
             config.projection, d_in,
-            (n_is, 1 if config.share_queries else p), context_length,
+            (n_is, 1 if config.share_queries else p, config.d_qk),
+            context_length,
         )
         self.key = Projection(
             config.projection, d_in,
-            (n_is, 1 if config.share_keys else p), context_length,
+            (n_is, 1 if config.share_keys else p, config.d_qk),
+            context_length,
         )
 
     def factors(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -205,8 +223,8 @@ class Exponential(Kernel):
         q = self.hook("query", self._pairs(q, 3))
         k = self.hook("key", self._pairs(k, 3))
         if self.semiring in LOG_DOMAIN:
-            return q.unsqueeze(-1), -k.unsqueeze(-1)
-        return torch.exp(q).unsqueeze(-1), torch.exp(-k).unsqueeze(-1)
+            return q, -k
+        return torch.exp(q), torch.exp(-k)
 
 
 class Cosine(Kernel):
@@ -290,10 +308,10 @@ def build_kernel(
     semiring: T_Semiring,
     context_length: int | None,
 ) -> Kernel:
-    if config.type in RANK_R_KERNELS and semiring != "reals":
+    if config.type in REALS_ONLY_KERNELS and semiring != "reals":
         raise ValueError(
-            f"The {config.type!r} kernel has rank above one and only works"
-            f" in the reals, not in the {semiring!r} semiring."
+            f"The {config.type!r} kernel only works in the reals, not in"
+            f" the {semiring!r} semiring."
         )
     if config.type in ("decay", "cosine_decay") and context_length is None:
         raise ValueError(f"The {config.type!r} kernel needs context_length.")

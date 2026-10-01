@@ -5,10 +5,10 @@ import torch.nn.functional as F
 from pydantic import model_validator
 from torch import nn
 
-from .attention import AttentionConfig, CausalSelfAttention
+from .attention import AttentionConfig, SelfAttention
 from .config import ModelConfig
 from .hooks import HookedModule
-from .liss import LISS, LISSConfig
+from .liss import LISSConfig, build_liss
 
 
 class FFNConfig(ModelConfig):
@@ -52,12 +52,23 @@ class ElissabethConfig(ModelConfig):
     model) and ``attention`` (the transformer baseline)."""
     ffn: FFNConfig | None = None
     """A SwiGLU after every mixer, or none."""
+    pooling: Literal["last", "mean"] = "last"
+    """How a per-sequence target reads the output (:meth:`Elissabeth.pool`):
+    at the last position, where a causal model has seen the whole sequence,
+    or averaged over positions, for a bidirectional one."""
 
     @model_validator(mode="after")
     def _one_mixer(self) -> "ElissabethConfig":
         if (self.liss is None) == (self.attention is None):
             raise ValueError("Give exactly one of model.liss, model.attention.")
         return self
+
+    @property
+    def bidirectional(self) -> bool:
+        """Whether the output at ``t`` depends on the inputs after ``t``."""
+        mixer = self.liss if self.liss is not None else self.attention
+        assert mixer is not None
+        return mixer.bidirectional
 
 
 class Elissabeth(HookedModule):
@@ -89,9 +100,9 @@ class Elissabeth(HookedModule):
             return nn.LayerNorm(d) if config.layer_norm else nn.Identity()
 
         self.mixers = nn.ModuleList([
-            LISS(config.liss, d, config.context_length)
+            build_liss(config.liss, d, config.context_length)
             if config.liss is not None
-            else CausalSelfAttention(config.attention, d)  # type: ignore
+            else SelfAttention(config.attention, d)  # type: ignore
             for _ in range(config.n_layers)
         ])
         self.mixer_norms = nn.ModuleList([norm() for _ in self.mixers])
@@ -121,3 +132,10 @@ class Elissabeth(HookedModule):
                 x = self._block(x, self.ffns[i], self.ffn_norms[i])
             x = self.hook(f"layer_{i}", x)
         return self.unembedding(self.final_norm(x))
+
+    def pool(self, logits: torch.Tensor) -> torch.Tensor:
+        """The per-sequence output ``(B, C)`` of the logits ``(B, T, C)``,
+        by ``config.pooling``."""
+        if self.config.pooling == "mean":
+            return logits.mean(1)
+        return logits[:, -1]

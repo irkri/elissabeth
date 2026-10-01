@@ -1,9 +1,13 @@
-"""The synthetic tasks from the thesis and a character-level text task,
-generated in memory and served by one Lightning data module.
+"""The synthetic tasks from the thesis, a character-level text task and the
+Tropical Attention benchmark (:mod:`.tropical`), generated in memory and
+served by one Lightning data module.
 
-Every task returns ``x`` of shape ``(n, T)`` (int64 tokens) and targets
-``y`` of shape ``(n, T)`` (one per position, ``-1`` = ignored) or ``(n,)``
-(one per sequence, compared with the prediction at the last position).
+Every task returns inputs ``x`` of shape ``(n, T)`` (int64 tokens) or
+``(n, T, F)`` (float vectors) and targets ``y`` of shape ``(n, T)`` (one per
+position) or ``(n,)`` (one per sequence, read from the output by the model's
+``pooling``). What a target is depends on the task's objective: a class
+index (``-1`` = ignored) for ``cross_entropy``, a float 0/1 for ``binary``
+or a real number for ``regression`` (``NaN`` = ignored in both).
 """
 from functools import lru_cache
 from pathlib import Path
@@ -19,8 +23,37 @@ from .config import ConfigPath, ModelConfig
 
 T_Data = tuple[np.ndarray, np.ndarray]
 
+T_Objective = Literal["cross_entropy", "binary", "regression"]
+"""Cross entropy over ``output_dim`` classes, a binary cross entropy on one
+logit, or a squared error on one output."""
 
-class CopyingTask(ModelConfig):
+
+class Task(ModelConfig):
+    """What the run needs to know about a task besides its fields."""
+
+    @property
+    def input_type(self) -> Literal["token", "vector"]:
+        return "token"
+
+    @property
+    def objective(self) -> T_Objective:
+        return "cross_entropy"
+
+    @property
+    def causal(self) -> bool:
+        """The targets are later inputs (next-token prediction), so a model
+        that sees the future sees the answer."""
+        return False
+
+    def generate(self, n: int, rng: np.random.Generator) -> T_Data:
+        raise NotImplementedError
+
+    def data(self, n: int, seed: int | None) -> T_Data:
+        """``n`` samples, the same ones for the same ``seed``."""
+        return self.generate(n, np.random.default_rng(seed))
+
+
+class CopyingTask(Task):
     """Copy the ``to_copy`` data tokens, scattered over the first
     ``to_copy * (1 + max_dilute)`` positions, after a marker token. Tokens
     ``0..n_categories-3`` are data, ``n_categories-2`` is blank and
@@ -73,7 +106,7 @@ def _is_rotation(marks: np.ndarray) -> np.ndarray:
     return ((np.roll(marks, -1, axis=1) - marks) % m == 1).all(axis=1)
 
 
-class CyclicTask(ModelConfig):
+class CyclicTask(Task):
     """Does the sequence contain ``1, 2, ..., m`` in some cyclic rotation
     (e.g. ``3, 4, ..., m, 1, 2``) as a subsequence? The ``m = characters-1``
     marks are spread over zeros, the last one at the final position; the
@@ -121,7 +154,7 @@ class CyclicTask(ModelConfig):
         return x, y.astype(np.int64)
 
 
-class LookupTask(ModelConfig):
+class LookupTask(Task):
     """Find the first occurrence of the last token and answer the token
     right before it (an induction-head task). Without ``multiple_keys`` the
     key occurs exactly once before the end. With ``only_last`` the target
@@ -141,6 +174,10 @@ class LookupTask(ModelConfig):
     @property
     def output_dim(self) -> int:
         return self.characters
+
+    @property
+    def causal(self) -> bool:
+        return not self.only_last
 
     def generate(self, n: int, rng: np.random.Generator) -> T_Data:
         c, T = self.characters, self.length
@@ -183,7 +220,7 @@ def _read_corpus(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return tuple(lines), tuple(sorted(set("".join(lines))))
 
 
-class TextTask(ModelConfig):
+class TextTask(Task):
     """Character-level language modelling on the lines of a text file
     (the makemore replicate). Token 0 starts and ends a line; positions
     after the end are ignored."""
@@ -207,6 +244,10 @@ class TextTask(ModelConfig):
     def output_dim(self) -> int:
         return self.input_dim
 
+    @property
+    def causal(self) -> bool:
+        return True
+
     def encode(self, text: str) -> list[int]:
         index = {a: i + 1 for i, a in enumerate(self.vocabulary)}
         return [index[a] for a in text]
@@ -226,8 +267,12 @@ class TextTask(ModelConfig):
         return x, y
 
 
+# The Tropical Attention bridge subclasses Task, so it is imported once Task
+# exists (the same trick as in config.py).
+from .tropical import TropicalTask  # noqa: E402
+
 T_Task = Annotated[
-    CopyingTask | CyclicTask | LookupTask | TextTask,
+    CopyingTask | CyclicTask | LookupTask | TextTask | TropicalTask,
     Field(discriminator="name"),
 ]
 
@@ -244,9 +289,23 @@ class DatasetConfig(ModelConfig):
     seed: int | None = None
     """Seeds generation and the train/validation split."""
 
+    @model_validator(mode="after")
+    def _check(self) -> "DatasetConfig":
+        if isinstance(self.task, TropicalTask) and self.seed is None:
+            raise ValueError(
+                "The tropical task needs dataset.seed: it seeds the"
+                " reference generator and the split (the reference uses"
+                " 999 for training, 0 for evaluation)."
+            )
+        return self
+
     @property
     def input_type(self) -> Literal["token", "vector"]:
-        return "token"
+        return self.task.input_type
+
+    @property
+    def objective(self) -> T_Objective:
+        return self.task.objective
 
     @property
     def input_dim(self) -> int:
@@ -264,10 +323,10 @@ class DatasetConfig(ModelConfig):
 def make_datasets(
     config: DatasetConfig,
 ) -> tuple[TensorDataset | torch.utils.data.Subset, ...]:
-    """The task's ``(train, validation)`` split."""
-    x, y = config.task.generate(
-        config.n_samples, np.random.default_rng(config.seed),
-    )
+    """The task's ``(train, validation)`` split. With a seed and a whole
+    number of validation samples this is the Tropical Attention driver's
+    split (``torch.manual_seed(seed)``, then ``random_split``)."""
+    x, y = config.task.data(config.n_samples, config.seed)
     data = TensorDataset(torch.as_tensor(x), torch.as_tensor(y))
     n_val = int(round(config.val_size * len(data)))
     generator = (

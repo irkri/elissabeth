@@ -1,4 +1,4 @@
-"""Causal softmax attention: the transformer baseline for Elissabeth.
+"""Softmax attention: the transformer baseline for Elissabeth.
 
 Used in place of the LISS mixer (``model.attention`` instead of
 ``model.liss``), so a baseline differs from Elissabeth only in the sequence
@@ -24,6 +24,9 @@ class AttentionConfig(ModelConfig):
     """Rotary position embedding on queries and keys."""
     rope_base: float = 10_000.0
     bias: bool = False
+    bidirectional: bool = False
+    """Attend to every position instead of only the past (an encoder, the
+    baseline for set tasks)."""
 
     @model_validator(mode="after")
     def _check(self) -> "AttentionConfig":
@@ -45,7 +48,7 @@ def rotate(x: torch.Tensor, base: float) -> torch.Tensor:
     return torch.cat((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1)
 
 
-class CausalSelfAttention(HookedModule):
+class SelfAttention(HookedModule):
 
     def __init__(self, config: AttentionConfig, d_in: int) -> None:
         super().__init__("query", "key", "value")
@@ -60,6 +63,7 @@ class CausalSelfAttention(HookedModule):
             raise ValueError(f"rope needs an even d_head, got {self.d_head}.")
         self.rope = config.rope
         self.rope_base = config.rope_base
+        self.causal = not config.bidirectional
         width = self.n_heads * self.d_head
         self.qkv = nn.Linear(d_in, 3 * width, bias=config.bias)
         self.out = nn.Linear(width, d_in, bias=config.bias)
@@ -79,7 +83,7 @@ class CausalSelfAttention(HookedModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
         q, k, v = self._qkv(x)
-        z = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        z = F.scaled_dot_product_attention(q, k, v, is_causal=self.causal)
         return self.out(z.transpose(1, 2).reshape(B, T, -1))
 
     @torch.no_grad()
@@ -88,5 +92,7 @@ class CausalSelfAttention(HookedModule):
         q, k, _ = self._qkv(x)
         T = x.shape[1]
         scores = q @ k.transpose(-1, -2) / math.sqrt(self.d_head)
-        mask = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
-        return scores.masked_fill(~mask, -torch.inf).softmax(-1)
+        if self.causal:
+            mask = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
+            scores = scores.masked_fill(~mask, -torch.inf)
+        return scores.softmax(-1)

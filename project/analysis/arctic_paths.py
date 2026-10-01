@@ -1,7 +1,8 @@
 """The discrete read-out of an arctic (max-plus) LISS level: for every
 output position, head and value channel, the index tuple
 ``t_1 < ... < t_p <= t`` that attains the maximum, found by tracing the
-cumulative maxima back like a Viterbi path.
+cumulative maxima back like a Viterbi path (``--backward``: the tuple
+``t <= t_p < ... < t_1`` of the backward direction).
 
     python analysis/arctic_paths.py run_0001 --position -1
 """
@@ -17,13 +18,18 @@ def main() -> None:
     args = p.parse_args()
     model, config = load(args)
     x, target = example(args, config)
-    level = liss_level(model, args.layer, args.level)
-    stream = layer_input(model, x, args.layer)
-    tuples = level.decode(stream)[0, args.position]       # (N, d_v, p)
-    with torch.no_grad():
-        score = level(stream)[0, args.position, :, :, 0]  # (N, d_v)
+    level = liss_level(model, args.layer, args.level, args.backward)
+    stream = layer_input(model, x, args.layer, args.backward)
     tokens = x[0].tolist()
     t = args.position % len(tokens)
+    # The backward direction runs on the reversed sequence: its position
+    # T-1-t is the output at t, and its indices map back the same way.
+    position = len(tokens) - 1 - t if args.backward else t
+    tuples = level.decode(stream)[0, position]            # (N, d_v, p)
+    if args.backward:
+        tuples = torch.where(tuples >= 0, len(tokens) - 1 - tuples, -1)
+    with torch.no_grad():
+        score = level(stream)[0, position, :, :, 0]       # (N, d_v)
     print(f"input  {tokens}")
     if target is not None:
         print(f"target {target.tolist()}")

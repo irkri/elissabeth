@@ -27,9 +27,11 @@ def float64():
 
 
 def build(liss: dict, d: int = 5, context_length: int = 10) -> Elissabeth:
+    """A causal one-layer model, so ``mixers.0`` is the LISS itself."""
     config = ElissabethConfig(
         d_hidden=d, n_layers=1, layer_norm=False, residual=False,
-        context_length=context_length, liss=LISSConfig(**liss),
+        context_length=context_length,
+        liss=LISSConfig(**{"bidirectional": False, **liss}),
     )
     return Elissabeth(config, input_dim=d)
 
@@ -304,6 +306,14 @@ CASES = [
     ("log", [{"type": "decay", "alpha_0": 4},
              {"type": "exponential", "share_keys": True}]),
     ("bayesian", [{"type": "decay", "alpha_0": 2}]),
+    # exponentials of rank d_qk: the features are contracted with the
+    # semiring's own sum, and two kernels multiply to R1*R2 features
+    ("reals", [{"type": "exponential", "d_qk": 3, "restrict": True}]),
+    ("arctic", [{"type": "decay", "alpha_0": 4},
+                {"type": "exponential", "d_qk": 3}]),
+    ("log", [{"type": "exponential", "d_qk": 2},
+             {"type": "exponential", "d_qk": 3, "share_queries": True}]),
+    ("bayesian", [{"type": "exponential", "d_qk": 2, "restrict": True}]),
 ]
 
 
@@ -393,10 +403,22 @@ def test_log_domain_gradients_are_finite(semiring: str) -> None:
         assert p.grad is None or torch.isfinite(p.grad).all()
 
 
-def test_decode_finds_the_argmax_tuple() -> None:
-    level = make_level("arctic", [{"type": "decay", "alpha_0": 4},
-                                  {"type": "exponential"}], p=3)
+@pytest.mark.parametrize("semiring,d_qk", [
+    ("arctic", 1), ("arctic", 3), ("bayesian", 2),
+])
+def test_decode_finds_the_argmax_tuple(semiring: str, d_qk: int) -> None:
+    """The decoded tuple scores the level's output; with rank ``d_qk > 1``
+    that needs the feature each contraction took, not only the scans'
+    argmax."""
+    level = make_level(semiring, [{"type": "decay", "alpha_0": 4},
+                                  {"type": "exponential", "d_qk": d_qk}], p=3)
     x = torch.randn(1, 7, 4)
+    if semiring == "bayesian":
+        with torch.no_grad():
+            level.values.transform.weight.abs_()
+            level.values.transform.bias.fill_(0.1)
+        x = x.abs()
+    add, mul = SEMIRINGS[semiring]
     tuples = level.decode(x)                      # (1, T, N, d_v, p)
     v = level._values(x)[0]
     kernel, _ = level.pair_matrices(x)
@@ -407,16 +429,41 @@ def test_decode_finds_the_argmax_tuple() -> None:
                 index = tuples[0, t, n, d].tolist()
                 chain = index + [t]
                 assert index == sorted(set(index))
-                score = sum(
-                    v[chain[l], n, l, d, 0] + kernel[0, n, l, chain[l + 1],
-                                                     chain[l]]
-                    for l in range(level.p)
-                )
+                score = None
+                for l in range(level.p):
+                    term = mul(v[chain[l], n, l, d, 0],
+                               kernel[0, n, l, chain[l + 1], chain[l]])
+                    score = term if score is None else mul(score, term)
                 torch.testing.assert_close(score, out[t, n, d, 0])
     assert (tuples[0, :2] == -1).all()
 
 
-def test_rank_r_kernels_are_reals_only() -> None:
-    with pytest.raises(ValueError):
-        LISSConfig(d_values=2, semiring="arctic",
-                   kernels=[{"type": "cosine"}])
+@pytest.mark.parametrize("semiring", ["reals", "arctic", "log", "bayesian"])
+def test_exponential_is_the_semiring_sum_over_d_qk(
+    semiring: str,
+) -> None:
+    """``kappa_l(t', t) = (+)_d exp(q_{l,d}(x_t') - k_{l,d}(x_t))`` from the
+    projections themselves, independently of the factors the recursion
+    (and the brute force above) use."""
+    level = make_level(semiring, [{"type": "exponential", "d_qk": 3}], p=2)
+    kernel = level.kernels[0]
+    x = torch.randn(1, 5, 4)
+    q = kernel.query(x)[0]                      # (T, N, p, R)
+    k = kernel.key(x)[0]
+    score = q.unsqueeze(1) - k.unsqueeze(0)     # (T', T, N, p, R)
+    expected = {
+        "reals": score.exp().sum(-1),
+        "arctic": score.amax(-1),
+        "log": score.logsumexp(-1),
+        "bayesian": score.exp().amax(-1),
+    }[semiring].permute(2, 3, 0, 1)             # (N, p, T', T)
+    torch.testing.assert_close(level.pair_matrices(x)[0][0], expected)
+
+
+def test_cosine_kernels_are_reals_only() -> None:
+    for kernel in ("cosine", "cosine_decay"):
+        with pytest.raises(ValueError):
+            LISSConfig(d_values=2, semiring="arctic",
+                       kernels=[{"type": kernel}])
+    LISSConfig(d_values=2, semiring="arctic",
+               kernels=[{"type": "exponential", "d_qk": 4}])

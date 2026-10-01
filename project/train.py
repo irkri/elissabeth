@@ -7,7 +7,8 @@ from pathlib import Path
 import lightning.pytorch as L
 import torch
 
-from elissabeth.config import (deep_update, load_runconfig, parse_overrides,
+from elissabeth.config import (deep_update, load_runconfig,
+                               load_saved_runconfig, parse_overrides,
                                read_mapping, save_runconfig)
 from elissabeth.data import ElissabethDataModule
 from elissabeth.lightning import (CONFIG_NAME, ElissabethLightningModule,
@@ -45,9 +46,12 @@ def run(args: argparse.Namespace) -> None:
     ckpt_path: Path | None = None
     if args.resume is not None:
         run_dir = find_run_dir(CHECKPOINTS_PATH, args.resume)
-        config = load_runconfig(
-            args.config or run_dir / CONFIG_NAME, overrides=overrides,
-        )
+        if args.config is None:
+            config = load_saved_runconfig(
+                run_dir / CONFIG_NAME, overrides=overrides,
+            )
+        else:
+            config = load_runconfig(args.config, overrides=overrides)
         latest = latest_checkpoint(run_dir)
         if latest is not None:
             ckpt_path = latest[1]
@@ -65,7 +69,7 @@ def run(args: argparse.Namespace) -> None:
     module = ElissabethLightningModule(
         config.model, config.trainer,
         config.dataset.input_dim, config.dataset.output_dim,
-        run_dir=run_dir,
+        run_dir=run_dir, objective=config.dataset.objective,
     )
     torch.set_float32_matmul_precision("high")
     torch._dynamo.config.recompile_limit = 25
