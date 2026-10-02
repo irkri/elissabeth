@@ -425,9 +425,12 @@ def implementation_section(df: pd.DataFrame, impls: list[str],
             if not gain.empty:
                 where = ", ".join(sorted(gain.index.get_level_values(0).unique()))
                 text += (f" Where <code>native</code> compiles ({where}) it is"
-                         f" {gain.median():.1f}× faster than <code>compiled</code>:"
-                         " the custom op that every scan goes through is opaque to"
-                         " Inductor, so nothing around it fuses.")
+                         f" {gain.median():.1f}× faster than <code>compiled</code>"
+                         f" (up to {gain.max():.1f}×). The custom op hands every"
+                         " scan to ATen, whose scan along the time axis (not the"
+                         " innermost one) is a sequential loop per column, and"
+                         " nothing around it fuses; Inductor generates a parallel"
+                         " scan of its own.")
     intro = (f"<p>Every implementation evaluates the same layer with the same"
              f" weights. Today they are all the PyTorch path, run differently:</p>"
              f"<ul class='prose'>{items}</ul><p>The first chart divides eager time by"
@@ -654,9 +657,13 @@ def scan_section(df: pd.DataFrame) -> str:
         oom = df[(df.experiment == "scan") & (df.status == "OOM")]
         text = ("Hillis–Steele's step time over the rescaled cumsum's: " + ", ".join(
                     f"{v:.1f}× at T = {compact(T)}" for T, v in per_T.items())
-                + ". Its rounds are plain elementwise operations Inductor fuses,"
-                " while the cumsum sits behind the custom op, so at long lengths it"
-                " is the faster scan per step. It pays elsewhere: compiling takes"
+                + (". Below one it is the faster scan per step, from"
+                   f" T = {compact(per_T[per_T < 1].index.min())} on: its rounds"
+                   " are elementwise operations Inductor fuses, while the cumsum is"
+                   " ATen's sequential time-axis scan behind the custom op"
+                   if (per_T < 1).any() else
+                   ". It is the slower scan per step at every length measured")
+                + ". It pays elsewhere: compiling takes"
                 f" up to {cmp['hillis'].max() / 60:.0f} min against"
                 f" {cmp['compiled'].max():.0f} s, it needs"
                 f" {(mem['hillis'] / mem['compiled']).dropna().median():.1f}× the"

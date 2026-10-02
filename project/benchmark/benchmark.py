@@ -26,7 +26,8 @@ Experiments (``--experiments``):
                 (``hillis``), over the lengths at one depth; kept apart
                 because an unrolled Hillis scan takes minutes to compile
 - ``attention`` softmax attention (SDPA, the transformer baseline in
-                ``elissabeth.attention``) over the same lengths
+                ``elissabeth.attention``) over the same lengths, up to
+                ``--attention-max-T``
 
 The layer is causal (one direction; ``bidirectional`` costs twice that and
 is one of the settings), reads a LayerNorm'd input as it does inside the
@@ -245,7 +246,8 @@ def scan_cells(args: argparse.Namespace) -> Iterator[Cell]:
 
 
 def attention_cells(args: argparse.Namespace) -> Iterator[Cell]:
-    for T in args.lengths:
+    cap = args.attention_max_T or max(args.lengths)
+    for T in [T for T in args.lengths if T <= cap]:
         for impl in [i for i in ("eager", "compiled") if i in args.impls]:
             for task in args.tasks:
                 yield Cell("attention", "softmax", "", "", T, args.batch,
@@ -282,6 +284,19 @@ def _cleanup(device: torch.device) -> None:
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
+
+
+def warm_compiler(device: torch.device) -> float:
+    """One throwaway compile, so that the first cell's compile_s is not
+    charged what the process pays once: Inductor's worker pool, and Triton
+    building its driver stubs into an empty cache (40 s on Leonardo)."""
+    start = time.perf_counter()
+    f = torch.compile(lambda x: torch.cumsum(x.sin(), 1).sum(), fullgraph=True)
+    x = torch.randn(2, 64, 8, device=device, requires_grad=True)
+    f(x).backward()
+    _sync(device)
+    torch._dynamo.reset()
+    return time.perf_counter() - start
 
 
 def _first_line(exc: BaseException) -> str:
@@ -703,6 +718,9 @@ def main() -> None:
                         default=[1024, 16384, 131072],
                         help="lengths of the scan experiment (an unrolled"
                              " Hillis scan compiles for minutes)")
+    parser.add_argument("--attention-max-T", type=int, default=None,
+                        help="longest length of the attention experiment (a"
+                             " quadratic step takes 10 s and more past 64k)")
     parser.add_argument("--side-T", type=int, default=16384,
                         help="length of the rank and settings experiments")
     parser.add_argument("--side-p", type=int, default=3,
@@ -774,6 +792,8 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     write_meta(args.out.with_suffix(".json"), args, device, len(todo))
 
+    if any(IMPLEMENTATIONS[c.impl].compile for c in todo):
+        print(f"compiler warm-up: {warm_compiler(device):.1f} s", flush=True)
     groups: dict[tuple, list[Cell]] = {}
     for cell in todo:
         groups.setdefault(timing_key(cell), []).append(cell)
