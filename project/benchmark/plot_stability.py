@@ -21,7 +21,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from report import (PLOT_CONFIG, DIVERGING, NEUTRAL, RAMP, SLOTS, apply_log_ticks,
-                    compact, figure, glossary, log_ticks, page, ramp, reading,
+                    compact, eq, figure, glossary, log_ticks, m, page, ramp, reading,
                     sci, section, style, table, tiles)
 
 SEMIRINGS = ["reals", "log", "arctic", "bayesian"]
@@ -121,13 +121,13 @@ def lines(
 
 
 def t_axis(fig: go.Figure, T: int) -> None:
-    """Position ticks: every 16-fold step, or every 256-fold one when the
-    figure has four or more panels side by side."""
+    """Position ticks, every one labelled: every 4-fold step, or every
+    8-fold one when the figure has four or more panels side by side;
+    plotly tilts the labels where they would collide."""
     panels = sum(1 for k in fig.layout if k.startswith("xaxis"))
-    step = 256 if panels >= 4 else 16
-    ticks = [step**k for k in range(8) if step**k <= T * 1.01]
-    fig.update_xaxes(tickvals=ticks, ticktext=[compact(v) for v in ticks],
-                     tickangle=0)
+    step = 8 if panels >= 4 else 4
+    ticks = [step**k for k in range(20) if step**k <= T * 1.01]
+    fig.update_xaxes(tickvals=ticks, ticktext=[compact(v) for v in ticks])
 
 
 def exponent(g: pd.DataFrame, semiring: str, octaves: int = 4) -> float:
@@ -153,31 +153,31 @@ def exponent(g: pd.DataFrame, semiring: str, octaves: int = 4) -> float:
 def lead(meta: dict) -> str:
     shape = meta.get("shape", {})
     return f"""<div class="lead">
-<p>At position <i>t</i> a LISS level of depth <i>p</i> combines every index tuple
-<i>t</i><sub>1</sub> &lt; … &lt; <i>t</i><sub>p</sub> ≤ <i>t</i>, and there are
-C(<i>t</i>+1, <i>p</i>) ≈ <i>t</i><sup>p</sup>/<i>p</i>! of them. What the stored number
+<p>At position {m("t")} a LISS level of depth {m("p")} combines every index tuple
+{m(r"t_1 < \dots < t_p \le t")}, and there are
+{m(r"\binom{t+1}{p} \approx t^p / p!")} of them. What the stored number
 does with that depends on the semiring and on the values:</p>
 <ul>
 <li>In the <b>reals</b> the level stores the sum itself. If the values of a channel
 keep their sign over time, the products add up and the sum grows like
-<i>t</i><sup>p</sup>; if the signs are random they partly cancel, and it grows like
-<i>t</i><sup>p/2</sup>. float32 holds numbers up to 3.4·10<sup>38</sup>, float16 up to
+{m("t^p")}; if the signs are random they partly cancel, and it grows like
+{m("t^{p/2}")}. float32 holds numbers up to 3.4·10<sup>38</sup>, float16 up to
 65,504.</li>
 <li>The <b>log</b> semiring stores the logarithm of a sum of positive terms, so the
-same growth is an additive <i>p</i>·ln <i>t</i>: it cannot overflow, but each logsumexp
+same growth is an additive {m(r"p \ln t")}: it cannot overflow, but each logsumexp
 step rounds.</li>
 <li>The <b>arctic</b> semiring keeps the best tuple's sum of values, which grows only
 as fast as the extreme values of the input; the <b>bayesian</b> one keeps the best
 tuple's product.</li>
-<li>A <b>decay</b> λ<sup>gap</sup> with λ &lt; 1 caps the window at about
-<i>T<sub>c</sub></i>/α positions; with λ &gt; 1 (a negative rate, which favours the
-distant past) it grows exponentially, e<sup>α t/T<sub>c</sub></sup>, once the length
-passes the context length <i>T<sub>c</sub></i>.</li>
-<li><b>Normalisation</b> divides each level's partial sums by the number of positions
-summed: <code>mean</code> by <i>c</i>, <code>sqrt</code> by √<i>c</i>. It is defined for
-the reals and the log semiring. <code>ema</code> is a prototype that exists only in
-this benchmark: it divides by the decayed count Σ λ<sup>t−s</sup>, which equals
-<code>mean</code> without a decay.</li>
+<li>A <b>decay</b> {m(r"\lambda^{t-s}")} with {m(r"\lambda < 1")} caps the window at
+about {m(r"T_c / \alpha")} positions; with {m(r"\lambda > 1")} (a negative rate, which
+favours the distant past) it grows exponentially, as {m(r"e^{\alpha t / T_c}")}, once
+the length passes the context length {m("T_c")}.</li>
+<li><b>Normalisation</b> divides each level's partial sums by the number {m("c")} of
+positions summed: <code>mean</code> by {m("c")}, <code>sqrt</code> by {m(r"\sqrt{c}")}.
+It is defined for the reals and the log semiring. <code>ema</code> is a prototype that
+exists only in this benchmark: it divides by the decayed count
+{m(r"\sum_s \lambda^{t-s}")}, which equals <code>mean</code> without a decay.</li>
 </ul>
 <p>Every run evaluates one level ({shape.get('B', 2)} sequences, {shape.get('n_is', 4)}
 heads, value width {shape.get('d_values', 8)}, input width {shape.get('d_in', 16)}; the
@@ -185,7 +185,7 @@ values are LayerNorm'd as by default) with fixed weights in float64, the referen
 and in float32, bfloat16, float16 and bfloat16 autocast (<code>bf16-mixed</code>,
 float32 weights with matrix products in bfloat16, what Lightning's
 <code>precision: bf16-mixed</code> does). The level is causal, so one run to length
-<i>T</i> gives its output at every <i>t</i> ≤ <i>T</i>. The inputs are LayerNorm'd per
+{m("T")} gives its output at every {m(r"t \le T")}. The inputs are LayerNorm'd per
 position, as the pre-norm hands them to a mixer:</p>
 <ul>
 <li><code>constant</code>: one vector at every position, the worst case for growth;</li>
@@ -194,13 +194,13 @@ position, as the pre-norm hands them to a mixer:</p>
 <li><code>gaussian</code>: independent random vectors;</li>
 <li><code>sparse</code>: zero except at 1 % of the positions, like blanks between marks.</li>
 </ul>
-<p>Errors are against float64: ‖y − y<sub>64</sub>‖/‖y<sub>64</sub>‖ over a position's
-outputs in the reals and the bayesian semiring, and the largest absolute error in the
-log domain, where an absolute error of a stored logarithm is the relative error of the
-number it stands for.</p></div>"""
+<p>Errors are against float64: {m(r"\lVert y - y_{64} \rVert / \lVert y_{64} \rVert")}
+over a position's outputs in the reals and the bayesian semiring, and the largest
+absolute error in the log domain, where an absolute error of a stored logarithm is the
+relative error of the number it stands for.</p></div>"""
 
 
-def kpis(df: pd.DataFrame) -> str:
+def kpis(df: pd.DataFrame, everything: pd.DataFrame | None = None) -> str:
     items = []
     G = df[(df.experiment == "growth") & (df.dtype == "float32")]
     R = G[(G.semiring == "reals") & (G.normalize == "none")]
@@ -208,16 +208,16 @@ def kpis(df: pd.DataFrame) -> str:
     if not R.empty:
         if bad.empty:
             items.append(("float32 overflow, reals", "none",
-                          f"no depth up to {int(R.p.max())} up to t = {compact(R['T'].max())}"))
+                          f"no depth up to {int(R.p.max())} up to {eq('t', compact(R['T'].max()))}"))
         else:
             first = bad.sort_values("t").iloc[0]
-            items.append(("float32 overflow, reals", f"t = {compact(first.t1)}",
-                          f"first non-finite output: p = {first.p}, {first.input} input"))
+            items.append(("float32 overflow, reals", eq("t", compact(first.t1)),
+                          f"first non-finite output: {eq('p', first.p)}, {first.input} input"))
     last = G[G.t == G["T"] - 1]
     if not last.empty:
         fin = last[np.isfinite(last.err)]
         items.append(("float32 error at the end", sci(fin.err.median()),
-                      f"median over every growth run at t = {compact(last.t1.max())},"
+                      f"median over every growth run at {eq('t', compact(last.t1.max()))},"
                       f" largest {sci(fin.err.max())}"))
     B16 = df[(df.experiment == "growth") & (df.dtype == "bfloat16")
              & (df.semiring == "reals") & (df.t == df["T"] - 1)]
@@ -238,11 +238,25 @@ def kpis(df: pd.DataFrame) -> str:
     if not D.empty:
         D = D.assign(x=D.t1 / D.Tc, a=D.alpha.abs() * D.t1 / D.Tc)
         first = D.groupby("alpha")["x"].min()
-        items.append(("Growing decay overflows", "α·t/T<sub>c</sub> ≈ "
-                      f"{D.groupby('alpha')['a'].min().median():.0f}",
+        items.append(("Growing decay overflows",
+                      m(r"|\alpha|\, t / T_c \approx "
+                        f"{D.groupby('alpha')['a'].min().median():.0f}"),
                       "reals, float32: "
-                      + ", ".join(f"α = {a:g} at t = {x:.0f} T<sub>c</sub>"
+                      + ", ".join(m(f"\\alpha = {a:g}") + " at " + m(f"t = {x:.0f}\\, T_c")
                                   for a, x in first.items())))
+    if everything is not None and "triton" in set(everything.scan):
+        G = everything[(everything.experiment == "growth")
+                       & (everything.t == everything["T"] - 1)]
+        tri = G[G.scan == "triton"]
+        same = G[(G.scan == "torch") & G.semiring.isin(tri.semiring.unique())
+                 & G.normalize.isin(tri.normalize.unique())]
+        for dtype in ("float32", "bfloat16"):
+            t = tri[(tri.dtype == dtype) & np.isfinite(tri.err)]
+            o = same[same.dtype == dtype]
+            if not t.empty:
+                items.append((f"{dtype} error, Triton scans", sci(t.err.median()),
+                              f"median over the growth runs at the end; PyTorch"
+                              f" path {sci(o.err.median())} on the same runs"))
     return tiles(items)
 
 
@@ -270,10 +284,10 @@ def growth_section(df: pd.DataFrame) -> str:
         pmax = R.p.max()
         ex = {kind: exponent(R[(R.input == kind) & (R.p == pmax)], "reals")
               for kind in present(R.input.unique(), INPUTS)}
-        text = (f"In the reals without normalisation the largest value at p = {pmax}"
-                f" grows like t to the power " + ", ".join(
-                    f"{v:.1f} ({k})" for k, v in ex.items()) +
-                f". A constant input reaches the full exponent p; independent inputs"
+        text = (f"In the reals without normalisation the largest value at {eq('p', pmax)}"
+                f" grows like {m('t^a')} with " + ", ".join(
+                    f"{m(f'a = {v:.1f}')} ({k})" for k, v in ex.items()) +
+                f". A constant input reaches the full exponent {m('a = p')}; independent inputs"
                 f" about half of it. The dotted lines are the largest float32 and"
                 f" float16 numbers. In the log domain the stored value is a logarithm"
                 f" and stays below a few hundred.")
@@ -327,7 +341,7 @@ def exponent_section(df: pd.DataFrame) -> str:
             v = R[(R.normalize == n) & (R.input == kind) & (R.p == R.p.max())].a
             return f"{round(v.iloc[0], 1) + 0.0:.1f}" if len(v) else "–"
         pm = R.p.max()
-        text = (f"At p = {pm}: without normalisation a constant input grows with"
+        text = (f"At {eq('p', pm)}: without normalisation a constant input grows with"
                 f" exponent {at('none', 'constant')} and an independent one with"
                 f" {at('none', 'gaussian')}. <code>mean</code> holds the constant"
                 f" input at {at('mean', 'constant')} but drives the independent one"
@@ -335,11 +349,11 @@ def exponent_section(df: pd.DataFrame) -> str:
                 f" reverse ({at('sqrt', 'constant')} and {at('sqrt', 'gaussian')})."
                 f" No count normalisation keeps both at zero, because the right"
                 f" divisor depends on how coherent the values are.")
-    intro = ("<p>The exponent <i>a</i> in |ISS| ∝ <i>t</i><sup>a</sup> of the represented"
-             " quantity over the last four doublings of <i>t</i>: the slope of"
-             " log |y| against log <i>t</i> for a stored number, and of the stored"
-             " logarithm against ln <i>t</i> in the log domain, which is the same"
-             " quantity. Zero means the level keeps its scale whatever the length;"
+    intro = ("<p>The exponent " + m("a") + " in " + m(r"\lvert \mathrm{ISS} \rvert \propto t^a")
+             + " of the represented quantity over the last four doublings of " + m("t")
+             + ": the slope of " + m(r"\log \lvert y \rvert") + " against " + m(r"\log t")
+             + " for a stored number, and of the stored logarithm against " + m(r"\ln t")
+             + " in the log domain, which is the same quantity. Zero means the level keeps its scale whatever the length;"
              " red grows, blue shrinks.</p>")
     return section("Growth exponents", intro, figure(fig, vis, "Semiring · normalisation"),
                    reading(text) if text else "", anchor="exponents")
@@ -378,7 +392,7 @@ def precision_section(df: pd.DataFrame) -> str:
             present(F.semiring.unique(), SEMIRINGS))
         text = ("float32 at the last position, median over runs: " + ", ".join(
             f"{s} {sci(v)}" for s, v in per.items()) +
-            ". The sums (reals, log) lose accuracy roughly in proportion to t; the"
+            ". The sums (reals, log) lose accuracy roughly in proportion to " + m("t") + "; the"
             " maximum (arctic, bayesian) does not accumulate rounding at all."
             " Pure bfloat16 and float16 are wrong by order one within a few"
             " thousand positions; under bf16 autocast the scans run in float32"
@@ -428,16 +442,16 @@ def primitive_section(df: pd.DataFrame) -> str:
                 f" nothing. A level's state has time on dimension 1, so every LISS"
                 f" scan in pure bfloat16 stagnates this way. In float32 the same"
                 f" scan accumulates position by position, which is why its error"
-                f" grows with t, about ten times faster than the innermost scan's"
+                f" grows with {m('t')}, about ten times faster than the innermost scan's"
                 f" tree. bfloat16 also cannot tell neighbouring positions apart"
                 f" beyond 256, and float16 cannot represent positions past 65,504,"
                 f" so a decay or a normalisation count computed in those formats is"
                 f" wrong before any sum is.")
     intro = ("<p>The PyTorch operations a level is built from, alone, on random"
-             " inputs in a level's state layout (time on dimension 1 of"
-             " <code>(B, T, N, R, d_v, w)</code>) and with time innermost. The lower"
+             " inputs in a level's state layout (time on dimension 1 of "
+             + m("(B, T, N, R, d_v, w)") + ") and with time innermost. The lower"
              " chart is the furthest <code>arange(T)</code> in each format puts any"
-             " position up to t from where it is; decays and normalisation counts"
+             " position up to " + m("t") + " from where it is; decays and normalisation counts"
              " are computed from it in the level's dtype.</p>")
     return section("Where the error comes from", intro, figure(fig),
                    figure(fig2, note="Every format holds the positions exactly."),
@@ -507,11 +521,11 @@ def decay_section(df: pd.DataFrame) -> str:
     if not bad.empty:
         first = bad.groupby(["semiring", "alpha"]).apply(
             lambda g: (g.t1 / g.Tc).min(), include_groups=False)
-        parts = [f"{s} α = {a:+g} at t = {x:.0f} T<sub>c</sub>"
+        parts = [f"{s} {m(f'\\alpha = {a:+g}')} at {m(f't = {x:.0f}\\, T_c')}"
                  for (s, a), x in first.items()]
         text = ("float32 outputs turn non-finite for: " + "; ".join(parts) +
-                ". Only the growing decays (α &lt; 0) of the reals and the bayesian"
-                " semiring overflow: once e<sup>α t/T<sub>c</sub></sup> times the"
+                ". Only the growing decays (" + m(r"\alpha < 0") + ") of the reals and"
+                " the bayesian semiring overflow: once " + m(r"e^{|\alpha| t / T_c}") + " times the"
                 " number of tuples passes 3.4·10<sup>38</sup> (88 nats), whatever the"
                 " normalisation, which divides by a count and cannot undo an"
                 " exponential. The log domain carries the same growth as a sum.")
@@ -522,16 +536,18 @@ def decay_section(df: pd.DataFrame) -> str:
         one = M.iloc[(M.x - 1).abs().argsort()].groupby(["normalize", "alpha"])["mag_med"].first()
         ratio = (end / one).dropna()
         if not ratio.empty:
-            text += (" With a shrinking decay (α &gt; 0), <code>mean</code> divides by"
-                     " t while only about T<sub>c</sub>/α positions still count, so"
-                     " the output keeps falling past the context length ("
-                     + ", ".join(f"{n} α = {a:+g}: {v:.2g}× its value at t = T<sub>c</sub>"
-                                 for (n, a), v in ratio.items())
+            text += (" With a shrinking decay (" + m(r"\alpha > 0") + "), <code>mean</code>"
+                     " divides by " + m("t") + " while only about " + m(r"T_c / \alpha")
+                     + " positions still count, so the output keeps falling past the"
+                     " context length ("
+                     + ", ".join(f"<code>{n}</code> {m(f'\\alpha = {a:+g}')}: {sci(v)}× its value"
+                                 f" at {m('t = T_c')}" for (n, a), v in ratio.items())
                      + " at the end, constant input).")
-    intro = ("<p>A decay of rate α/T<sub>c</sub> per position (λ = e<sup>−α/T<sub>c</sub></sup>,"
-             " the rate the kernel's <code>alpha_0·tanh(a)</code> reaches at saturation),"
-             " run to 128 context lengths. Positive α shrinks old tuples; negative α"
-             " favours the distant past and grows. The selector picks the"
+    intro = ("<p>A decay of rate " + m(r"\alpha / T_c") + " per position ("
+             + m(r"\lambda = e^{-\alpha / T_c}") + ", the rate the kernel's "
+             + m(r"\alpha_0 \tanh(a)") + " reaches at saturation), run to 128 context"
+             " lengths. Positive " + m(r"\alpha") + " shrinks old tuples; negative "
+             + m(r"\alpha") + " favours the distant past and grows. The selector picks the"
              " normalisation (<code>ema</code> is the benchmark-only prototype), the"
              " depth and the input. These runs are long enough for the real and the"
              " bayesian scan to take their Hillis–Steele path.</p>")
@@ -577,23 +593,24 @@ def kernel_section(df: pd.DataFrame) -> str:
     if not ref.empty:
         spread = ref.mag.max() / ref.mag.min() - 1
         text = (f"In float64 the reals output is the same at every offset (the"
-                f" largest values agree to {sci(spread)}), since exp(q + c − (k + c)) ="
-                f" exp(q − k). The factors exp(q + c) and exp(−k − c) are"
-                f" stored separately, and float32 loses them at an offset of about 88"
-                f" (e<sup>88</sup> ≈ 1.7·10<sup>38</sup>). Nothing in the loss holds the"
+                f" largest values agree to {sci(spread)}), since"
+                f" {m(r'e^{(q + c) - (k + c)} = e^{q - k}')}. The factors {m('e^{q + c}')}"
+                f" and {m('e^{-k - c}')} are stored separately, and float32 loses them"
+                f" at an offset of about 88 ({m(r'e^{88} \approx 1.7 \cdot 10^{38}')})."
+                f" Nothing in the loss holds the"
                 f" offset back, since it does not change the kernel: only weight decay"
-                f" does. The log-domain semirings add q and −k and never form the"
+                f" does. The log-domain semirings add {m('q')} and {m('-k')} and never form the"
                 f" exponential. A larger scale grows the kernel itself in every"
                 f" semiring that stores products, until <code>restrict</code> bounds"
                 f" queries and keys with tanh.")
-    intro = ("<p>The exponential kernel exp(q(x<sub>t′</sub>) − k(x<sub>t</sub>)) in"
-             " the reals and the bayesian semiring is evaluated as a product of"
-             " exp(q) at the later index and exp(−k) at the earlier one. Left: both"
+    intro = ("<p>The exponential kernel " + m(r"\exp\bigl(q(x_{t'}) - k(x_t)\bigr)")
+             + " in the reals and the bayesian semiring is evaluated as a product of "
+             + m("e^{q}") + " at the later index and " + m("e^{-k}") + " at the earlier one. Left: both"
              " biases shifted by the same constant, which leaves the kernel exactly"
              " unchanged. Middle and right: the query and key weights scaled up, as"
              " training may do, without and with <code>restrict</code>. Each point is"
              " the fraction of non-finite float32 outputs over a run of 4,096"
-             " positions at p = 2.</p>")
+             " positions at " + m("p = 2") + ".</p>")
     return section("The exponential kernel's factors", intro, figure(fig),
                    reading(text) if text else "", anchor="kernel")
 
@@ -631,15 +648,15 @@ def gradient_section(df: pd.DataFrame) -> str:
     if not R.empty:
         first = R[R.t == 0].set_index("series")["mag_max"]
         text = ("The gradient reaching the first input position of a reals level,"
-                f" T = {compact(R['T'].max())}: " + ", ".join(
+                f" {eq('T', compact(R['T'].max()))}: " + ", ".join(
                     f"{k} {sci(v)}" for k, v in first.items()) +
                 ". It grows with the number of outputs a position feeds, the same"
                 " polynomial as the forward pass; normalisation tames it too.")
     nf = E[E.nonfinite > 0]
     if nf.empty and not E.empty:
         text += " No gradient was non-finite in any format tested."
-    intro = ("<p>The gradient of sum(y · r), r fixed and random, with respect to the"
-             " input of the level, at the default kernels (decay and exponential at"
+    intro = ("<p>The gradient of " + m(r"\mathcal{L} = \sum y \cdot r") + ", " + m("r")
+             + " fixed and random, with respect to the input " + m("x_s") + " of the level, at the default kernels (decay and exponential at"
              " initialisation) and an independent input. Top: its size at every"
              " input position (float64). Bottom: its error against float64.</p>")
     return section("Gradients", intro, figure(fig), figure(fig2, vis2, "Format"),
@@ -690,8 +707,28 @@ def scan_section(df: pd.DataFrame) -> str:
                     " the growth runs, PyTorch against Triton: " + ", ".join(parts)
                     + ". A fused scan rounds through one chunk and the chain of"
                     " chunk states, not through every position, and applies the"
-                    " decay step by step instead of as e<sup>±βt</sup> or an"
-                    " offset βt that grows with the position.")
+                    " decay step by step instead of as " + m(r"e^{\pm \beta t}") + " or an"
+                    " offset " + m(r"\beta t") + " that grows with the position.")
+        low = X[(X.experiment == "growth") & (X.t == X["T"] - 1)
+                & (X.dtype == "bfloat16")]
+        if not low.empty and {"torch", "triton"} <= set(low.scan):
+            per = low.groupby(["semiring", "scan"])["err"].median().unstack()
+            text += (" Stored in pure bfloat16, where the PyTorch scans stagnate,"
+                     " the Triton path keeps the inputs' rounding only: " + ", ".join(
+                         f"{s} {sci(r['torch'])} against {sci(r['triton'])}"
+                         for s, r in per.reindex(present(per.index, SEMIRINGS)).iterrows()
+                         if np.isfinite(r).all()) + ".")
+    D = X[(X.experiment == "decay") & (X.dtype == "float32") & (X.alpha < 0)
+          & (X.nonfinite > 0)]
+    if not D.empty and {"torch", "triton"} <= set(D.scan):
+        first = (D.assign(x=D.t1 / D.Tc).groupby(["scan", "semiring", "alpha"])["x"]
+                 .min().unstack("scan").dropna())
+        if not first.empty and (first["torch"] == first["triton"]).all():
+            text += (" A growing decay overflows at the same position on both paths ("
+                     + ", ".join(f"{s} {m(f'\\alpha = {a:g}')} at {m(f'{r.triton:.0f}\\, T_c')}"
+                                 for (s, a), r in first.iterrows())
+                     + "): there the number itself leaves float32's range, whatever"
+                     " the scan.")
     intro = ("<p>The same runs on <code>scan: triton</code>, the fused Triton"
              " scans (reals, log, arctic), against the same float64 PyTorch"
              " reference. The lines are medians over the runs of an experiment;"
@@ -721,15 +758,15 @@ def summary_section(df: pd.DataFrame) -> str:
             parts = [f"error {sci(fin.err.median())}" if not fin.empty else "error –"]
             for limit in (0.01, 0.1):
                 worse = g[g.err > limit]
-                parts.append(f"{limit:.0%} from t = {compact(worse.t1.min())}"
+                parts.append(f"{limit:.0%} from {eq('t', compact(worse.t1.min()))}"
                              if not worse.empty else f"never {limit:.0%}")
-            parts.append(f"non-finite from t = {compact(bad.t1.min())}"
+            parts.append(f"non-finite from {eq('t', compact(bad.t1.min()))}"
                          if not bad.empty else "always finite")
             cells.append("<br>".join(parts))
         rows.append(cells)
     T = compact(G["T"].max())
     intro = (f"<p>Every growth run (all normalisations, depths and inputs) by format"
-             f" and semiring: the median error at t = {T}, the first positions where"
+             f" and semiring: the median error at {eq('t', T)}, the first positions where"
              f" any run's error passes 1 % and 10 %, and the first non-finite"
              f" output.</p>")
     return section("Where each format breaks", intro,
@@ -738,10 +775,11 @@ def summary_section(df: pd.DataFrame) -> str:
 
 GLOSSARY = [
     ("Quantities", [
-        ("p", "depth of the level: indices per tuple."),
-        ("t, T", "a position (counted from one in the charts) and the run's length."),
-        ("T<sub>c</sub>", "the context length: decays are measured in t/T<sub>c</sub>."),
-        ("α", "the decay rate times T<sub>c</sub>; λ = e<sup>−α/T<sub>c</sub></sup> per position."),
+        (m("p"), "depth of the level: indices per tuple."),
+        (m("t,\\ T"), "a position (counted from one in the charts) and the run's length."),
+        (m("T_c"), "the context length: decays are measured in " + m("t / T_c") + "."),
+        (m(r"\alpha"), "the decay rate times " + m("T_c") + "; "
+         + m(r"\lambda = e^{-\alpha / T_c}") + " per position."),
     ]),
     ("Formats", [
         ("float32", "the training default; 24-bit mantissa, range 3.4·10<sup>38</sup>."),
@@ -753,7 +791,8 @@ GLOSSARY = [
         ("none", "partial sums as they are."),
         ("mean", "divided by the count of positions summed."),
         ("sqrt", "divided by the square root of the count."),
-        ("ema", "prototype, this benchmark only: divided by the decayed count Σ λ<sup>t−s</sup>."),
+        ("ema", "prototype, this benchmark only: divided by the decayed count "
+         + m(r"\sum_s \lambda^{t-s}") + "."),
     ]),
 ]
 
@@ -767,7 +806,7 @@ def build(df: pd.DataFrame, meta: dict, sources: list[str], fragment: bool) -> s
     ] if x)
     everything, df = df, df[df.scan == "torch"]
     body = "".join([
-        lead(meta), kpis(df), glossary(GLOSSARY),
+        lead(meta), kpis(df, everything), glossary(GLOSSARY),
         growth_section(df), exponent_section(df), normalize_section(df),
         precision_section(df), primitive_section(df), decay_section(df),
         kernel_section(df), gradient_section(df), scan_section(everything),

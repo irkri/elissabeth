@@ -5,12 +5,23 @@ A report is one self-contained HTML file: plotly.js is inlined, the
 figures are drawn with light colours and restyled from the page's CSS
 tokens when the viewer's theme is dark (``THEME_JS``), and a chart with
 several views gets a ``<select>`` above it that switches which traces are
-visible.
+visible. Every y axis of line charts is fitted to the traces shown
+(``rescale`` in ``THEME_JS``): on load, on every view or legend change and
+after a double-click, with one range for panels that share their y axis
+and a labelled tick at every gridline of a log axis. Reference lines are
+shapes, not traces, so they never stretch an axis.
+
+Formulas are LaTeX (``m`` inline, ``md`` displayed), typeset by KaTeX when
+the page loads. KaTeX is vendored in ``katex/`` (MIT) and inlined with its
+fonts, so a report needs no network.
 """
+import base64
 import html
 import json
 import math
+import re
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -174,6 +185,53 @@ def sci(v: float | None, digits: int = 1) -> str:
 # --------------------------------------------------------------------------
 # HTML pieces
 # --------------------------------------------------------------------------
+KATEX = Path(__file__).with_name("katex")
+
+
+def m(tex: str) -> str:
+    """Inline LaTeX, typeset by KaTeX on the page."""
+    return r"\(" + html.escape(tex, quote=False) + r"\)"
+
+
+def eq(name: str, value) -> str:
+    """``name = value`` as inline math, the value upright (``16k``, ``131,072``)."""
+    return m(f"{name} = \\text{{{value}}}")
+
+
+def md(tex: str) -> str:
+    """A displayed LaTeX formula."""
+    return ("<div class='formula'>" + r"\[" + html.escape(tex, quote=False)
+            + r"\]" + "</div>")
+
+
+def katex() -> str:
+    """KaTeX's stylesheet (its woff2 fonts as data URIs) and scripts,
+    inlined; empty without the vendored copy, and the TeX then shows as
+    written."""
+    if not (KATEX / "katex.min.js").exists():
+        return ""
+
+    def font(match: re.Match) -> str:
+        data = (KATEX / "fonts" / f"{match.group(1)}.woff2").read_bytes()
+        return ('src:url(data:font/woff2;base64,'
+                + base64.b64encode(data).decode() + ') format("woff2")')
+
+    css = re.sub(r'src:url\(fonts/([^)]+?)\.woff2\) format\("woff2"\)'
+                 r'(?:,url\([^)]*\) format\("[a-z]+"\))*', font,
+                 (KATEX / "katex.min.css").read_text())
+    js = ((KATEX / "katex.min.js").read_text() + "\n"
+          + (KATEX / "auto-render.min.js").read_text())
+    return f"<style>{css}</style>\n<script>{js}</script>"
+
+
+MATH_JS = r"""
+if (window.renderMathInElement) renderMathInElement(document.body, {
+  delimiters: [{left: '\\[', right: '\\]', display: true},
+               {left: '\\(', right: '\\)', display: false}],
+  ignoredClasses: ['js-plotly-plot'], throwOnError: false,
+});
+"""
+
 def figure(fig: go.Figure | None, views: dict[str, list[bool]] | None = None,
            view_label: str = "View", note: str = "") -> str:
     """A figure, optionally with a selector over ``views`` (label ->
@@ -230,8 +288,9 @@ def table(header: Sequence[str], rows: Sequence[Sequence[str]],
 def glossary(groups: Sequence[tuple[str, Sequence[tuple[str, str]]]]) -> str:
     blocks = []
     for heading, items in groups:
-        rows = "".join(f"<dt><code>{html.escape(k)}</code></dt><dd>{v}</dd>"
-                       for k, v in items)
+        rows = "".join(
+            f"<dt>{k if k.startswith(chr(92) + '(') else '<code>' + html.escape(k) + '</code>'}"
+            f"</dt><dd>{v}</dd>" for k, v in items)
         blocks.append(f"<div><h3>{html.escape(heading)}</h3><dl>{rows}</dl></div>")
     return ("<details class='glossary'><summary>Terms used on this page"
             "</summary><div class='gloss-grid'>" + "".join(blocks)
@@ -277,9 +336,8 @@ h3 { font-size: 13px; margin: 0 0 6px; text-transform: uppercase;
 .prose { max-width: 74ch; }
 .prose p, .lead p { margin: 0 0 10px; }
 .lead { max-width: 74ch; margin: 22px 0 8px; }
-.formula { font-size: 15px; background: var(--code); line-height: 2;
-           border-radius: 6px; padding: 10px 14px; margin: 10px 0 12px;
-           overflow-x: auto; }
+.formula { margin: 4px 0 10px; overflow-x: auto; overflow-y: hidden; }
+.katex { font-size: 1.08em; }
 code { font-family: var(--mono); font-size: .88em; background: var(--code);
        padding: 1px 5px; border-radius: 4px; }
 section { border-top: 1px solid var(--grid); padding-block: 26px 10px;
@@ -388,8 +446,104 @@ THEME_JS = """
       });
     }
   }
+  // A tick label as report.tick_label writes it.
+  function label(v) {
+    const a = Math.abs(v);
+    if (a >= 1e-3 && a < 1e5)
+      return (+v.toPrecision(6)).toLocaleString('en-US', {maximumFractionDigits: 6});
+    const e = Math.floor(Math.log10(a) + 1e-9), m = v / Math.pow(10, e);
+    const head = Math.abs(m - 1) < 1e-6 ? '' : (+m.toPrecision(6)) + '\u00b7';
+    return head + '10<sup>' + (e < 0 ? '\u2212' + (-e) : e) + '</sup>';
+  }
+  // Ticks inside [a, b] (log10 units): 1-2-3-5 or every digit on a narrow
+  // range, 1-2-5 or 1-3 on a medium one, decades (or every k-th) on a wide
+  // one; every tick gets a label.
+  function logTicks(a, b) {
+    const span = b - a;
+    const sets = span <= 1 ? [[1, 2, 3, 5], [1, 2, 3, 4, 5, 6, 7, 8, 9]]
+      : span <= 3.5 ? [[1, 2, 5]] : span <= 6 ? [[1, 3]] : [[1]];
+    const every = Math.max(1, Math.ceil(span / 10));
+    let vals = [];
+    for (const steps of sets) {
+      vals = [];
+      for (let e = Math.floor(a) - 1; e <= Math.ceil(b) + 1; e++) {
+        if (((e % every) + every) % every) continue;
+        for (const m of steps) {
+          const v = m * Math.pow(10, e), l = Math.log10(v);
+          if (l >= a && l <= b) vals.push(v);
+        }
+      }
+      if (vals.length >= 3) break;
+    }
+    if (vals.length < 2)
+      vals = [a + 0.15 * span, b - 0.15 * span].map(l => +Math.pow(10, l).toPrecision(2));
+    return vals;
+  }
+  // Fit every y axis carrying line traces to the traces now visible; axes
+  // that match one another (panels sharing y) get one range together.
+  function rescale(gd) {
+    const fl = gd._fullLayout, full = gd._fullData;
+    if (!fl || !full) return;
+    const names = Object.keys(fl).filter(k => /^yaxis\\d*$/.test(k));
+    const axis = r => 'yaxis' + r.slice(1);
+    const root = n => {
+      for (let i = 0; i < 20 && fl[n] && fl[n].matches; i++) n = axis(fl[n].matches);
+      return n;
+    };
+    const lo = {}, hi = {}, other = {};
+    for (const tr of full) {
+      const g = root(axis(tr.yaxis || 'y'));
+      if (tr.type !== 'scatter') { other[g] = true; continue; }
+      if (tr.visible !== true) continue;
+      const log = fl[g] && fl[g].type === 'log', ys = tr.y || [];
+      for (let i = 0; i < ys.length; i++) {
+        const v = +ys[i];
+        if (!isFinite(v) || (log && v <= 0)) continue;
+        if (!(v >= lo[g])) lo[g] = v;
+        if (!(v <= hi[g])) hi[g] = v;
+      }
+    }
+    const upd = {};
+    for (const g of Object.keys(lo)) {
+      if (other[g] || !fl[g]) continue;
+      let range, ticks = null;
+      if (fl[g].type === 'log') {
+        const a = Math.log10(lo[g]), b = Math.log10(hi[g]);
+        const pad = Math.max(0.04, 0.05 * (b - a));
+        range = [a - pad, b + pad];
+        ticks = logTicks(range[0], range[1]);
+      } else {
+        const pad = (hi[g] - lo[g]) * 0.06 || Math.abs(hi[g]) * 0.1 || 1;
+        range = [lo[g] - pad, hi[g] + pad];
+      }
+      for (const n of names) {
+        if (root(n) !== g) continue;
+        upd[n + '.range'] = range;
+        upd[n + '.autorange'] = false;
+        if (ticks) {
+          upd[n + '.tickvals'] = ticks;
+          upd[n + '.ticktext'] = ticks.map(label);
+        }
+      }
+    }
+    if (Object.keys(upd).length) Plotly.relayout(gd, upd);
+  }
+  function fit() {
+    for (const gd of document.querySelectorAll('.js-plotly-plot')) {
+      rescale(gd);
+      // a view or a legend entry switched traces on or off
+      gd.on('plotly_restyle', (d) => {
+        if (d && d[0] && 'visible' in d[0]) rescale(gd);
+      });
+      // a double-click reset the axes to plotly's own autorange
+      gd.on('plotly_relayout', (d) => {
+        if (d && Object.keys(d).some(k => /^yaxis\\d*\\.autorange$/.test(k) && d[k] === true))
+          rescale(gd);
+      });
+    }
+  }
   function start() {
-    apply(); views();
+    apply(); views(); fit();
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', apply);
     new MutationObserver(apply).observe(document.documentElement,
       {attributes: true, attributeFilter: ['data-theme']});
@@ -405,11 +559,13 @@ def page(title: str, heading: str, meta: str, body: str,
     """The whole HTML document, or with ``fragment`` only what goes inside
     a host's own skeleton (title, style, scripts, content)."""
     series = [list(p) for p in SLOTS + RAMP]
-    script = (THEME_JS.replace("%SERIES%", json.dumps(series))
-              .replace("%DIVERGING%", json.dumps(DIVERGING)))
+    script = MATH_JS + (THEME_JS.replace("%SERIES%", json.dumps(series))
+                        .replace("%DIVERGING%", json.dumps(DIVERGING)))
+    math_assets = katex()
     if fragment:
         return f"""<title>{html.escape(title)}</title>
 <style>{CSS}</style>
+{math_assets}
 <script>{get_plotlyjs()}</script>
 <div class="wrap">
 <header><h1>{html.escape(heading)}</h1><p class="meta">{meta}</p></header>
@@ -422,6 +578,7 @@ def page(title: str, heading: str, meta: str, body: str,
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{html.escape(title)}</title>
 <style>{CSS}</style>
+{math_assets}
 <script>{get_plotlyjs()}</script>
 </head><body><div class="wrap">
 <header><h1>{html.escape(heading)}</h1><p class="meta">{meta}</p></header>

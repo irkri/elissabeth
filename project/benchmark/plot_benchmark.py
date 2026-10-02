@@ -24,8 +24,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from report import (PLOT_CONFIG, NEUTRAL, RAMP, SEMIRING_COLOR, SLOTS, apply_log_ticks,
-                    compact, figure, glossary, log_ticks, page, ramp, reading,
-                    sci, section, style, table, tiles)
+                    compact, eq, figure, glossary, log_ticks, m, md, page, ramp,
+                    reading, sci, section, style, table, tiles)
 
 SETUPS = ["reals", "log", "arctic", "bayesian", "reals · cosine"]
 SETUP_NOTE = {
@@ -85,12 +85,11 @@ def p_color(depths: list[float]) -> dict[float, str]:
 
 
 def t_ticks(values) -> dict:
-    """Length ticks, every other one so five panels side by side stay
-    legible, horizontal."""
-    vals = sorted(v for v in values if v == v)
-    if len(vals) > 4:
-        vals = vals[::2]
-    return dict(**log_ticks(vals), tickangle=0)
+    """A labelled tick at every length measured, upright labels when there
+    are many (five panels side by side leave each one too narrow for them
+    horizontally, and plotly's own tilt differs from panel to panel)."""
+    vals = [v for v in values if v == v]
+    return dict(**log_ticks(vals), **({"tickangle": -90} if len(set(vals)) >= 6 else {}))
 
 
 def present(values, order) -> list:
@@ -127,7 +126,8 @@ def panel_lines(
         shown: set = set()
         for i, pn in enumerate(panels):
             r, c = divmod(i, cols)
-            if ref is not None and not ref.empty:
+            own = sub[(sub[panel] == pn) & sub[series].isin(order)]
+            if ref is not None and not ref.empty and not own.empty:
                 d = ref.sort_values(x)
                 fig.add_trace(go.Scatter(
                     x=d[x], y=d[y], name=ref_name, legendgroup="ref",
@@ -176,6 +176,17 @@ def memory_caps(meta: dict) -> list[float]:
                    for s in meta.get("sessions", [])} - {None})
 
 
+def shared_gpu(meta: dict) -> bool:
+    """Whether the GPU ran other jobs: the local runs cap their memory for
+    the others' sake, the cluster job owns its GPU and sets no cap."""
+    return bool(memory_caps(meta))
+
+
+def device_memory(meta: dict) -> str:
+    gb = meta.get("sessions", [{}])[-1].get("device_memory_gb")
+    return f"{gb:.0f} GiB" if gb else "the GPU's memory"
+
+
 def lead(meta: dict, df: pd.DataFrame, stat: str) -> str:
     s = meta.get("sessions", [{}])[-1].get("args", {})
     B, N, dv, d = (s.get("batch", "?"), s.get("heads", "?"),
@@ -196,30 +207,49 @@ def lead(meta: dict, df: pd.DataFrame, stat: str) -> str:
         " semiring)" if sessions and sessions[0].get("timing") == "groups"
         else "The implementations and tasks of each configuration"
     )
+    paths = "" if "triton" not in set(df.impl) else (
+        "<p>The library runs these scans on one of two paths. On the PyTorch"
+        " path (<code>scan: torch</code>, eager or compiled) every scan is a"
+        " PyTorch scan over a stored state. On the Triton path"
+        " (<code>scan: triton</code>; reals, log and arctic) one fused kernel per"
+        " scan computes the key factor, the decayed scan and the query"
+        " contraction, chunked over time, and keeps the " + m("R") + "-wide state"
+        " in registers: a level stores " + m("(B, T, N, d_v)") + " tensors instead"
+        " of " + m("(B, T, N, R, d_v)") + " ones.</p>")
+    load = (", so they shared whatever load other jobs put on the GPU."
+            if shared_gpu(meta) else ". The GPU ran nothing else.")
+    scans = md(
+        r"\begin{aligned}"
+        r"S_1(t) &= \bigoplus_{s \le t} \lambda_1^{\,t-s} \otimes \psi_1(s) \otimes v_1(s) \\"
+        r"S_l(t) &= \bigoplus_{s \le t} \lambda_l^{\,t-s} \otimes \psi_l(s) \otimes"
+        r" \bigl\langle \varphi_{l-1}(s),\, S_{l-1}(s-1) \bigr\rangle \otimes v_l(s) \\"
+        r"\mathrm{ISS}^{(p)}(t) &= \bigl\langle \varphi_p(t),\, S_p(t) \bigr\rangle"
+        r" = \bigoplus_r \varphi_{p,r}(t) \otimes S_{p,r}(t)"
+        r"\end{aligned}")
     return f"""<div class="lead">
-<p>A LISS level of depth <i>p</i> sums, for every head and position <i>t</i>,
-over all index tuples <i>t</i><sub>1</sub> &lt; … &lt; <i>t</i><sub>p</sub> ≤ <i>t</i>
+<p>A LISS level of depth {m("p")} sums, for every head and position {m("t")},
+over all index tuples {m(r"t_1 < \dots < t_p \le t")}
 the semiring product of the values at those indices and of the kernels between
-neighbouring indices. Because every kernel factorises into a query feature at the
-later index and a key feature at the earlier one, times a decay, the sum is not
-evaluated over the <i>O</i>(<i>T</i><sup>p</sup>) tuples but as <i>p</i> scans:</p>
-<div class="formula">S<sub>1</sub>(t) = ⊕<sub>s≤t</sub> λ<sub>1</sub><sup>t−s</sup> ⊗ ψ<sub>1</sub>(s) ⊗ v<sub>1</sub>(s)<br>
-S<sub>l</sub>(t) = ⊕<sub>s≤t</sub> λ<sub>l</sub><sup>t−s</sup> ⊗ ψ<sub>l</sub>(s) ⊗ ⟨φ<sub>l−1</sub>(s), S<sub>l−1</sub>(s−1)⟩ ⊗ v<sub>l</sub>(s)<br>
-ISS<sup>(p)</sup>(t) = ⟨φ<sub>p</sub>(t), S<sub>p</sub>(t)⟩ = ⊕<sub>r</sub> φ<sub>p,r</sub>(t) ⊗ S<sub>p,r</sub>(t)</div>
-<p>Each scan carries a state of shape <code>(B, T, N, R, d_v)</code>: batch, time,
+neighbouring indices. Because every kernel factorises into a query feature
+{m(r"\varphi")} at the later index and a key feature {m(r"\psi")} at the earlier one,
+times a decay {m(r"\lambda")}, the sum is not evaluated over the {m("O(T^p)")}
+tuples but as {m("p")} scans:</p>
+{scans}
+<p>Each scan carries a state of shape {m("(B, T, N, R, d_v)")}: batch, time,
 heads, kernel rank and value width. The work of a level is therefore
-<i>p</i>·<i>B</i>·<i>T</i>·<i>N</i>·<i>R</i>·<i>d<sub>v</sub></i> state entries, linear in
+{m(r"p \cdot B \cdot T \cdot N \cdot R \cdot d_v")} state entries, linear in
 both the length and the depth, and the backward pass keeps every state for the
-gradient. The four semirings differ only in ⊕ and ⊗: a sum and a product
-(<code>reals</code>), logsumexp and a sum (<code>log</code>), a maximum and a sum
-(<code>arctic</code>), a maximum and a product (<code>bayesian</code>).</p>
-<p>Each cell builds one causal LISS layer (<i>B</i> = {B}, <i>N</i> = {N} heads,
-<i>d<sub>v</sub></i> = {dv}, model width {d}, context length = <i>T</i>) and times a
-training step, the forward and backward pass of <code>sum(y · r)</code> for a fixed
-random <code>r</code> (<b>train</b>), and the forward pass alone under
+gradient. The four semirings differ only in {m(r"\oplus")} and {m(r"\otimes")}: a sum and
+a product (<code>reals</code>), logsumexp and a sum (<code>log</code>), a maximum and a
+sum (<code>arctic</code>), a maximum and a product (<code>bayesian</code>).</p>{paths}
+<p>Each cell builds one causal LISS layer ({m(f"B = {B}")}, {m(f"N = {N}")} heads,
+{m(f"d_v = {dv}")}, model width {d}, context length {m("T")}) and times a
+training step, the forward and backward pass of the loss
+{m(r"\mathcal{L} = \sum_{b,t,i} y_{bti}\, r_{bti}")} for a fixed random {m("r")}
+(<b>train</b>), and the forward pass alone under
 <code>no_grad</code> (<b>infer</b>). Times are {which}; the other is in each
-point's hover. {together} were timed in turns, one step each, so they shared
-whatever load other jobs put on the GPU. Memory is the peak a step allocates on top of the weights and the
+point's hover. {together} were timed in turns, one step each{load}
+Memory is the peak a step allocates on top of the weights and the
 input. Every cell's output and input gradient are compared with a float64
 evaluation of the same weights.{cap_text}</p></div>"""
 
@@ -229,6 +259,20 @@ def kpis(df: pd.DataFrame) -> str:
     L = df[(df.experiment == "length") & df.ok & (df.task == "train")]
     piv = L.pivot_table(index=["setup", "p", "T"], columns="impl",
                         values="total", aggfunc="min")
+    if {"compiled", "triton"} <= set(piv.columns):
+        long = piv[piv.index.get_level_values("T") >= 16384]
+        sp = (long["compiled"] / long["triton"]).dropna()
+        if not sp.empty:
+            items.append(("Triton over compiled", f"{sp.median():.1f}×",
+                          f"median training speed-up from {eq('T', '16k')}, {sp.min():.1f}–"
+                          f"{sp.max():.1f}× over {len(sp)} cells"))
+        mem = L.pivot_table(index=["setup", "p", "T"], columns="impl",
+                            values="peak_mb", aggfunc="min")
+        m = (mem["triton"] / mem["compiled"]).dropna().groupby(level="setup").median()
+        if not m.empty:
+            lo, hi = m.idxmin(), m.idxmax()
+            items.append(("Triton's memory", f"{m[lo]:.2f}×",
+                          f"of compiled's in training, {lo}; {m[hi]:.2f}× in {hi}"))
     if {"eager", "compiled"} <= set(piv.columns):
         sp = (piv["eager"] / piv["compiled"]).dropna()
         if not sp.empty:
@@ -246,16 +290,12 @@ def kpis(df: pd.DataFrame) -> str:
             if not ratio.empty:
                 items.append((f"Depth {hi:g} against depth {lo:g}",
                               f"{ratio.median():.1f}×",
-                              f"compiled training step at T = {compact(Tref)}"
+                              f"compiled training step at {eq('T', compact(Tref))}"
                               f" (work ratio {hi / lo:g}×)"))
-        fit = C[(C["p"] == 3) & (C.setup == "reals")]
-        if not fit.empty:
-            items.append(("Longest length run",
-                          f"{compact(fit['T'].max())}",
-                          "positions, compiled training at p = 3 (reals)"))
     A = df[(df.experiment == "attention") & df.ok & (df.task == "train")
            & (df.impl == "compiled")]
-    R = C[(C.setup == "reals") & (C["p"] == 2)] if not C.empty else C
+    fastest = "triton" if "triton" in set(L.impl) else "compiled"
+    R = L[(L.impl == fastest) & (L.setup == "reals") & (L["p"] == 2)]
     if not A.empty and not R.empty:
         common = sorted(set(A["T"]) & set(R["T"]))
         if common:
@@ -263,9 +303,9 @@ def kpis(df: pd.DataFrame) -> str:
             ratio = (A[A["T"] == T]["total"].min()
                      / R[R["T"] == T]["total"].min())
             items.append(("Attention against LISS p = 2",
-                          f"{ratio:.1f}×",
-                          f"softmax attention's step time over a reals level's,"
-                          f" T = {compact(T)}"))
+                          f"{ratio:.0f}×" if ratio >= 10 else f"{ratio:.1f}×",
+                          f"softmax attention's training step over a reals"
+                          f" level's ({fastest}), {eq('T', compact(T))}"))
     E = df[df.ok & df.err_out.notna()]
     if not E.empty:
         items.append(("Largest output error", sci(E["err_out"].max()),
@@ -283,6 +323,10 @@ def length_section(df: pd.DataFrame) -> str:
     views = present(L["view"].unique(), VIEW_ORDER) + sorted(
         set(L["view"]) - set(VIEW_ORDER))
     panels = present(L["setup"].unique(), SETUPS)
+    if not A.empty:     # attention has no triton: compare with its compiled step
+        A = pd.concat([A] + [
+            A[(A.impl == "compiled") & (A.task == v.split(" · ")[1])].assign(view=v)
+            for v in views if v not in set(A.view)])
     fig, vis = panel_lines(
         L, panel="setup", panels=panels, x="T", y="total", series="p",
         order=depths, colors=colors, label=lambda p: f"p = {p:g}",
@@ -291,26 +335,34 @@ def length_section(df: pd.DataFrame) -> str:
         hover="T = %{x:,}<br>%{y:.3g} ms", height=400,
     )
     fig.update_xaxes(**t_ticks(L["T"].unique()))
-    # the reading: exponent of T over the last doubling-range, compiled train
-    C = L[(L.impl == "compiled") & (L.task == "train")]
-    slopes = []
-    for (setup, p), g in C.groupby(["setup", "p"]):
-        g = g.sort_values("T")
-        if len(g) >= 3:
-            a, b = g.iloc[-3], g.iloc[-1]
-            slopes.append(math.log(b["total"] / a["total"]) / math.log(b["T"] / a["T"]))
+    # the reading: exponent of T over the last two doublings, per implementation
+    def slopes(impl: str) -> list[float]:
+        out = []
+        C = L[(L.impl == impl) & (L.task == "train")]
+        for _, g in C.groupby(["setup", "p"]):
+            g = g.sort_values("T")
+            if len(g) >= 3:
+                a, b = g.iloc[-3], g.iloc[-1]
+                out.append(math.log(b["total"] / a["total"]) / math.log(b["T"] / a["T"]))
+        return out
     text = ""
-    if slopes:
-        text = (f"Over the longest lengths the compiled training step grows like "
-                f"T<sup>{np.median(slopes):.2f}</sup> (median over semirings and "
-                f"depths, range {min(slopes):.2f}–{max(slopes):.2f}): linear, as the "
-                f"recursion promises. Below a few thousand positions the step is "
-                f"dominated by launch overhead and barely depends on T.")
+    for impl in [i for i in ("compiled", "triton") if i in set(L.impl)]:
+        sl = slopes(impl)
+        if sl:
+            text += (f"{' The ' if text else 'Over the longest lengths the '}"
+                     f"<code>{impl}</code> training step grows like"
+                     f" {m('T^{' + format(np.median(sl), '.2f') + '}')} (median over"
+                     f" semirings and depths, range {min(sl):.2f}–{max(sl):.2f})"
+                     + ("" if text else ": linear, as the recursion promises") + ".")
+    if text:
+        text += (" Below a few thousand positions the step is dominated by launch"
+                 " overhead and barely depends on T.")
     att = ""
     if not A.empty:
         att = (" The dotted line in every panel is softmax attention (PyTorch's"
                " scaled-dot-product kernel, causal, same width and heads) in the"
-               " same implementation and task, for scale.")
+               " same implementation and task, compiled in the Triton views, for"
+               " scale.")
     intro = (f"<p>Step time against the length, one panel per semiring, one line"
              f" per depth. Both axes are logarithmic, so a straight line is a power"
              f" law and a slope of one is linear cost. The selector switches the"
@@ -337,22 +389,20 @@ def depth_section(df: pd.DataFrame) -> str:
         panel_title=lambda T: f"T = {T:,}", height=380,
     )
     fig.update_xaxes(dtick=1)
-    C = L[(L.impl == "compiled") & (L.task == "train") & (L["T"] == pick[-1])]
     text = ""
-    if not C.empty:
-        per = []
-        for setup, g in C.groupby("setup"):
-            g = g.sort_values("p")
-            if len(g) >= 2:
-                slope = np.polyfit(g["p"], g["total"], 1)
-                per.append((setup, slope[0], slope[1]))
+    for impl in [i for i in ("compiled", "triton") if i in set(L.impl)]:
+        C = L[(L.impl == impl) & (L.task == "train") & (L["T"] == pick[-1])]
+        per = [(setup, np.polyfit(g["p"], g["total"], 1)[0])
+               for setup, g in C.groupby("setup") if g["p"].nunique() >= 2]
+        per = sorted(per, key=lambda sa: SETUPS.index(sa[0]) if sa[0] in SETUPS else 99)
         if per:
-            parts = ", ".join(f"{s} {a:.1f} ms" for s, a, _ in per)
-            text = (f"At T = {pick[-1]:,} every extra level adds a near-constant"
-                    f" time to the compiled training step: {parts} per level"
-                    f" (least-squares slope over p).")
-    intro = ("<p>The same cells against the depth <i>p</i>, at a short, a middle"
-             " and a long length. The work grows linearly in <i>p</i>, and so"
+            parts = ", ".join(f"{s} {a:.1f} ms" for s, a in per)
+            text += (f"At {eq('T', f'{pick[-1]:,}')} every extra level adds a near-constant"
+                     f" time to the <code>{impl}</code> training step: {parts} per"
+                     " level (least-squares slope over p). " if not text else
+                     f"With <code>{impl}</code>: {parts}.")
+    intro = ("<p>The same cells against the depth " + m("p") + ", at a short, a"
+             " middle and a long length. The work grows linearly in " + m("p") + ", and so"
              " should the time: each level is one more scan, one more"
              " contraction and one more saved state.</p>")
     return section("Time against depth", intro, figure(fig, vis, "Implementation · task"),
@@ -387,7 +437,7 @@ def implementation_section(df: pd.DataFrame, impls: list[str],
         fig.add_hline(y=1, line=dict(color=NEUTRAL, width=1, dash="dot"),
                       row="all", col="all")
         fig.update_xaxes(**t_ticks(rows["T"].unique()))
-        fig.update_yaxes(**log_ticks([0.25, 0.5, 1, 2, 4, 8, 16]))
+        fig.update_yaxes(**log_ticks([0.25, 0.5, 1, 2, 4, 8, 16, 32]))
     # throughput
     ok2 = ok.copy()
     ok2["pv"] = ok2["p"].map(lambda p: f"p = {p:g}")
@@ -432,8 +482,27 @@ def implementation_section(df: pd.DataFrame, impls: list[str],
                          " innermost one) is a sequential loop per column, and"
                          " nothing around it fuses; Inductor generates a parallel"
                          " scan of its own.")
+        if {"compiled", "triton"} <= set(rows.impl):
+            comp = rows[rows.impl == "compiled"].set_index(["setup", "p", "T"])["total"]
+            tri = rows[rows.impl == "triton"].set_index(["setup", "p", "T"])["total"]
+            gain = (comp / tri).dropna()
+            per_T = gain.groupby(level="T").median()
+            short = rows[(rows.impl == "triton") & (rows["T"] <= 1024)]
+            floor = short.groupby("p")["total"].median()
+            step = np.polyfit(floor.index, floor.values, 1) if len(floor) > 1 else None
+            text += (" <code>triton</code> against <code>compiled</code>, median"
+                     " over semirings and depths: " + ", ".join(
+                         f"{v:.1f}× at {eq('T', compact(T))}" for T, v in per_T.items())
+                     + f" (up to {gain.max():.0f}×, in the log semiring, whose PyTorch"
+                     " backward runs two reverse logcumsumexps per scan).")
+            if step is not None:
+                text += (" Up to 1k positions the Triton step does not depend on T:"
+                         f" about {step[1]:.1f} ms plus {step[0]:.1f} ms per level,"
+                         " the cost of launching its kernels, which is why it is"
+                         " slower than <code>compiled</code> at the shortest"
+                         " lengths.")
     intro = (f"<p>Every implementation evaluates the same layer with the same"
-             f" weights. Today they are all the PyTorch path, run differently:</p>"
+             f" weights:</p>"
              f"<ul class='prose'>{items}</ul><p>The first chart divides eager time by"
              f" each implementation's time (above the dotted line is faster than"
              f" eager); the second divides the step time by the work, which puts"
@@ -474,14 +543,27 @@ def split_section(df: pd.DataFrame, impls: list[str]) -> str:
     fig.update_layout(barmode="stack", bargap=0.55)
     fig.update_yaxes(title_text="time per step [ms]")
     style(fig, 340)
+    share = (d["bwd"] / (d["fwd"] + d["bwd"])).groupby(d["impl"]).agg(["min", "max"])
+    text = ("The backward's share of the training step: " + ", ".join(
+        f"<code>{i}</code> {share.loc[i, 'min']:.0%}–{share.loc[i, 'max']:.0%}"
+        for i in views if i in share.index) + ".") if not share.empty else ""
+    if {"compiled", "triton"} <= set(d.impl):
+        b = d.pivot_table(index="setup", columns="impl", values="bwd")
+        f = d.pivot_table(index="setup", columns="impl", values="fwd")
+        rb, rf = (b["compiled"] / b["triton"]).dropna(), (f["compiled"] / f["triton"]).dropna()
+        if not rb.empty:
+            text += (f" <code>triton</code> takes the forward {rf.min():.0f}–{rf.max():.0f}×"
+                     f" and the backward {rb.min():.0f}–{rb.max():.0f}× faster than"
+                     f" <code>compiled</code> (the backward most in {rb.idxmax()}).")
     intro = (f"<p>The training step split into its forward and backward pass, at"
-             f" T = {T:,} and p = {p:g}. The backward of a scan is a reverse"
+             f" {eq('T', f'{T:,}')} and {eq('p', f'{p:g}')}. The backward of a scan is a reverse"
              f" scan of the same length (a reverse cumulative sum in the reals and"
              f" the log semiring, a scatter to the running argmax in the max"
              f" semirings), and the contractions and value products have"
              f" backwards of their own.</p>")
     return section("Forward against backward", intro,
-                   figure(fig, vis, "Implementation"), anchor="split")
+                   figure(fig, vis, "Implementation"),
+                   reading(text) if text else "", anchor="split")
 
 
 def memory_section(df: pd.DataFrame, meta: dict) -> str:
@@ -505,25 +587,27 @@ def memory_section(df: pd.DataFrame, meta: dict) -> str:
     if cap:
         fig.add_hline(y=cap * 1024, line=dict(color=NEUTRAL, width=1, dash="dot"),
                       row="all", col="all")
-    C = L[(L.impl == "compiled") & (L.task == "train")].copy()
     text = ""
-    if not C.empty:
+    for impl in [i for i in ("compiled", "triton") if i in set(L.impl)]:
+        C = L[(L.impl == impl) & (L.task == "train")].copy()
         C["bytes_per_entry"] = C["peak_mb"] * 2**20 / C["work"]
         per = C.groupby("setup")["bytes_per_entry"].median()
-        text = ("Bytes of activation memory per state entry and level in the"
-                " compiled training step (median over cells): " + ", ".join(
-                    f"{s} {v:.0f}" for s, v in per.reindex(
-                        present(per.index, SETUPS)).items())
-                + ". A float32 state entry is 4 bytes, so the backward keeps"
-                " several tensors of the state's size per level.")
+        parts = ", ".join(f"{s} {v:.0f}" for s, v in per.reindex(
+            present(per.index, SETUPS)).items())
+        text += ("Bytes of activation memory per state entry and level in the"
+                 f" <code>{impl}</code> training step (median over cells): {parts}."
+                 " A float32 state entry is 4 bytes, so the backward keeps several"
+                 " tensors of the state's size per level." if not text else
+                 f" With <code>{impl}</code>: {parts}; it stores no {m('R')}-wide"
+                 " state, so the gap grows with the rank.")
     oom = df[(df.experiment == "length") & (df.status == "OOM")]
     if not oom.empty:
         text += (f" {len(oom)} cells did not fit"
-                 + (f" in the {cap:g} GiB cap" if cap else "")
+                 + (f" in the {cap:g} GiB cap" if cap else f" in {device_memory(meta)}")
                  + "; their lines stop where that happens.")
     intro = ("<p>Peak memory of a step above the weights and the input, against"
              " the length. Training keeps every level's state for the backward"
-             " pass, so memory grows with <i>p</i>·<i>T</i>; the forward pass"
+             " pass, so memory grows with " + m(r"p \cdot T") + "; the forward pass"
              " alone frees each state once the next level has read it."
              + (" The dotted line is the memory cap of the run." if cap else "")
              + "</p>")
@@ -554,20 +638,22 @@ def rank_section(df: pd.DataFrame) -> str:
     )
     fig.update_xaxes(**log_ticks(R["rank"].unique()))
     T, p = int(R["T"].iloc[0]), int(R["p"].iloc[0])
-    C = R[R.impl == "compiled"]
     text = ""
-    if not C.empty:
-        g = C.groupby("rank")["total"].median()
+    for impl in [i for i in ("compiled", "triton") if i in set(R.impl)]:
+        C = R[(R.impl == impl) & (R.family != "reals · cosine")]
+        g = C.groupby("rank")[["total", "peak_mb"]].median()
         if len(g) > 1:
             lo, hi = g.index.min(), g.index.max()
-            text = (f"From rank {lo:g} to {hi:g} the compiled step grows"
-                    f" {g[hi] / g[lo]:.1f}× (median over semirings) while the work"
-                    f" grows {hi / lo:g}×.")
-    intro = (f"<p>The kernel rank <i>R</i> is the number of separable terms a kernel"
-             f" carries through the scans: <code>d_qk</code> for the exponential"
-             f" kernel and (exponent + 1)<sup>d_qk</sup> for the cosine kernel. The"
-             f" state, and with it the work, is <i>R</i> times as large. T = {T:,},"
-             f" p = {p}, training step.</p>")
+            text += (f"{' ' if text else ''}From rank {lo:g} to {hi:g} (exponential"
+                     f" kernel) the <code>{impl}</code> step grows"
+                     f" {g.total[hi] / g.total[lo]:.1f}× and its memory"
+                     f" {g.peak_mb[hi] / g.peak_mb[lo]:.1f}× (median over semirings)"
+                     + (f", while the work grows {hi / lo:g}×." if not text else "."))
+    intro = (f"<p>The kernel rank {m('R')} is the number of separable terms a kernel"
+             f" carries through the scans: {m('R = d_{qk}')} for the exponential"
+             f" kernel and {m('R = (m+1)^{d_{qk}}')} for the cosine kernel of exponent"
+             f" {m('m')}. The state, and with it the work, is {m('R')} times as large."
+             f" {eq('T', f'{T:,}')}, {eq('p', p)}, training step.</p>")
     return section("Kernel rank", intro, figure(fig, vis, "Implementation"),
                    reading(text) if text else "", anchor="rank")
 
@@ -605,21 +691,46 @@ def settings_section(df: pd.DataFrame) -> str:
             ))
             for k in views:
                 vis[k].append(k == impl)
-    fig.update_layout(barmode="group", bargap=0.35, bargroupgap=0.08)
+    fig.update_layout(barmode="group", bargap=0.35, bargroupgap=0.08,
+                      uniformtext=dict(minsize=11, mode="show"))
     fig.update_yaxes(autorange="reversed")
     fig.update_xaxes(title_text="time relative to the base config [×]")
     fig.add_vline(x=1, line=dict(color=NEUTRAL, width=1, dash="dot"))
     style(fig, 120 + 34 * len(order))
     fig.update_layout(margin=dict(l=190, r=70))
     T, p = int(S["T"].iloc[0]), int(S["p"].dropna().iloc[0]) if S["p"].notna().any() else 3
+    text = ""
+    ok = S[S.ok]
+    if {"compiled", "triton"} <= set(ok.impl):
+        piv = ok.pivot_table(index="variant", columns=["impl", "semiring"], values="total")
+        rel = piv / piv.loc["base"]
+        own = (rel["triton"] / rel["compiled"]).min(axis=1)
+        wide = own[own > 1.5].sort_values(ascending=False).index.tolist()
+        ahead = (piv["compiled"] / piv["triton"])
+        if wide:
+            text = ("Each implementation is measured against its own base. Options"
+                    " that widen the state cost <code>triton</code> more than"
+                    " <code>compiled</code>: " + ", ".join(
+                        f"{v} {rel['triton'].loc[v].min():.1f}–{rel['triton'].loc[v].max():.1f}×"
+                        f" its base against {rel['compiled'].loc[v].min():.1f}–"
+                        f"{rel['compiled'].loc[v].max():.1f}×" for v in wide)
+                    + ". The PyTorch scans are bound by their sequential loop, so"
+                    " more columns run alongside almost for free, while the fused"
+                    " kernel is bound by its arithmetic. In absolute time"
+                    " <code>triton</code> stays ahead: " + ", ".join(
+                        f"{v} {ahead.loc[v].min():.1f}–{ahead.loc[v].max():.1f}×"
+                        for v in wide)
+                    + f" faster than <code>compiled</code>, against"
+                    f" {ahead.loc['base'].min():.0f}–{ahead.loc['base'].max():.0f}×"
+                    " for the base.")
     intro = (f"<p>One option of <code>LISSConfig</code> changed at a time against a"
-             f" base layer (decay × exponential kernel, T = {T:,}, p = {p}), in the"
+             f" base layer (decay × exponential kernel, {eq('T', f'{T:,}')}, {eq('p', p)}), in the"
              f" reals and the arctic semiring. A bar of 2× doubles the training step."
              f" Normalisation is defined for the reals and the log semiring only,"
              f" so the arctic rows have none. The hover has the absolute time and"
              f" memory.</p>")
     return section("Layer options", intro, figure(fig, vis, "Implementation"),
-                   anchor="settings")
+                   reading(text) if text else "", anchor="settings")
 
 
 def scan_section(df: pd.DataFrame) -> str:
@@ -660,9 +771,9 @@ def scan_section(df: pd.DataFrame) -> str:
                             values="peak_mb")
         oom = df[(df.experiment == "scan") & (df.status == "OOM")]
         text = ("Hillis–Steele's step time over the rescaled cumsum's: " + ", ".join(
-                    f"{v:.1f}× at T = {compact(T)}" for T, v in per_T.items())
+                    f"{v:.1f}× at {eq('T', compact(T))}" for T, v in per_T.items())
                 + (". Below one it is the faster scan per step, from"
-                   f" T = {compact(per_T[per_T < 1].index.min())} on: its rounds"
+                   f" {eq('T', compact(per_T[per_T < 1].index.min()))} on: its rounds"
                    " are elementwise operations Inductor fuses, while the cumsum is"
                    " ATen's sequential time-axis scan behind the custom op"
                    if (per_T < 1).any() else
@@ -672,29 +783,35 @@ def scan_section(df: pd.DataFrame) -> str:
                 f" {cmp['compiled'].max():.0f} s, it needs"
                 f" {(mem['hillis'] / mem['compiled']).dropna().median():.1f}× the"
                 " memory"
-                + (f", and it ran out of memory at T = {compact(oom['T'].min())}"
+                + (f", and it ran out of memory at {eq('T', compact(oom['T'].min()))}"
                    if not oom.empty else "") + ".")
     if {"compiled", "triton"} <= set(piv.columns):
-        r = (piv["compiled"] / piv["triton"]).dropna()
-        per_T = r[r.index.get_level_values("semiring") == "reals"].groupby(
-            level="T").median()
-        if not per_T.empty:
+        reals = piv[piv.index.get_level_values("semiring") == "reals"].droplevel(0)
+        r = (reals["triton"] / reals["compiled"]).dropna()
+        if not r.empty:
+            cmp_t = S[S.impl == "triton"]["compile_s"].max()
             text += (" The fused Triton scan, which applies the decay step by"
-                     " step and has neither bound nor fallback, is " + ", ".join(
-                         f"{v:.1f}× faster at T = {compact(T)}"
-                         for T, v in per_T.items()) + " than the rescaled cumsum.")
+                     " step and has neither bound nor fallback, over the rescaled"
+                     " cumsum's time: " + ", ".join(
+                         f"{v:.1f}× at {eq('T', compact(T))}" for T, v in r.items()) + ".")
+            if "hillis" in reals and np.isfinite(reals["hillis"].iloc[-1]):
+                T = reals.index[-1]
+                text += (f" At {eq('T', compact(T))} it takes"
+                         f" {reals['triton'].iloc[-1] / reals['hillis'].iloc[-1]:.1f}×"
+                         f" Hillis–Steele's time after a {cmp_t:.0f} s compile.")
     intro = ("<p>On the PyTorch path a decayed scan in the reals or the bayesian"
-             " semiring has two forms. While the decay stays small enough"
-             " (rate·(T−1) ≤ 40) the library rescales,"
-             " cumsum(u<sub>s</sub>e<sup>βs</sup>)·e<sup>−βt</sup>, one ordinary"
-             " scan. Past that bound e<sup>βt</sup> would overflow, and it switches"
-             " to a Hillis–Steele scan: log<sub>2</sub>T rounds of shifted"
-             " additions, exact but <i>O</i>(T log T). The bound is met by a"
-             " strong decay or by a length well past the context length, so a"
-             " model trained at one length can take the slow path at another."
-             " <code>scan: triton</code> (reals only) multiplies by the decay at"
-             " every step instead, in O(T) at any rate. All are timed here under"
-             " compile, at p = 3.</p>")
+             " semiring has two forms. While the decay rate " + m(r"\beta")
+             + " stays small enough, " + m(r"\beta\,(T-1) \le 40") + ", the library"
+             " rescales, " + m(r"S_t = e^{-\beta t} \sum_{s \le t} e^{\beta s} u_s")
+             + ", one ordinary scan. Past that bound " + m(r"e^{\beta t}") + " would"
+             " overflow, and it switches to a Hillis–Steele scan: " + m(r"\log_2 T")
+             + " rounds of shifted additions, exact but " + m(r"O(T \log T)") + "."
+             " The bound is met by a strong decay or by a length well past the"
+             " context length, so a model trained at one length can take the slow"
+             " path at another. <code>scan: triton</code> multiplies by the decay"
+             " at every step instead, in " + m("O(T)") + " at any rate; of these two"
+             " semirings it covers the reals. All are timed here under compile, at "
+             + m("p = 3") + ".</p>")
     return section("The decayed scans", intro, figure(fig), reading(text)
                    if text else "", anchor="scan")
 
@@ -715,13 +832,18 @@ def compile_section(df: pd.DataFrame, impls: list[str]) -> str:
         hover="p = %{x}<br>%{y:.1f} s", height=320, panel_title=lambda _: "",
     )
     fig.update_xaxes(dtick=1)
+    per = g.groupby("impl")["compile_s"].agg(["min", "max"])
+    text = ("Median compile time over the lengths, from the shallowest to the"
+            " deepest configuration: " + ", ".join(
+                f"<code>{i}</code> {per.loc[i, 'min']:.0f}–{per.loc[i, 'max']:.0f} s"
+                for i in views if i in per.index) + ".")
     intro = ("<p>Wall time of the first training step minus a timed step: tracing,"
              " Inductor's code generation for the forward and the backward graph,"
              " and the first run, median over the lengths. The graph has one"
              " block of operations per level, so the compile time grows with"
-             " <i>p</i>; it is paid once per shape.</p>")
+             " " + m("p") + "; it is paid once per shape.</p>")
     return section("Compile time", intro, figure(fig, vis, "Implementation"),
-                   anchor="compile")
+                   reading(text), anchor="compile")
 
 
 def accuracy_section(df: pd.DataFrame, impls: list[str]) -> str:
@@ -759,12 +881,19 @@ def accuracy_section(df: pd.DataFrame, impls: list[str]) -> str:
         lo = g[g["T"] == g["T"].min()]["err"].median()
         hi = g[g["T"] == g["T"].max()]["err"].median()
         text = (f"The float32 output error grows from {sci(lo)} at"
-                f" T = {compact(g['T'].min())} to {sci(hi)} at"
-                f" T = {compact(g['T'].max())} (compiled, median over semirings"
+                f" {eq('T', compact(g['T'].min()))} to {sci(hi)} at"
+                f" {eq('T', compact(g['T'].max()))} (compiled, median over semirings"
                 f" and depths): PyTorch's CUDA scans along a non-innermost"
                 f" dimension accumulate one position after another, so rounding"
                 f" errors add up along the sequence. The stability report has the"
                 f" mechanism.")
+    t = E[(E.impl == "triton") & (E.vq == "output")]
+    if not t.empty and text:
+        text += (f" <code>triton</code> stays at {sci(t[t['T'] == t['T'].max()]['err'].median())}"
+                 f" at {eq('T', compact(t['T'].max()))}, and its largest output error over"
+                 f" all cells is {sci(t['err'].max())} against"
+                 f" {sci(g['err'].max())}: a chunked scan rounds through one chunk"
+                 " and the chain of chunk states, not through every position.")
     G = E[(E.vq == "input gradient") & E.setup.isin(["arctic", "bayesian"])]
     if not G.empty and G["err"].max() > 1e-4:
         text += (" The large gradient errors in the max semirings are not"
@@ -773,7 +902,7 @@ def accuracy_section(df: pd.DataFrame, impls: list[str]) -> str:
                  " different position.")
     intro = ("<p>Relative error of the output and of the input gradient against a"
              " float64 eager evaluation of the same weights and input"
-             " (‖y − y<sub>64</sub>‖ / ‖y<sub>64</sub>‖). This is the check that a"
+             " (" + m(r"\lVert y - y_{64} \rVert / \lVert y_{64} \rVert") + "). This is the check that a"
              " faster implementation computes the same layer; cells where the"
              " float64 reference did not fit in memory are missing.</p>")
     return section("Accuracy of each implementation", intro,
@@ -781,7 +910,7 @@ def accuracy_section(df: pd.DataFrame, impls: list[str]) -> str:
                    reading(text) if text else "", anchor="accuracy")
 
 
-def failures(df: pd.DataFrame) -> str:
+def failures(df: pd.DataFrame, meta: dict) -> str:
     F = df[~df.ok]
     if F.empty:
         return ""
@@ -801,8 +930,9 @@ def failures(df: pd.DataFrame) -> str:
         ])
     return section(
         "Cells that did not run",
-        "<p>Out of memory means the step did not fit the run's memory cap; a"
-        " failure is an exception, usually from the compiler.</p>",
+        "<p>Out of memory means the step did not fit "
+        + ("the run's memory cap" if memory_caps(meta) else device_memory(meta))
+        + "; a failure is an exception, usually from the compiler.</p>",
         table(["experiment", "semiring", "option", "impl", "task", "p", "T",
                "status"], rows),
         anchor="failures",
@@ -811,29 +941,35 @@ def failures(df: pd.DataFrame) -> str:
 
 GLOSSARY = [
     ("The layer", [
-        ("p", "the depth of a level: the number of indices of the iterated sum."),
-        ("T", "the length of the sequence; the context length is set to T."),
-        ("R", "the kernel rank: separable terms a kernel carries through the scans."),
-        ("N, d_v", "heads (<code>n_is</code>) and the width of the value vectors."),
-        ("work", "state entries times scans, p·B·T·N·R·d<sub>v</sub> per level."),
+        (m("p"), "the depth of a level: the number of indices of the iterated sum."),
+        (m("T"), "the length of the sequence; the context length is set to " + m("T") + "."),
+        (m("R"), "the kernel rank: separable terms a kernel carries through the scans."),
+        (m("N,\\ d_v"), "heads (<code>n_is</code>) and the width of the value vectors."),
+        ("work", "state entries times scans, " + m(r"p \cdot B \cdot T \cdot N \cdot R \cdot d_v")
+         + " per level."),
     ]),
     ("Semirings", [
-        ("reals", "⊕ = sum, ⊗ = product: decayed, gated linear attention chains."),
-        ("log", "⊕ = logsumexp, ⊗ = sum: the reals of positive numbers, stored as logarithms."),
-        ("arctic", "⊕ = max, ⊗ = sum: the best tuple, max-plus."),
-        ("bayesian", "⊕ = max, ⊗ = product: the best tuple of products (Viterbi)."),
+        ("reals", m(r"\oplus = +,\ \otimes = \times") + ": decayed, gated linear attention chains."),
+        ("log", m(r"a \oplus b = \log(e^a + e^b),\ \otimes = +") + ": the reals of positive"
+         " numbers, stored as logarithms."),
+        ("arctic", m(r"\oplus = \max,\ \otimes = +") + ": the best tuple, max-plus."),
+        ("bayesian", m(r"\oplus = \max,\ \otimes = \times") + ": the best tuple of products"
+         " (Viterbi)."),
     ]),
     ("Kernels", [
-        ("decay", "λ<sup>t′−t</sup>, a per-head, per-pair rate folded into each scan."),
-        ("exponential", "exp(q(x<sub>t′</sub>) − k(x<sub>t</sub>)), rank d_qk."),
-        ("cosine", "∏ cos(q − k)<sup>m</sup>, reals only, rank (m+1)<sup>d_qk</sup>."),
+        ("decay", m(r"\lambda^{t'-t}") + ", a per-head, per-pair rate folded into each scan."),
+        ("exponential", m(r"\exp\bigl(q(x_{t'}) - k(x_t)\bigr)") + ", rank " + m("d_{qk}") + "."),
+        ("cosine", m(r"\prod_j \cos^m (q_j - k_j)") + ", reals only, rank "
+         + m("(m+1)^{d_{qk}}") + "."),
     ]),
     ("Measurements", [
-        ("train", "forward and backward of sum(y · r), gradients for the weights and the input."),
-        ("infer", "the forward pass under no_grad."),
+        ("train", "forward and backward of " + m(r"\mathcal{L} = \sum y \cdot r")
+         + ", gradients for the weights and the input."),
+        ("infer", "the forward pass under <code>no_grad</code>."),
         ("compile", "first step minus a timed step, for compiled implementations."),
         ("memory", "peak allocation during a step above the weights and the input."),
-        ("error", "‖y − y<sub>64</sub>‖ / ‖y<sub>64</sub>‖ against a float64 eager evaluation."),
+        ("error", m(r"\lVert y - y_{64} \rVert / \lVert y_{64} \rVert")
+         + " against a float64 eager evaluation."),
     ]),
 ]
 
@@ -858,12 +994,14 @@ def build(df: pd.DataFrame, meta: dict, source: str, stat: str,
         implementation_section(df, impls, meta), split_section(df, impls),
         memory_section(df, meta), rank_section(df), settings_section(df),
         scan_section(df), compile_section(df, impls),
-        accuracy_section(df, impls), failures(df),
+        accuracy_section(df, impls), failures(df, meta),
         f"<footer>Generated by <code>plot_benchmark.py</code> from"
         f" <code>{html.escape(source)}</code> ({'best' if stat == 'min' else 'median'}"
-        f" step times). The GPU was shared with other jobs while this ran, so"
-        f" absolute times carry their noise; ratios within a chart are more"
-        f" reliable. Interactive: hover for values, click legend entries to hide"
+        f" step times)."
+        + (" The GPU was shared with other jobs while this ran, so absolute times"
+           " carry their noise; ratios within a chart are more reliable."
+           if shared_gpu(meta) else "")
+        + " Interactive: hover for values, click legend entries to hide"
         f" series, drag to zoom.</footer>",
     ])
     return page("LISS Layer Benchmark", "LISS layer benchmark", head, body,
