@@ -48,6 +48,8 @@ def load(paths: list[Path]) -> pd.DataFrame:
     df["err_plot"] = df["err"].replace(np.inf, CEILING).clip(upper=CEILING)
     for col in ("normalize", "input", "kernels"):
         df[col] = df[col].fillna("")
+    # CSVs from before --scans evaluated the PyTorch path only
+    df["scan"] = df["scan"].fillna("torch") if "scan" in df else "torch"
     return df
 
 
@@ -206,7 +208,7 @@ def kpis(df: pd.DataFrame) -> str:
     if not R.empty:
         if bad.empty:
             items.append(("float32 overflow, reals", "none",
-                          f"no depth up to {int(R.p.max())} up to t = {compact(R.T.max())}"))
+                          f"no depth up to {int(R.p.max())} up to t = {compact(R['T'].max())}"))
         else:
             first = bad.sort_values("t").iloc[0]
             items.append(("float32 overflow, reals", f"t = {compact(first.t1)}",
@@ -644,6 +646,63 @@ def gradient_section(df: pd.DataFrame) -> str:
                    reading(text) if text else "", anchor="gradient")
 
 
+SCAN_COLOR = {"torch": NEUTRAL, "triton": SLOTS[0][0]}
+SCAN_LABEL = {"torch": "PyTorch scans", "triton": "fused Triton scans"}
+
+
+def scan_section(df: pd.DataFrame) -> str:
+    """The PyTorch path against ``scan: triton``, run for run."""
+    X = df[df.experiment.isin(["growth", "decay", "gradient"])
+           & (df.dtype != "float64")]
+    if "triton" not in set(X.scan):
+        return ""
+    X = X[X.set_index(["experiment", "semiring", "p", "normalize", "input",
+                       "kernels", "alpha"]).index.isin(
+        X[X.scan == "triton"].set_index(["experiment", "semiring", "p",
+                                         "normalize", "input", "kernels",
+                                         "alpha"]).index)].copy()
+    agg = X.groupby(["experiment", "semiring", "scan", "dtype", "t1"],
+                    as_index=False)["err_plot"].median()
+    agg["view"] = agg.experiment + " · " + agg.dtype
+    views = [f"{e} · {d}" for e in ("growth", "decay", "gradient")
+             for d in DTYPES if f"{e} · {d}" in set(agg.view)]
+    fig, vis = lines(
+        agg, panel="semiring",
+        panels=present(agg.semiring.unique(), SEMIRINGS), x="t1",
+        y="err_plot", series="scan", order=present(agg.scan.unique(),
+                                                    ["torch", "triton"]),
+        colors=SCAN_COLOR, label=lambda k: SCAN_LABEL.get(k, k), view="view",
+        views=views, x_title="position t",
+        y_title="median error against float64",
+        hover="t = %{x:,}<br>%{y:.2e}", hlines=[(1.0, "100 %")], height=380,
+    )
+    t_axis(fig, int(X["T"].max()))
+    last = X[(X.experiment == "growth") & (X.dtype == "float32")
+             & (X.t == X["T"] - 1)]
+    text = ""
+    if not last.empty:
+        per = last.groupby(["semiring", "scan"])["err"].median().unstack()
+        parts = [f"{s} {sci(r['torch'])} against {sci(r['triton'])}"
+                 for s, r in per.reindex(present(per.index, SEMIRINGS)).iterrows()
+                 if {"torch", "triton"} <= set(r.index)]
+        if parts:
+            text = (f"float32 at t = {compact(int(last['T'].max()))}, median over"
+                    " the growth runs, PyTorch against Triton: " + ", ".join(parts)
+                    + ". A fused scan rounds through one chunk and the chain of"
+                    " chunk states, not through every position, and applies the"
+                    " decay step by step instead of as e<sup>±βt</sup> or an"
+                    " offset βt that grows with the position.")
+    intro = ("<p>The same runs on <code>scan: triton</code>, the fused Triton"
+             " scans (reals, log, arctic), against the same float64 PyTorch"
+             " reference. The lines are medians over the runs of an experiment;"
+             " the kernels accumulate in float32 whatever the storage format, so"
+             " the pure bfloat16 and float16 rows measure the inputs' rounding"
+             " only.</p>")
+    return section("PyTorch scans against the fused Triton scans", intro,
+                   figure(fig, vis, "Experiment · format"),
+                   reading(text) if text else "", anchor="triton")
+
+
 def summary_section(df: pd.DataFrame) -> str:
     G = df[(df.experiment == "growth") & (df.dtype != "float64")]
     if G.empty:
@@ -706,11 +765,13 @@ def build(df: pd.DataFrame, meta: dict, sources: list[str], fragment: bool) -> s
         meta.get("date", "")[:10],
         f"{df.groupby(['experiment', 'semiring', 'p', 'normalize', 'input', 'alpha', 'offset', 'scale', 'restrict']).ngroups} runs",
     ] if x)
+    everything, df = df, df[df.scan == "torch"]
     body = "".join([
         lead(meta), kpis(df), glossary(GLOSSARY),
         growth_section(df), exponent_section(df), normalize_section(df),
         precision_section(df), primitive_section(df), decay_section(df),
-        kernel_section(df), gradient_section(df), summary_section(df),
+        kernel_section(df), gradient_section(df), scan_section(everything),
+        summary_section(df),
         "<footer>Generated by <code>plot_stability.py</code> from "
         + ", ".join(f"<code>{html.escape(s)}</code>" for s in sources)
         + ". Interactive: hover for values, click legend entries to hide series,"

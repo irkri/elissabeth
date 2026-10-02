@@ -23,6 +23,12 @@ arctic semiring.
 
 :class:`BidirectionalLISS`, the default, adds a second LISS over the
 time-reversed sequence.
+
+``scan: triton`` runs each pair as one fused kernel instead
+(:mod:`.scan_triton`): the key factor, the decayed scan and the query
+contraction in one pass, so the ``R``-wide state is never stored. It
+covers the reals, log and arctic semirings on CUDA; the bayesian semiring
+and CPU tensors take the PyTorch path.
 """
 from typing import Literal
 
@@ -37,6 +43,9 @@ from .kernels import (REALS_ONLY_KERNELS, Kernel, T_KernelConfig,
 from .projection import Projection, ValuesConfig
 from .semiring import (LOG_DOMAIN, T_Semiring, add, multiply, scan,
                        scan_indices, shift)
+
+TRITON_SEMIRINGS = ("reals", "log", "arctic")
+"""The semirings ``scan: triton`` has kernels for."""
 
 
 class LISSConfig(ModelConfig):
@@ -58,6 +67,11 @@ class LISSConfig(ModelConfig):
     """The same value projection for every index of a level."""
     values: ValuesConfig = ValuesConfig()
     kernels: list[T_KernelConfig] = []
+    scan: Literal["torch", "triton"] = "torch"
+    """How a level evaluates its scans: the PyTorch path, or one fused
+    Triton kernel per pair that never stores the ``R``-wide state (CUDA;
+    reals, log and arctic, the others fall back to PyTorch). Same function,
+    same parameters, so a run can switch between them."""
     bidirectional: bool = True
     """A second LISS of its own reads the sequence backwards and the two
     outputs are added (:class:`BidirectionalLISS`). Turn it off for a
@@ -142,6 +156,7 @@ class LISSLevel(HookedModule):
             ) for kernel in config.kernels
         ])
         self.max_rate = sum(kernel.max_rate for kernel in self.kernels)
+        self.scan = config.scan
         self.normalize = config.normalize
         self.beta: nn.Parameter | None = None
         if config.normalize == "learnable":
@@ -224,13 +239,20 @@ class LISSLevel(HookedModule):
         values, feature = terms.max(3)
         return values, feature[..., 0]
 
-    def _normalize(self, state: torch.Tensor, l: int) -> torch.Tensor:
+    def _normalize(
+        self,
+        state: torch.Tensor,
+        l: int,
+        shift: int = 0,
+    ) -> torch.Tensor:
+        """Divide the partial sums of pair ``l`` at ``t - shift`` by their
+        count (``shift = 1``: a contraction of the shifted state)."""
         if self.normalize == "none":
             return state
         # Floating point on purpose: in integers inductor turns this into
         # an index expression, and merging loops over it fails (torch 2.12).
         t = torch.arange(state.shape[1], device=state.device, dtype=state.dtype)
-        count = (t - (l - 1)).clamp_min(1.0)
+        count = (t - shift - (l - 1)).clamp_min(1.0)
         count = count.view(1, -1, *([1] * (state.ndim - 2)))
         if self.normalize == "mean":
             gamma: torch.Tensor | float = 1.0
@@ -246,10 +268,64 @@ class LISSLevel(HookedModule):
     def _pair(self, a: torch.Tensor | None, l: int) -> torch.Tensor | None:
         return None if a is None else a[:, :, :, l]
 
+    def fused(self, x: torch.Tensor) -> bool:
+        """Whether :meth:`forward` takes the fused Triton scans."""
+        return (
+            self.scan == "triton" and x.is_cuda
+            and self.semiring in TRITON_SEMIRINGS
+        )
+
+    def _forward_fused(
+        self,
+        v: torch.Tensor,
+        rate: torch.Tensor | None,
+        query: torch.Tensor | None,
+        key: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """The recursion of :meth:`forward` with one fused kernel per pair,
+        which returns the contraction ``<phi_l, S_l>`` directly; the count
+        normalisation is a factor per position, so it moves past the
+        contraction."""
+        from .scan_triton import level_scan
+
+        out = torch.empty(0)
+        for l in range(self.p):
+            u = v[:, :, :, 0 if v.shape[3] == 1 else l]
+            if l > 0:
+                u = multiply(out, u, self.semiring, self.matrix)
+            last = l == self.p - 1
+            out = level_scan(
+                u, self._pair(key, l), self._pair(query, l),
+                None if rate is None else rate[:, l], self.semiring,
+                inclusive=last,
+            )
+            out = self._normalize(out, l, shift=0 if last else 1)
+        return out
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """``(B, T, d_in) -> (B, T, N, d_v, w)``."""
         v = self._values(x)
         rate, query, key = self.factors(x)
+        if self.fused(x):
+            out = self._forward_fused(v, rate, query, key)
+        else:
+            out = self._forward_scans(v, rate, query, key)
+        if self.semiring in LOG_DOMAIN and self.p > 1:
+            # No index tuple fits before t = p-1; the finite stand-in for
+            # -inf there must not reach the network.
+            t = torch.arange(out.shape[1], device=out.device)
+            valid = (t >= self.p - 1).view(1, -1, 1, 1, 1)
+            out = torch.where(valid, out, torch.zeros_like(out))
+        out = out.expand(-1, -1, self.n_is, -1, -1)
+        return self.hook("iss", out)
+
+    def _forward_scans(
+        self,
+        v: torch.Tensor,
+        rate: torch.Tensor | None,
+        query: torch.Tensor | None,
+        key: torch.Tensor | None,
+    ) -> torch.Tensor:
         state = torch.empty(0)
         for l in range(self.p):
             u = v[:, :, :, 0 if v.shape[3] == 1 else l]
@@ -264,15 +340,7 @@ class LISSLevel(HookedModule):
                 None if rate is None else rate[:, l], self.max_rate,
             )
             state = self._normalize(state, l)
-        out = self._contract(state, self._pair(query, self.p - 1))
-        if self.semiring in LOG_DOMAIN and self.p > 1:
-            # No index tuple fits before t = p-1; the finite stand-in for
-            # -inf there must not reach the network.
-            t = torch.arange(out.shape[1], device=out.device)
-            valid = (t >= self.p - 1).view(1, -1, 1, 1, 1)
-            out = torch.where(valid, out, torch.zeros_like(out))
-        out = out.expand(-1, -1, self.n_is, -1, -1)
-        return self.hook("iss", out)
+        return self._contract(state, self._pair(query, self.p - 1))
 
     @torch.no_grad()
     def decode(self, x: torch.Tensor) -> torch.Tensor:

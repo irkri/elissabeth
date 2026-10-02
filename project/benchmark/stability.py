@@ -34,6 +34,12 @@ relative error of the number it stands for). A causal level's output at
 ``t`` does not depend on the length of the run, so one run to ``T`` gives
 the whole curve.
 
+``--scans torch triton`` (the default on CUDA) also evaluates the
+growth, decay and gradient runs on the fused Triton scans
+(``LISSConfig.scan: triton``; reals, log and arctic, not ``ema``), in every
+format, against the same float64 PyTorch reference. Their rows have
+``scan = triton`` and no float64 row of their own.
+
 ``--normalize ema`` is a prototype that lives only here, not in the
 library: each level is divided by its decayed count
 ``sum_{s=l..t} lambda^(t-s)`` instead of ``t - l + 1``, which equals
@@ -59,6 +65,7 @@ import torch
 import torch.nn.functional as F
 
 from elissabeth.liss import Decay, Exponential, LISSConfig, LISSLevel
+from elissabeth.liss.layer import TRITON_SEMIRINGS
 from elissabeth.liss.semiring import LOG_DOMAIN, scan, zero
 
 SEMIRINGS = ["reals", "log", "arctic", "bayesian"]
@@ -66,6 +73,10 @@ EXPERIMENTS = ["growth", "decay", "kernel", "gradient", "primitive"]
 INPUTS = ["constant", "tokens", "drift", "gaussian", "sparse"]
 DTYPES = ["float32", "bfloat16", "float16", "bf16-mixed"]
 NORMALIZE = ["none", "mean", "sqrt", "ema"]
+SCANS = ["torch", "triton"]
+TRITON_EXPERIMENTS = ("growth", "decay", "gradient")
+"""The experiments ``--scans triton`` repeats (the kernel experiment's
+factors are computed by PyTorch on either path)."""
 
 B, N, D_V, D_IN = 2, 4, 8, 16
 """Batch, heads, value width and input width of every level here: 64
@@ -79,8 +90,8 @@ MARKS = 0.01
 
 FIELDS = [
     "experiment", "semiring", "p", "normalize", "input", "kernels", "alpha",
-    "offset", "scale", "restrict", "T", "Tc", "dtype", "quantity", "t",
-    "mag_med", "mag_max", "nonfinite", "err",
+    "offset", "scale", "restrict", "scan", "T", "Tc", "dtype", "quantity",
+    "t", "mag_med", "mag_max", "nonfinite", "err",
 ]
 
 
@@ -105,6 +116,18 @@ class Run:
     scale: float = 1.0
     """Multiplies the query and key weights."""
     restrict: bool = False
+    scan: str = "torch"
+    """``LISSConfig.scan`` of the evaluated copies; the float64 reference
+    is always the PyTorch path."""
+
+
+def triton_runs(runs: list[Run]) -> list[Run]:
+    """The runs ``--scans triton`` repeats on the fused scans."""
+    return [
+        replace(run, scan="triton") for run in runs
+        if run.experiment in TRITON_EXPERIMENTS
+        and run.semiring in TRITON_SEMIRINGS and run.normalize != "ema"
+    ]
 
 
 class EMALevel(LISSLevel):
@@ -245,7 +268,8 @@ def primitive_rows(args: argparse.Namespace, device: torch.device
                 rows.append({
                     "experiment": "primitive", "semiring": name, "p": 0,
                     "normalize": "", "input": "", "kernels": "", "alpha": 0,
-                    "offset": 0, "scale": 1, "restrict": False, "T": T,
+                    "offset": 0, "scale": 1, "restrict": False,
+                    "scan": "torch", "T": T,
                     "Tc": T, "dtype": dtype, "quantity": op, "t": t,
                     "mag_med": mag_med, "mag_max": mag_max,
                     "nonfinite": nonfinite,
@@ -267,6 +291,7 @@ def build_level(run: Run, device: torch.device) -> LISSLevel:
         d_values=D_V, n_is=N, lengths=[run.p], semiring=run.semiring,
         kernels=kernels, bidirectional=False,
         normalize="mean" if run.normalize == "ema" else run.normalize,
+        scan=run.scan,
     )
     torch.manual_seed(0)
     cls = EMALevel if run.normalize == "ema" else LISSLevel
@@ -391,6 +416,8 @@ def _flat(y: torch.Tensor) -> torch.Tensor:
 def evaluate(run: Run, dtypes: list[str], per_octave: int,
              device: torch.device) -> list[dict]:
     level = build_level(run, device)
+    reference = (level if run.scan == "torch"
+                 else build_level(replace(run, scan="torch"), device))
     x = make_input(run.input, run.T).to(device)
     pos = positions(run.T, per_octave)
     log_domain = run.semiring in LOG_DOMAIN
@@ -413,11 +440,12 @@ def evaluate(run: Run, dtypes: list[str], per_octave: int,
         assert xi.grad is not None
         return _flat(xi.grad)
 
-    ref = forward(level, torch.float64, False)
+    ref = forward(reference, torch.float64, False)
     quantity = "grad" if gradient else "output"
     # The gradient of a log-domain level is an ordinary number.
     log_err = log_domain and not gradient
-    rows = _rows(run, "float64", quantity, pos, ref, ref, log_err)
+    rows = ([] if run.scan != "torch"
+            else _rows(run, "float64", quantity, pos, ref, ref, log_err))
     for name in dtypes:
         module, dtype, autocast = _cast(level, name)
         try:
@@ -456,6 +484,9 @@ def main() -> None:
                         help="decay rates times the context length")
     parser.add_argument("--kernel-T", type=int, default=4096)
     parser.add_argument("--gradient-T", type=int, default=2**16)
+    parser.add_argument("--scans", nargs="+", default=None, choices=SCANS,
+                        help="paths to evaluate (default: both on CUDA,"
+                             " torch on the CPU)")
     parser.add_argument("--per-octave", type=int, default=2,
                         help="positions recorded per doubling of t")
     parser.add_argument("--device",
@@ -467,6 +498,9 @@ def main() -> None:
     runs = [r for name in args.experiments if name in makers
             for r in makers[name](args)]
     device = torch.device(args.device)
+    scans = args.scans or (SCANS if device.type == "cuda" else ["torch"])
+    runs = ([r for r in runs if "torch" in scans]
+            + (triton_runs(runs) if "triton" in scans else []))
     torch.set_float32_matmul_precision("highest")
     print(f"{len(runs)} runs.")
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -491,15 +525,18 @@ def main() -> None:
             writer.writerows(rows)
             f.flush()
             last = [r for r in rows if r["t"] == run.T - 1]
+            ref_mag = next((r["mag_max"] for r in last
+                            if r["dtype"] == "float64"), math.nan)
             summary = " ".join(
                 f"{r['dtype']}:{r['err']:.0e}" for r in last
                 if r["dtype"] != "float64"
             )
-            print(f"[{i}/{len(runs)}] {run.experiment:8s} {run.semiring:8s}"
+            print(f"[{i}/{len(runs)}] {run.scan:6s} {run.experiment:8s}"
+                  f" {run.semiring:8s}"
                   f" p={run.p} {run.normalize:5s} {run.input:8s}"
                   f" {run.kernels:9s} a={run.alpha:+g} off={run.offset:g}"
                   f" s={run.scale:g}{' R' if run.restrict else ''}"
-                  f" |ref|={last[0]['mag_max']:.1e} {summary}", flush=True)
+                  f" |ref|={ref_mag:.1e} {summary}", flush=True)
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 

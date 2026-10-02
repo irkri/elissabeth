@@ -21,10 +21,11 @@ Experiments (``--experiments``):
                 T and p
 - ``settings``  one LISSConfig option changed at a time against a base
                 config, in the reals and the arctic semiring
-- ``scan``      the two paths of the decayed real/bayesian scan, the
-                rescaled cumsum (``compiled``) against Hillis-Steele
-                (``hillis``), over the lengths at one depth; kept apart
-                because an unrolled Hillis scan takes minutes to compile
+- ``scan``      the paths of the decayed real/bayesian scan: the
+                rescaled cumsum (``compiled``), Hillis-Steele (``hillis``)
+                and the fused Triton scan (``triton``, reals only), over the
+                lengths at one depth; kept apart because an unrolled Hillis
+                scan takes minutes to compile
 - ``attention`` softmax attention (SDPA, the transformer baseline in
                 ``elissabeth.attention``) over the same lengths, up to
                 ``--attention-max-T``
@@ -236,7 +237,8 @@ def settings_cells(args: argparse.Namespace) -> Iterator[Cell]:
 
 
 def scan_cells(args: argparse.Namespace) -> Iterator[Cell]:
-    impls = [i for i in ("compiled", "hillis") if i in IMPLEMENTATIONS]
+    impls = [i for i in ("compiled", "hillis", "triton")
+             if i in IMPLEMENTATIONS]
     for semiring in [s for s in ("reals", "bayesian") if s in args.semirings]:
         for T in args.scan_lengths:
             for impl in impls:
@@ -703,11 +705,11 @@ def main() -> None:
                         help="implementations of the length experiment (the"
                              " Hillis path has its own, the scan experiment)")
     parser.add_argument("--infer-impls", nargs="+",
-                        default=["eager", "compiled"],
+                        default=["eager", "compiled", "triton"],
                         help="implementations whose forward alone is timed too"
                              " (length experiment)")
     parser.add_argument("--side-impls", nargs="+",
-                        default=["eager", "compiled"],
+                        default=["eager", "compiled", "triton"],
                         choices=list(IMPLEMENTATIONS),
                         help="implementations of the rank and settings"
                              " experiments")

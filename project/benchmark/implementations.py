@@ -3,10 +3,11 @@
 An implementation is one way of evaluating the same LISS layer: the same
 config and the same weights must give the same output up to rounding,
 which ``benchmark.py`` checks against a float64 evaluation of every cell.
-Today every entry runs the PyTorch path of ``elissabeth.liss``; they differ
-in how it is executed. A Triton scan or a fused level kernel becomes one
-more entry in :data:`IMPLEMENTATIONS`, and every benchmark and report picks
-it up by name.
+The entries run the PyTorch path of ``elissabeth.liss`` and differ in how
+it is executed, except ``triton``, the library's own fused Triton scans
+(``LISSConfig.scan``). A new kernel becomes one more entry in
+:data:`IMPLEMENTATIONS`, and every benchmark and report picks it up by
+name.
 
 An entry may
 
@@ -26,6 +27,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 from elissabeth.liss import LISSConfig, semiring
+from elissabeth.liss.layer import TRITON_SEMIRINGS
 
 
 @contextlib.contextmanager
@@ -82,6 +84,16 @@ def _has_hillis_path(config: LISSConfig) -> str | None:
     return None
 
 
+def _triton(config: LISSConfig) -> LISSConfig:
+    return config.model_copy(update={"scan": "triton"})
+
+
+def _has_triton_kernels(config: LISSConfig) -> str | None:
+    if config.semiring not in TRITON_SEMIRINGS:
+        return f"no Triton kernels for the {config.semiring!r} semiring"
+    return None
+
+
 IMPLEMENTATIONS: dict[str, Implementation] = {
     impl.name: impl for impl in [
         Implementation(
@@ -112,6 +124,15 @@ IMPLEMENTATIONS: dict[str, Implementation] = {
             compile=True,
             patch=_hillis_scans,
             supports=_has_hillis_path,
+        ),
+        Implementation(
+            "triton",
+            "compiled, with scan: triton -- one fused Triton kernel per pair"
+            " (key factor, decayed scan, query contraction), which never"
+            " stores the R-wide state",
+            compile=True,
+            configure=_triton,
+            supports=_has_triton_kernels,
         ),
     ]
 }

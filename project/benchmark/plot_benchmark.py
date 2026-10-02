@@ -35,8 +35,9 @@ SETUP_NOTE = {
     "bayesian": "decay × exponential, rank 1",
     "reals · cosine": "decay × cosine (d_qk 3), rank 8",
 }
-VIEW_ORDER = ["compiled · train", "eager · train", "native · train",
-              "compiled · infer", "eager · infer"]
+VIEW_ORDER = ["compiled · train", "triton · train", "eager · train",
+              "native · train", "compiled · infer", "triton · infer",
+              "eager · infer"]
 
 
 # --------------------------------------------------------------------------
@@ -576,7 +577,8 @@ def settings_section(df: pd.DataFrame) -> str:
     if S.empty:
         return ""
     order = list(dict.fromkeys(S["variant"]))
-    views = present(S["impl"].unique(), ["compiled", "eager"])
+    views = present(S["impl"].unique(), ["compiled", "eager"]) + sorted(
+        set(S.impl) - {"compiled", "eager"})
     fig = go.Figure()
     vis: dict = {v: [] for v in views}
     semis = present(S["semiring"].unique(), ["reals", "log", "arctic", "bayesian"])
@@ -624,8 +626,10 @@ def scan_section(df: pd.DataFrame) -> str:
     S = df[(df.experiment == "scan") & df.ok]
     if S.empty:
         return ""
-    names = {"compiled": "rescaled cumsum", "hillis": "Hillis–Steele"}
-    colors = {"compiled": SLOTS[0][0], "hillis": SLOTS[2][0]}
+    names = {"compiled": "rescaled cumsum", "hillis": "Hillis–Steele",
+             "triton": "fused Triton scan"}
+    colors = {"compiled": SLOTS[0][0], "hillis": SLOTS[2][0],
+              "triton": SLOTS[1][0]}
     S = S.copy()
     S["quantity"] = "time"
     Cc = S.copy()
@@ -637,7 +641,7 @@ def scan_section(df: pd.DataFrame) -> str:
               for s in present(S.semiring.unique(), ["reals", "bayesian"])]
     fig, _ = panel_lines(
         both, panel="panel", panels=panels, x="T", y="total", series="impl",
-        order=[i for i in ("compiled", "hillis") if i in set(S.impl)],
+        order=[i for i in ("compiled", "hillis", "triton") if i in set(S.impl)],
         colors=colors, label=lambda i: names.get(i, i), x_title="length T",
         shared_y=False, hover="T = %{x:,}<br>%{y:.3g}", height=380,
         cols=len(panels) // 2 or 1,
@@ -670,17 +674,28 @@ def scan_section(df: pd.DataFrame) -> str:
                 " memory"
                 + (f", and it ran out of memory at T = {compact(oom['T'].min())}"
                    if not oom.empty else "") + ".")
-    intro = ("<p>A decayed scan in the reals or the bayesian semiring has two"
-             " paths. While the decay stays small enough"
+    if {"compiled", "triton"} <= set(piv.columns):
+        r = (piv["compiled"] / piv["triton"]).dropna()
+        per_T = r[r.index.get_level_values("semiring") == "reals"].groupby(
+            level="T").median()
+        if not per_T.empty:
+            text += (" The fused Triton scan, which applies the decay step by"
+                     " step and has neither bound nor fallback, is " + ", ".join(
+                         f"{v:.1f}× faster at T = {compact(T)}"
+                         for T, v in per_T.items()) + " than the rescaled cumsum.")
+    intro = ("<p>On the PyTorch path a decayed scan in the reals or the bayesian"
+             " semiring has two forms. While the decay stays small enough"
              " (rate·(T−1) ≤ 40) the library rescales,"
              " cumsum(u<sub>s</sub>e<sup>βs</sup>)·e<sup>−βt</sup>, one ordinary"
              " scan. Past that bound e<sup>βt</sup> would overflow, and it switches"
              " to a Hillis–Steele scan: log<sub>2</sub>T rounds of shifted"
              " additions, exact but <i>O</i>(T log T). The bound is met by a"
              " strong decay or by a length well past the context length, so a"
-             " model trained at one length can take the slow path at another. Both"
-             " are timed here under compile, at p = 3.</p>")
-    return section("The two decayed scans", intro, figure(fig), reading(text)
+             " model trained at one length can take the slow path at another."
+             " <code>scan: triton</code> (reals only) multiplies by the decay at"
+             " every step instead, in O(T) at any rate. All are timed here under"
+             " compile, at p = 3.</p>")
+    return section("The decayed scans", intro, figure(fig), reading(text)
                    if text else "", anchor="scan")
 
 
