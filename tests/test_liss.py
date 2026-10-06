@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from elissabeth import Elissabeth, ElissabethConfig, LISSConfig
-from elissabeth.liss import LISSLevel
+from elissabeth.liss import LISS, LISSLevel, build_liss
 
 
 @pytest.fixture(autouse=True)
@@ -346,6 +346,44 @@ def test_shared_values(shared: str) -> None:
     level = LISSLevel(config, 3, d_in=4, context_length=6)
     x = torch.randn(1, 6, 4)
     torch.testing.assert_close(level(x)[0], brute_force(level, x))
+
+
+@pytest.mark.parametrize("projection", [
+    {}, {"include_time": True}, {"activation": "relu"},
+])
+def test_projections_in_one_matmul(projection: dict) -> None:
+    """``LISS.forward`` runs the levels' plain linear projections (values,
+    queries, keys) as one matmul: the output and every gradient are those of
+    the levels run on their own. A time feature or a hidden layer keeps a
+    projection apart, and so does a width past ``FUSE_WIDTH``."""
+    config = LISSConfig(
+        d_values=3, n_is=2, lengths=[1, 3], bidirectional=False,
+        kernels=[{"type": "decay"},
+                 {"type": "exponential", "d_qk": 2, "projection": projection},
+                 {"type": "cosine", "d_qk": 2}],
+    )
+    torch.manual_seed(0)
+    liss = build_liss(config, 4, context_length=6).double()
+    x = torch.randn(2, 6, 4, dtype=torch.float64)
+    joined = [a is not None for group in liss._project(x) for a in group]
+    # per level: values, the exponential's query and key, the cosine's
+    assert joined == [True, not projection, not projection, True, True] * 2
+    liss.FUSE_WIDTH = 5
+    joined = [a is not None for group in liss._project(x) for a in group]
+    # widths 6, 4, 4, 4, 4 at depth 1 and 18, 12, 12, 12, 12 at depth 3
+    assert joined == [False, not projection, not projection, True, True] \
+        + [False] * 5
+    liss.FUSE_WIDTH = LISS.FUSE_WIDTH
+    results = []
+    for fused in (True, False):
+        if not fused:
+            liss._project = lambda x: [None] * len(liss.levels)
+        liss.zero_grad(set_to_none=True)
+        out = liss(x)
+        out.square().sum().backward()
+        results.append([out] + [p.grad for p in liss.parameters()])
+    for got, want in zip(*results):
+        torch.testing.assert_close(got, want)
 
 
 def test_hillis_fallback_matches_rescaled_cumsum() -> None:

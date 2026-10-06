@@ -159,8 +159,14 @@ class Kernel(HookedModule):
         self,
         x: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        """Query and key factors ``(B|1, T, N|1, p, R)``, or ``None``."""
+        """Query and key factors ``(B|1, T, N|1, p, R)``, or ``None``. A
+        kernel with :meth:`projections` also takes their outputs, computed
+        by the level, as a second argument."""
         return None
+
+    def projections(self) -> list[Projection]:
+        """The projections of ``x`` the factors are made of."""
+        return []
 
     def _pairs(self, a: torch.Tensor, dim: int) -> torch.Tensor:
         """Broadcast a shared (size 1) pair axis to all ``p`` pairs."""
@@ -216,8 +222,18 @@ class Exponential(Kernel):
             context_length,
         )
 
-    def factors(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        q, k = self.query(x), self.key(x)
+    def projections(self) -> list[Projection]:
+        return [self.query, self.key]
+
+    def factors(
+        self,
+        x: torch.Tensor,
+        projected: list[torch.Tensor | None] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if projected is not None:
+            q, k = self.query(x, projected[0]), self.key(x, projected[1])
+        else:
+            q, k = self.query(x), self.key(x)
         if self.restrict:
             q, k = torch.tanh(q), torch.tanh(k)
         q = self.hook("query", self._pairs(q, 3))
@@ -254,8 +270,18 @@ class Cosine(Kernel):
             context_length,
         )
 
-    def factors(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        q, k = self.query(x), self.key(x)
+    def projections(self) -> list[Projection]:
+        return [self.query, self.key]
+
+    def factors(
+        self,
+        x: torch.Tensor,
+        projected: list[torch.Tensor | None] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if projected is not None:
+            q, k = self.query(x, projected[0]), self.key(x, projected[1])
+        else:
+            q, k = self.query(x), self.key(x)
         if self.restrict:
             q = torch.tanh(q) * torch.pi / 4
             k = torch.tanh(k) * torch.pi / 4

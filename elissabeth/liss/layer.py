@@ -24,17 +24,20 @@ arctic semiring.
 :class:`BidirectionalLISS`, the default, adds a second LISS over the
 time-reversed sequence.
 
-``scan: triton`` runs each pair as one fused kernel instead
+``scan: triton`` runs each pair as fused kernels instead
 (:mod:`.scan_triton`): the key factor, the decayed scan and the query
-contraction in one pass, so the ``R``-wide state is never stored. It
+contraction in one pass, so the ``R``-wide state is never stored, and a
+level of vector values as one op that also forms each pair's input. It
 covers the reals, log and arctic semirings on CUDA; the bayesian semiring
-and CPU tensors take the PyTorch path.
+and CPU tensors take the PyTorch path. :class:`LISS` runs its levels'
+narrow projections as one matmul.
 """
 from typing import Literal
 
 import torch
 from pydantic import model_validator
 from torch import nn
+from torch.nn import functional as F
 
 from ..config import ModelConfig
 from ..hooks import HookedModule
@@ -171,19 +174,35 @@ class LISSLevel(HookedModule):
             rank *= kernel.rank
         return rank
 
+    def projections(self) -> list[Projection]:
+        """The level's projections of ``x``: the values, then each kernel's
+        (the order of the ``projected`` arguments)."""
+        out = [self.values]
+        for kernel in self.kernels:
+            out.extend(kernel.projections())
+        return out
+
     def factors(
         self,
         x: torch.Tensor,
+        projected: list[torch.Tensor | None] | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
         """``(rate, query, key)`` of the product of all kernels: rates
         ``(N, p)`` and factors ``(B|1, T, N|1, p, R)``, each ``None`` when
-        no kernel contributes one."""
+        no kernel contributes one. ``projected`` are the kernels'
+        projections of ``x``, if the caller computed them."""
         rate = query = key = None
+        i = 0
         for kernel in self.kernels:
             r = kernel.rates()
             if r is not None:
                 rate = r if rate is None else rate + r
-            factors = kernel.factors(x)
+            n = len(kernel.projections())
+            if projected is not None and n:
+                factors = kernel.factors(x, projected[i:i + n])  # type: ignore
+                i += n
+            else:
+                factors = kernel.factors(x)
             if factors is None:
                 continue
             q, k = factors
@@ -194,8 +213,12 @@ class LISSLevel(HookedModule):
                 key = _outer(key, k, self.semiring)
         return rate, query, key
 
-    def _values(self, x: torch.Tensor) -> torch.Tensor:
-        v = self.values(x)
+    def _values(
+        self,
+        x: torch.Tensor,
+        projected: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        v = self.values(x, projected)
         if self.value_norm is not None:
             v = self.value_norm(v.flatten(-2)).unflatten(-1, self.value_shape)
         return self.hook("values", v)
@@ -282,12 +305,16 @@ class LISSLevel(HookedModule):
         query: torch.Tensor | None,
         key: torch.Tensor | None,
     ) -> torch.Tensor:
-        """The recursion of :meth:`forward` with one fused kernel per pair,
-        which returns the contraction ``<phi_l, S_l>`` directly; the count
-        normalisation is a factor per position, so it moves past the
-        contraction."""
-        from .scan_triton import level_scan
+        """The recursion of :meth:`forward` with fused kernels, which return
+        the contraction ``<phi_l, S_l>`` directly. Vector values without a
+        count normalisation run as one op for the whole level, which forms
+        ``u_l`` inside the kernels; otherwise one op per pair, with the
+        product and the normalisation (a factor per position, so it moves
+        past the contraction) between them."""
+        from .scan_triton import level_chain, level_scan
 
+        if not self.matrix and self.normalize == "none":
+            return level_chain(v, key, query, rate, self.semiring)
         out = torch.empty(0)
         for l in range(self.p):
             u = v[:, :, :, 0 if v.shape[3] == 1 else l]
@@ -302,10 +329,17 @@ class LISSLevel(HookedModule):
             out = self._normalize(out, l, shift=0 if last else 1)
         return out
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """``(B, T, d_in) -> (B, T, N, d_v, w)``."""
-        v = self._values(x)
-        rate, query, key = self.factors(x)
+    def forward(
+        self,
+        x: torch.Tensor,
+        projected: list[torch.Tensor | None] | None = None,
+    ) -> torch.Tensor:
+        """``(B, T, d_in) -> (B, T, N, d_v, w)``. ``projected`` are the
+        outputs of :meth:`projections`, if the caller computed them."""
+        v = self._values(x, None if projected is None else projected[0])
+        rate, query, key = self.factors(
+            x, None if projected is None else projected[1:],
+        )
         if self.fused(x):
             out = self._forward_fused(v, rate, query, key)
         else:
@@ -466,9 +500,53 @@ class LISS(HookedModule):
         ))
         nn.init.xavier_normal_(self.W_O)
 
+    FUSE_WIDTH = 512
+    """Widest projection :meth:`_project` joins to the others."""
+
+    def _project(
+        self,
+        x: torch.Tensor,
+    ) -> list[list[torch.Tensor | None] | None]:
+        """The levels' projections of ``x`` (values, queries, keys) in one
+        matmul, each level's as a list in :meth:`LISSLevel.projections`
+        order (``None``: the level computes it). The weights are
+        concatenated at every call, so the parameters stay where they are.
+
+        Joined are the plain linear maps up to :attr:`FUSE_WIDTH` outputs:
+        several narrow matmuls cost far more than their FLOPs (one for 65
+        launches: -9 % of a Vipsania mixer step), while a wide value
+        projection is cheaper on its own (a depth-10 level's 1,280 values
+        in the joint matmul: +17 %)."""
+        groups = [level.projections() for level in self.levels]
+        linears = [
+            p.linear if p.linear is not None and p.linear.bias is not None
+            and p.linear.out_features <= self.FUSE_WIDTH else None
+            for group in groups for p in group
+        ]
+        joined = [linear for linear in linears if linear is not None]
+        if len(joined) < 2:
+            return [None] * len(groups)
+        out = iter(F.linear(
+            x,
+            torch.cat([linear.weight for linear in joined]),
+            torch.cat([linear.bias for linear in joined]),  # type: ignore
+        ).split([linear.out_features for linear in joined], -1))
+        projected: list[list[torch.Tensor | None] | None] = []
+        i = 0
+        for group in groups:
+            projected.append([
+                None if linear is None else next(out)
+                for linear in linears[i:i + len(group)]
+            ])
+            i += len(group)
+        return projected
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """``(B, T, d_in) -> (B, T, d_in)``."""
-        iss = torch.stack([level(x) for level in self.levels])
+        iss = torch.stack([
+            level(x, projected)
+            for level, projected in zip(self.levels, self._project(x))
+        ])
         mixed = torch.einsum("ln,lbtnvw->btvw", self.W_H, iss)
         return torch.einsum("vwd,btvw->btd", self.W_O, mixed)
 

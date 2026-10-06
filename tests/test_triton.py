@@ -111,6 +111,16 @@ def test_depths(semiring: str, p: int) -> None:
 
 
 @pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+def test_heads_not_filling_the_last_program(semiring: str) -> None:
+    """A program scans several heads; 11 heads leave the last block of 8
+    (or 16) partly empty."""
+    ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
+                                      {"type": "exponential", "d_qk": 2}],
+                           p=2, n_is=11, d_values=8)
+    compare(ref, fused, B=2, T=150)
+
+
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
 def test_matrix_values(semiring: str) -> None:
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
                                       {"type": "exponential"}],

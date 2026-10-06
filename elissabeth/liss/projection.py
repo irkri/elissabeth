@@ -72,7 +72,22 @@ class Projection(nn.Module):
             nn.init.xavier_normal_(linear.weight)
             nn.init.zeros_(linear.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @property
+    def linear(self) -> nn.Linear | None:
+        """The map as one ``nn.Linear`` when it is one (no hidden layer, no
+        time feature), so a LISS can run it in one matmul with the others."""
+        if self.include_time or not isinstance(self.transform, nn.Linear):
+            return None
+        return self.transform
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        projected: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """``projected`` is :attr:`linear` of ``x``, computed by the caller."""
+        if projected is not None:
+            return projected.unflatten(-1, self.shape)
         y = x
         if self.include_time:
             assert self.context_length is not None
