@@ -81,6 +81,20 @@ class CosineConfig(ModelConfig):
     projection: ProjectionConfig = ProjectionConfig()
 
 
+class RotationConfig(ModelConfig):
+    """A phase on every gap, ``exp(i omega_l (t_{l+1} - t_l - delta_l) /
+    context_length)`` with ``omega_l = alpha_0 * tanh(a_l)``: complex
+    semiring only. Next to a ``decay`` it makes each pair's kernel
+    ``lambda^gap`` with a complex ``lambda``, the LRU's eigenvalue; the
+    level folds it into its scans as the imaginary part of the rate."""
+
+    type: Literal["rotation"] = "rotation"
+    alpha_0: float = math.pi
+    """Largest frequency, in radians per ``context_length``."""
+    shared: bool = False
+    """One frequency for all pairs."""
+
+
 class CosineDecayConfig(ModelConfig):
     """``prod_d cos(alpha_{l,d} (t_{l+1} - t_l - delta_l) /
     context_length)^exponent``, reals only. Rank
@@ -94,11 +108,29 @@ class CosineDecayConfig(ModelConfig):
 
 
 T_KernelConfig = Annotated[
-    DecayConfig | ExponentialConfig | CosineConfig | CosineDecayConfig,
+    DecayConfig | ExponentialConfig | CosineConfig | CosineDecayConfig
+    | RotationConfig,
     Field(discriminator="type"),
 ]
 
 REALS_ONLY_KERNELS = ("cosine", "cosine_decay")
+"""Kernels whose signed features add up only under an ordinary sum: the
+reals and the complex numbers."""
+COMPLEX_ONLY_KERNELS = ("rotation",)
+
+
+def check_kernel(kind: str, semiring: str) -> None:
+    """Refuse a kernel in a semiring it is not defined for."""
+    if kind in REALS_ONLY_KERNELS and semiring not in ("reals", "complex"):
+        raise ValueError(
+            f"The {kind!r} kernel only works in the reals (or the complex"
+            f" numbers), not in the {semiring!r} semiring."
+        )
+    if kind in COMPLEX_ONLY_KERNELS and semiring != "complex":
+        raise ValueError(
+            f"The {kind!r} kernel only works in the complex semiring, not"
+            f" in the {semiring!r} semiring."
+        )
 
 
 def cosine_features(angle: torch.Tensor, exponent: int) -> torch.Tensor:
@@ -194,6 +226,31 @@ class Decay(Kernel):
     def rates(self) -> torch.Tensor:
         rate = self.alpha_0 * torch.tanh(self.alpha) / self.context_length
         return self._pairs(rate, 1)
+
+
+class Rotation(Kernel):
+
+    def __init__(
+        self,
+        config: RotationConfig,
+        n_is: int,
+        p: int,
+        semiring: T_Semiring,
+        context_length: int,
+    ) -> None:
+        super().__init__(n_is, p, semiring)
+        self.alpha_0 = config.alpha_0
+        self.context_length = context_length
+        self.alpha = nn.Parameter(
+            torch.randn(n_is, 1 if config.shared else p)
+        )
+
+    def rates(self) -> torch.Tensor:
+        """``-i omega``: the imaginary part of the rate, so that
+        ``exp(-rate * gap)`` turns by ``omega * gap``."""
+        omega = self.alpha_0 * torch.tanh(self.alpha) / self.context_length
+        omega = self._pairs(omega, 1)
+        return torch.complex(torch.zeros_like(omega), -omega)
 
 
 class Exponential(Kernel):
@@ -334,12 +391,9 @@ def build_kernel(
     semiring: T_Semiring,
     context_length: int | None,
 ) -> Kernel:
-    if config.type in REALS_ONLY_KERNELS and semiring != "reals":
-        raise ValueError(
-            f"The {config.type!r} kernel only works in the reals, not in"
-            f" the {semiring!r} semiring."
-        )
-    if config.type in ("decay", "cosine_decay") and context_length is None:
+    check_kernel(config.type, semiring)
+    if (config.type in ("decay", "cosine_decay", "rotation")
+            and context_length is None):
         raise ValueError(f"The {config.type!r} kernel needs context_length.")
     match config:
         case DecayConfig():
@@ -354,4 +408,7 @@ def build_kernel(
         case CosineDecayConfig():
             assert context_length is not None
             return CosineDecay(config, n_is, p, semiring, context_length)
+        case RotationConfig():
+            assert context_length is not None
+            return Rotation(config, n_is, p, semiring, context_length)
     raise ValueError(f"Unknown kernel {config!r}.")

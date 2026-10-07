@@ -238,6 +238,7 @@ SEMIRINGS = {
     "bayesian": (torch.maximum, lambda a, b: a * b),
     "arctic": (torch.maximum, lambda a, b: a + b),
     "log": (torch.logaddexp, lambda a, b: a + b),
+    "complex": (lambda a, b: a + b, lambda a, b: a * b),
 }
 
 
@@ -256,7 +257,7 @@ def brute_force(level: LISSLevel, x: torch.Tensor) -> torch.Tensor:
     v = level._values(x)[0]                     # (T, N|1, p|1, d_v, w)
     T = x.shape[1]
     kernel, _ = level.pair_matrices(x)
-    out = torch.zeros(T, level.n_is, *v.shape[-2:])
+    out = torch.zeros(T, level.n_is, *v.shape[-2:], dtype=v.dtype)
     for t in range(level.p - 1, T):
         for n in range(level.n_is):
             total = None
@@ -314,6 +315,13 @@ CASES = [
     ("log", [{"type": "exponential", "d_qk": 2},
              {"type": "exponential", "d_qk": 3, "share_queries": True}]),
     ("bayesian", [{"type": "exponential", "d_qk": 2, "restrict": True}]),
+    # the complex numbers: a decay that rotates, alone or next to the
+    # (signed) cosine features and an exponential
+    ("complex", [{"type": "decay", "alpha_0": 3}, {"type": "rotation"}]),
+    ("complex", [{"type": "rotation", "shared": True},
+                 {"type": "cosine", "d_qk": 2}]),
+    ("complex", [{"type": "decay", "alpha_0": 1},
+                 {"type": "exponential", "restrict": True}]),
 ]
 
 
@@ -505,3 +513,84 @@ def test_cosine_kernels_are_reals_only() -> None:
                        kernels=[{"type": kernel}])
     LISSConfig(d_values=2, semiring="arctic",
                kernels=[{"type": "exponential", "d_qk": 4}])
+
+
+# -- the complex semiring ---------------------------------------------------
+
+def test_complex_values_and_output() -> None:
+    """Complex values come from one projection (real and imaginary parts),
+    and a layer maps the result back to the reals: Re(C ISS)."""
+    config = LISSConfig(d_values=3, n_is=2, lengths=[1, 2], semiring="complex",
+                        kernels=[{"type": "decay"}, {"type": "rotation"}],
+                        bidirectional=False)
+    liss = LISS(config, 4, context_length=6)
+    x = torch.randn(2, 9, 4)
+    assert liss.levels[0]._values(x).is_complex()
+    y = liss(x)
+    assert y.shape == (2, 9, 4) and not y.is_complex()
+    y.square().sum().backward()
+    assert all(p.grad is not None for p in liss.parameters())
+
+
+def test_a_rotation_without_decay_keeps_the_modulus() -> None:
+    """A pure rotation turns every summand by its gap and shrinks none: a
+    depth-1 level over a constant value is the sum of unit phasors."""
+    level = make_level("complex", [{"type": "rotation"}], p=1, n_is=1,
+                       d_values=1)
+    with torch.no_grad():
+        level.values.transform.weight.zero_()
+        level.values.transform.bias.copy_(torch.tensor([1.0, 0.0]))
+    x = torch.randn(1, 12, 4)
+    out = level(x)[0, :, 0, 0, 0]
+    omega = level.kernels[0].rates()[0, 0].imag.neg()
+    t = torch.arange(12, dtype=torch.float64)
+    expected = torch.stack([
+        torch.exp(1j * omega * torch.arange(k + 1, dtype=torch.float64)).sum()
+        for k in t.long()
+    ])
+    torch.testing.assert_close(out, expected)
+
+
+def test_complex_hillis_fallback_matches_the_cumsum() -> None:
+    level = make_level("complex", [{"type": "decay", "alpha_0": 50},
+                                   {"type": "rotation"}], p=2)
+    x = torch.randn(1, 30, 4)
+    assert level.max_rate * 29 > 40          # the Hillis-Steele path
+    torch.testing.assert_close(level(x)[0], brute_force(level, x))
+
+
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "bayesian"])
+def test_rotation_is_complex_only(semiring: str) -> None:
+    with pytest.raises(ValueError, match="complex"):
+        LISSConfig(d_values=2, semiring=semiring,
+                   kernels=[{"type": "rotation"}])
+    LISSConfig(d_values=2, semiring="complex",
+               kernels=[{"type": "cosine"}, {"type": "rotation"}])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_complex_scan_on_lrutorch_matches_the_fallback() -> None:
+    """In float32 on CUDA the complex scan is lrutorch's Triton kernel;
+    against the rescaled-cumsum fallback, forward and gradients."""
+    pytest.importorskip("lrutorch")
+    from elissabeth.liss import semiring as sr
+    torch.manual_seed(0)
+    u = torch.randn(2, 300, 3, 2, 4, 1, dtype=torch.complex64, device="cuda")
+    rate = torch.complex(torch.rand(3) * 0.05, torch.randn(3)).cuda()
+    results = []
+    for use in (True, False):
+        ui = u.clone().requires_grad_()
+        ri = rate.clone().requires_grad_()
+        lru = sr._lru_scan
+        if not use:
+            sr._lru_scan = lambda: None
+        try:
+            h = sr.scan(ui, "complex", ri, max_rate=0.05)
+        finally:
+            sr._lru_scan = lru
+        (h.real.sum() + 2 * h.imag.sum()).backward()
+        results.append((h.detach(), ui.grad, ri.grad))
+    for a, b in zip(*results):
+        # float32 sums over 300 x 24 terms: the rate gradient differs by
+        # its accumulation order (2e-4 relative)
+        torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-3 * b.abs().max())

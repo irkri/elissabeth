@@ -7,6 +7,9 @@ A LISS level is computed with a sum ``(+)`` and a product ``(x)``:
 - ``log``       ``(+) = logsumexp``, ``(x) = +``   (smooth arctic)
 - ``bayesian``  ``(+) = max``,       ``(x) = *``   (Viterbi; values must be
   non-negative for the recursion to equal the max over index tuples)
+- ``complex``   ``(+) = sum``,       ``(x) = *``   over complex numbers;
+  a decay may rotate (``lambda = exp(-rate)`` with a complex rate), which
+  makes each pair the LRU's diagonal complex recurrence
 
 Every tensor that goes through a scan has time on dimension 1 and the heads
 of the layer on dimension 2: ``(B, T, N, ...)``.
@@ -15,7 +18,7 @@ from typing import Literal
 
 import torch
 
-T_Semiring = Literal["reals", "arctic", "log", "bayesian"]
+T_Semiring = Literal["reals", "arctic", "log", "bayesian", "complex"]
 
 LOG_DOMAIN: tuple[str, ...] = ("arctic", "log")
 """Semirings whose product is ``+``: kernels enter as log-factors."""
@@ -48,7 +51,7 @@ def shift(x: torch.Tensor, semiring: T_Semiring) -> torch.Tensor:
 def add(x: torch.Tensor, semiring: T_Semiring, dim: int) -> torch.Tensor:
     """The semiring sum ``(+)`` over one dimension: ``sum``, ``max`` or
     ``logsumexp``."""
-    if semiring == "reals":
+    if semiring in ("reals", "complex"):
         return x.sum(dim)
     if semiring == "log":
         return torch.logsumexp(x, dim=dim)
@@ -65,7 +68,7 @@ def multiply(
     last two dimensions (``values_2D``)."""
     if not matrix:
         return a + b if semiring in LOG_DOMAIN else a * b
-    if semiring == "reals":
+    if semiring in ("reals", "complex"):
         return a @ b
     return add(
         multiply(a.unsqueeze(-1), b.unsqueeze(-3), semiring, False),
@@ -151,7 +154,8 @@ def _cumulate(x: torch.Tensor, semiring: T_Semiring) -> torch.Tensor:
 
 def _time(u: torch.Tensor) -> torch.Tensor:
     """Positions ``0..T-1`` shaped to broadcast against ``u``."""
-    t = torch.arange(u.shape[1], device=u.device, dtype=u.dtype)
+    dtype = u.real.dtype if u.is_complex() else u.dtype
+    t = torch.arange(u.shape[1], device=u.device, dtype=dtype)
     return t.view(1, -1, *([1] * (u.ndim - 2)))
 
 
@@ -180,6 +184,8 @@ def scan(
     exponent stays below :data:`EXP_TRICK_LIMIT`; past it the scan falls
     back to Hillis-Steele, ``O(T log T)`` but free of overflow.
     """
+    if semiring == "complex":
+        return _scan_complex(u, rate, max_rate)
     if rate is None:
         return _cumulate(u, semiring)
     t = _time(u)
@@ -190,6 +196,58 @@ def scan(
         return _cumulate(u * torch.exp(rate * t), semiring) \
             * torch.exp(-rate * t)
     return _hillis(u, rate, semiring)
+
+
+def _cumulate_complex(x: torch.Tensor) -> torch.Tensor:
+    """The cumulative sum of a complex tensor, through the real op on its
+    real and imaginary parts."""
+    return torch.view_as_complex(
+        _cumulate(torch.view_as_real(x), "reals").contiguous()
+    )
+
+
+def _lru_scan():
+    """lrutorch's Triton scan of ``h_t = lambda h_{t-1} + u_t`` with a
+    complex ``lambda`` per channel, if lrutorch is installed."""
+    try:
+        from lrutorch.scan_triton import lru_scan_triton
+    except ImportError:
+        return None
+    return lru_scan_triton
+
+
+def _scan_complex(
+    u: torch.Tensor,
+    rate: torch.Tensor | None,
+    max_rate: float,
+) -> torch.Tensor:
+    """:func:`scan` in the complex semiring, ``lambda = exp(-rate)`` with
+    ``rate`` complex (a decay that rotates) or real. On CUDA in float32 it
+    runs lrutorch's Triton scan (one channel per head and entry), which
+    neither stores nor overflows ``exp(rate * t)``; otherwise the rescaled
+    cumsum or, past :data:`EXP_TRICK_LIMIT`, Hillis-Steele."""
+    if rate is None:
+        return _cumulate_complex(u)
+    lru_scan = _lru_scan() if u.is_cuda and u.dtype == torch.complex64 \
+        else None
+    if lru_scan is not None:
+        B, T, N = u.shape[0], u.shape[1], rate.shape[0]
+        u = u.expand(B, T, N, *u.shape[3:])
+        lam = torch.exp(-rate.to(u.dtype)).view(N, 1).expand(
+            N, u[0, 0].numel() // N,
+        ).reshape(-1)
+        x = u.reshape(B, T, -1)
+        hr, hi = lru_scan(
+            lam.real.contiguous(), lam.imag.contiguous(),
+            x.real.contiguous(), x.imag.contiguous(),
+        )
+        return torch.complex(hr, hi).reshape(u.shape)
+    t = _time(u)
+    rate = _per_head(rate.to(u.dtype), u)
+    if max_rate * (u.shape[1] - 1) <= EXP_TRICK_LIMIT:
+        return _cumulate_complex(u * torch.exp(rate * t)) \
+            * torch.exp(-rate * t)
+    return _hillis(u, rate, "complex")
 
 
 def _hillis(
@@ -205,7 +263,7 @@ def _hillis(
         carried = decay * u[:, :-offset]
         tail = u[:, offset:]
         tail = (
-            tail + carried if semiring == "reals"
+            tail + carried if semiring in ("reals", "complex")
             else torch.maximum(tail, carried)
         )
         u = torch.cat((u[:, :offset], tail), dim=1)

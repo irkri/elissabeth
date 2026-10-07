@@ -32,6 +32,7 @@ covers the reals, log and arctic semirings on CUDA; the bayesian semiring
 and CPU tensors take the PyTorch path. :class:`LISS` runs its levels'
 narrow projections as one matmul.
 """
+import math
 from typing import Literal
 
 import torch
@@ -41,8 +42,7 @@ from torch.nn import functional as F
 
 from ..config import ModelConfig
 from ..hooks import HookedModule
-from .kernels import (REALS_ONLY_KERNELS, Kernel, T_KernelConfig,
-                      build_kernel)
+from .kernels import Kernel, T_KernelConfig, build_kernel, check_kernel
 from .projection import Projection, ValuesConfig
 from .semiring import (LOG_DOMAIN, T_Semiring, add, multiply, scan,
                        scan_indices, shift)
@@ -86,17 +86,14 @@ class LISSConfig(ModelConfig):
     def _check(self) -> "LISSConfig":
         if not self.lengths or min(self.lengths) < 1:
             raise ValueError("lengths must be a non-empty list of depths >= 1.")
-        if self.normalize != "none" and self.semiring not in ("reals", "log"):
+        if (self.normalize != "none"
+                and self.semiring not in ("reals", "log", "complex")):
             raise ValueError(
-                f"normalize is defined for the reals and the log semiring,"
-                f" not for {self.semiring!r}."
+                f"normalize is defined for the reals, log and complex"
+                f" semirings, not for {self.semiring!r}."
             )
         for kernel in self.kernels:
-            if kernel.type in REALS_ONLY_KERNELS and self.semiring != "reals":
-                raise ValueError(
-                    f"The {kernel.type!r} kernel only works in the reals,"
-                    f" not in the {self.semiring!r} semiring."
-                )
+            check_kernel(kernel.type, self.semiring)
         return self
 
 
@@ -134,6 +131,8 @@ class LISSLevel(HookedModule):
         self.semiring: T_Semiring = config.semiring
         self.matrix = config.values_2D
         width = config.d_values if config.values_2D else 1
+        # complex values: a real and an imaginary part from one projection
+        self.parts = 2 if config.semiring == "complex" else 1
         self.values = Projection(
             config.values,
             d_in,
@@ -141,17 +140,17 @@ class LISSLevel(HookedModule):
                 1 if config.values.shared else config.n_is,
                 1 if config.share_values else p,
                 config.d_values,
-                width,
+                width * self.parts,
             ),
             context_length,
         )
         # Over the flattened (d_v, w): torch 2.12's CUDA LayerNorm backward
         # returns a wrongly shaped weight gradient for a multi-dimensional
         # normalized_shape once there are more than ~1e5 rows.
-        self.value_shape = (config.d_values, width)
+        self.value_shape = (config.d_values, width * self.parts)
         self.value_norm = (
-            nn.LayerNorm(config.d_values * width) if config.values.norm
-            else None
+            nn.LayerNorm(config.d_values * width * self.parts)
+            if config.values.norm else None
         )
         self.kernels: list[Kernel] = nn.ModuleList([  # type: ignore
             build_kernel(
@@ -221,6 +220,10 @@ class LISSLevel(HookedModule):
         v = self.values(x, projected)
         if self.value_norm is not None:
             v = self.value_norm(v.flatten(-2)).unflatten(-1, self.value_shape)
+        if self.parts == 2:
+            v = torch.view_as_complex(
+                v.unflatten(-1, (-1, 2)).contiguous()
+            )
         return self.hook("values", v)
 
     def _expand(
@@ -274,7 +277,8 @@ class LISSLevel(HookedModule):
             return state
         # Floating point on purpose: in integers inductor turns this into
         # an index expression, and merging loops over it fails (torch 2.12).
-        t = torch.arange(state.shape[1], device=state.device, dtype=state.dtype)
+        dtype = state.real.dtype if state.is_complex() else state.dtype
+        t = torch.arange(state.shape[1], device=state.device, dtype=dtype)
         count = (t - shift - (l - 1)).clamp_min(1.0)
         count = count.view(1, -1, *([1] * (state.ndim - 2)))
         if self.normalize == "mean":
@@ -493,12 +497,18 @@ class LISS(HookedModule):
         self.W_H = nn.Parameter(torch.full(
             (n_levels, config.n_is), 1 / (n_levels * config.n_is),
         ))
-        self.W_O = nn.Parameter(torch.empty(
-            config.d_values,
-            config.d_values if config.values_2D else 1,
-            d_in,
-        ))
-        nn.init.xavier_normal_(self.W_O)
+        shape = (
+            config.d_values, config.d_values if config.values_2D else 1, d_in,
+        )
+        if config.semiring == "complex":
+            # one map for the real and one for the imaginary part, so the
+            # output is Re(C ISS) for a complex C, as in the LRU
+            self.W_O = nn.Parameter(torch.empty(2, *shape))
+            for part in self.W_O.data:
+                nn.init.xavier_normal_(part, gain=1 / math.sqrt(2))
+        else:
+            self.W_O = nn.Parameter(torch.empty(*shape))
+            nn.init.xavier_normal_(self.W_O)
 
     FUSE_WIDTH = 512
     """Widest projection :meth:`_project` joins to the others."""
@@ -547,7 +557,10 @@ class LISS(HookedModule):
             level(x, projected)
             for level, projected in zip(self.levels, self._project(x))
         ])
-        mixed = torch.einsum("ln,lbtnvw->btvw", self.W_H, iss)
+        mixed = torch.einsum("ln,lbtnvw->btvw", self.W_H.to(iss.dtype), iss)
+        if mixed.is_complex():
+            parts = torch.stack((mixed.real, mixed.imag))
+            return torch.einsum("cvwd,cbtvw->btd", self.W_O, parts)
         return torch.einsum("vwd,btvw->btd", self.W_O, mixed)
 
 
