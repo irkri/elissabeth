@@ -31,6 +31,11 @@ level of vector values as one op that also forms each pair's input. It
 covers the reals, log and arctic semirings on CUDA; the bayesian semiring
 and CPU tensors take the PyTorch path. :class:`LISS` runs its levels'
 narrow projections as one matmul.
+
+A *mixed* level gives each pair its own semiring (``semiring`` as a list):
+pair ``l`` scans and contracts in its own, and reads pair ``l-1``'s output
+as the same numbers. It is the nested sum, evaluated from the innermost
+pair outwards, not one sum over tuples.
 """
 import math
 from typing import Literal
@@ -45,7 +50,7 @@ from ..hooks import HookedModule
 from .kernels import Kernel, T_KernelConfig, build_kernel, check_kernel
 from .projection import Projection, ValuesConfig
 from .semiring import (LOG_DOMAIN, T_Semiring, add, multiply, scan,
-                       scan_indices, shift)
+                       scan_indices, shift, zero)
 
 TRITON_SEMIRINGS = ("reals", "log", "arctic", "complex")
 """The semirings ``scan: triton`` has kernels for."""
@@ -60,7 +65,14 @@ class LISSConfig(ModelConfig):
     """Depths ``p`` of the levels of the layer."""
     values_2D: bool = False
     """Matrix-valued values, multiplied as matrices (in the semiring)."""
-    semiring: T_Semiring = "reals"
+    semiring: T_Semiring | list[T_Semiring] = "reals"
+    """The semiring of every pair, or one per pair (innermost first, as
+    many as the depth of every level): a mixed level. Its pairs scan in
+    their own semiring, and each reads the previous pair's output as the
+    same number, except where that pair has no tuple yet, which becomes
+    the new semiring's zero. A mixed level runs one scan per pair (no
+    ``level_chain``) and cannot decode; the complex semiring cannot be
+    mixed."""
     normalize: Literal["none", "mean", "sqrt", "learnable"] = "none"
     """Divide every level's partial sums by the number of summed positions
     ``c`` to the power ``1`` (mean), ``1/2`` (sqrt) or a learned
@@ -86,25 +98,49 @@ class LISSConfig(ModelConfig):
     def _check(self) -> "LISSConfig":
         if not self.lengths or min(self.lengths) < 1:
             raise ValueError("lengths must be a non-empty list of depths >= 1.")
-        if (self.normalize != "none"
-                and self.semiring not in ("reals", "log", "complex")):
-            raise ValueError(
-                f"normalize is defined for the reals, log and complex"
-                f" semirings, not for {self.semiring!r}."
-            )
-        for kernel in self.kernels:
-            check_kernel(kernel.type, self.semiring)
+        semirings = self.semirings
+        if isinstance(self.semiring, list):
+            if any(p != len(self.semiring) for p in self.lengths):
+                raise ValueError(
+                    f"A list of semirings has one per pair: its length"
+                    f" {len(self.semiring)} must be the depth of every level"
+                    f" (lengths {self.lengths})."
+                )
+            if "complex" in semirings and len(set(semirings)) > 1:
+                raise ValueError("The complex semiring cannot be mixed.")
+        for semiring in sorted(set(semirings)):
+            if (self.normalize != "none"
+                    and semiring not in ("reals", "log", "complex")):
+                raise ValueError(
+                    f"normalize is defined for the reals, log and complex"
+                    f" semirings, not for {semiring!r}."
+                )
+            for kernel in self.kernels:
+                check_kernel(kernel.type, semiring)
         return self
+
+    @property
+    def semirings(self) -> tuple[T_Semiring, ...]:
+        """The semirings named, one per pair for a list, else just the
+        one."""
+        if isinstance(self.semiring, list):
+            return tuple(self.semiring)
+        return (self.semiring,)
 
 
 def _outer(
     a: torch.Tensor,
     b: torch.Tensor,
-    semiring: T_Semiring,
+    semiring: T_Semiring | tuple[T_Semiring, ...],
 ) -> torch.Tensor:
     """Semiring tensor product of the feature axes: ``(..., R1), (..., R2)
     -> (..., R1 R2)``; the product of two kernels ``(+)_i a_i (x) (+)_j b_j
-    = (+)_{ij} a_i (x) b_j``."""
+    = (+)_{ij} a_i (x) b_j``. Per pair (axis 3) for a mixed level."""
+    if not isinstance(semiring, str):
+        return torch.cat([
+            _outer(a[:, :, :, l:l + 1], b[:, :, :, l:l + 1], s)
+            for l, s in enumerate(semiring)
+        ], 3)
     return multiply(
         a.unsqueeze(-1), b.unsqueeze(-2), semiring, False,
     ).flatten(-2)
@@ -128,11 +164,19 @@ class LISSLevel(HookedModule):
         super().__init__("values", "iss")
         self.p = p
         self.n_is = config.n_is
-        self.semiring: T_Semiring = config.semiring
+        named = config.semirings
+        self.semirings: tuple[T_Semiring, ...] = (
+            named if len(named) == p else named * p
+        )
+        """The semiring of every pair, innermost first."""
+        self.mixed = len(set(self.semirings)) > 1
+        self.semiring: T_Semiring = self.semirings[-1]
+        """The semiring of the level's output (its last pair's): the only
+        one unless the level is mixed."""
         self.matrix = config.values_2D
         width = config.d_values if config.values_2D else 1
         # complex values: a real and an imaginary part from one projection
-        self.parts = 2 if config.semiring == "complex" else 1
+        self.parts = 2 if self.semiring == "complex" else 1
         self.values = Projection(
             config.values,
             d_in,
@@ -154,7 +198,8 @@ class LISSLevel(HookedModule):
         )
         self.kernels: list[Kernel] = nn.ModuleList([  # type: ignore
             build_kernel(
-                kernel, config.n_is, p, d_in, config.semiring, context_length,
+                kernel, config.n_is, p, d_in, self._kernel_semiring,
+                context_length,
             ) for kernel in config.kernels
         ])
         self.max_rate = sum(kernel.max_rate for kernel in self.kernels)
@@ -164,6 +209,12 @@ class LISSLevel(HookedModule):
         if config.normalize == "learnable":
             # gamma = 1 + log10(0.25 tanh(beta) + 0.75001) is ~1 here.
             self.beta = nn.Parameter(torch.full((p,), 5.40988))
+
+    @property
+    def _kernel_semiring(self) -> T_Semiring | tuple[T_Semiring, ...]:
+        """What the kernels are built for: the semiring, or one per pair
+        for a mixed level."""
+        return self.semirings if self.mixed else self.semiring
 
     @property
     def rank(self) -> int:
@@ -215,8 +266,8 @@ class LISSLevel(HookedModule):
             if query is None or key is None:
                 query, key = q, k
             else:
-                query = _outer(query, q, self.semiring)
-                key = _outer(key, k, self.semiring)
+                query = _outer(query, q, self._kernel_semiring)
+                key = _outer(key, k, self._kernel_semiring)
         return rate, query, key
 
     def _values(
@@ -237,25 +288,31 @@ class LISSLevel(HookedModule):
         self,
         u: torch.Tensor,
         key: torch.Tensor | None,
+        semiring: T_Semiring | None = None,
     ) -> torch.Tensor:
-        """``psi(s) u_s``: ``(B, T, N, d_v, w) -> (B, T, N, R, d_v, w)``."""
+        """``psi(s) u_s``: ``(B, T, N, d_v, w) -> (B, T, N, R, d_v, w)``,
+        in ``semiring`` (default: the level's)."""
+        semiring = self.semiring if semiring is None else semiring
         u = u.unsqueeze(3)
         if key is None:
             return u
         key = key[..., None, None]
-        return u + key if self.semiring in LOG_DOMAIN else u * key
+        return u + key if semiring in LOG_DOMAIN else u * key
 
     def _contract(
         self,
         state: torch.Tensor,
         query: torch.Tensor | None,
+        semiring: T_Semiring | None = None,
     ) -> torch.Tensor:
         """``<phi(t), S(t)> = (+)_r phi_r(t) (x) S_r(t)``:
-        ``(B, T, N, R, d_v, w) -> (B, T, N, d_v, w)``."""
+        ``(B, T, N, R, d_v, w) -> (B, T, N, d_v, w)``, in ``semiring``
+        (default: the level's)."""
+        semiring = self.semiring if semiring is None else semiring
         if query is None:
             return state.squeeze(3)
-        terms = multiply(state, query[..., None, None], self.semiring, False)
-        return add(terms, self.semiring, 3)
+        terms = multiply(state, query[..., None, None], semiring, False)
+        return add(terms, semiring, 3)
 
     def _contract_argmax(
         self,
@@ -295,9 +352,24 @@ class LISSLevel(HookedModule):
         else:
             assert self.beta is not None
             gamma = 1 + torch.log10(0.25 * torch.tanh(self.beta[l]) + 0.75001)
-        if self.semiring == "log":
+        if self.semirings[l] == "log":
             return state - gamma * torch.log(count)
         return state / count ** gamma
+
+    def _couple(self, y: torch.Tensor, l: int) -> torch.Tensor:
+        """Pair ``l-1``'s output (``t_{l-1} < t``) as an input of pair
+        ``l``: the same numbers, except at ``t < l``, where no tuple fits
+        and the previous semiring's zero becomes pair ``l``'s. The identity
+        when both semirings have the same zero, so always for a pure
+        level."""
+        dtype = y.real.dtype if y.is_complex() else y.dtype
+        before, now = zero(self.semirings[l - 1], dtype), \
+            zero(self.semirings[l], dtype)
+        if before == now:
+            return y
+        t = torch.arange(y.shape[1], device=y.device)
+        valid = (t >= l).view(1, -1, *([1] * (y.ndim - 2)))
+        return torch.where(valid, y, now)
 
     def _pair(self, a: torch.Tensor | None, l: int) -> torch.Tensor | None:
         return None if a is None else a[:, :, :, l]
@@ -306,7 +378,7 @@ class LISSLevel(HookedModule):
         """Whether :meth:`forward` takes the fused Triton scans."""
         return (
             self.scan == "triton" and x.is_cuda
-            and self.semiring in TRITON_SEMIRINGS
+            and all(s in TRITON_SEMIRINGS for s in self.semirings)
         )
 
     def _forward_fused(
@@ -321,20 +393,21 @@ class LISSLevel(HookedModule):
         count normalisation run as one op for the whole level, which forms
         ``u_l`` inside the kernels; otherwise one op per pair, with the
         product and the normalisation (a factor per position, so it moves
-        past the contraction) between them."""
+        past the contraction) between them. A mixed level runs one op per
+        pair, each in its pair's semiring."""
         from .scan_triton import level_chain, level_scan
 
-        if not self.matrix and self.normalize == "none":
+        if not self.mixed and not self.matrix and self.normalize == "none":
             return level_chain(v, key, query, rate, self.semiring)
         out = torch.empty(0)
-        for l in range(self.p):
+        for l, semiring in enumerate(self.semirings):
             u = v[:, :, :, 0 if v.shape[3] == 1 else l]
             if l > 0:
-                u = multiply(out, u, self.semiring, self.matrix)
+                u = multiply(self._couple(out, l), u, semiring, self.matrix)
             last = l == self.p - 1
             out = level_scan(
                 u, self._pair(key, l), self._pair(query, l),
-                None if rate is None else rate[:, l], self.semiring,
+                None if rate is None else rate[:, l], semiring,
                 inclusive=last,
             )
             out = self._normalize(out, l, shift=0 if last else 1)
@@ -372,16 +445,17 @@ class LISSLevel(HookedModule):
         key: torch.Tensor | None,
     ) -> torch.Tensor:
         state = torch.empty(0)
-        for l in range(self.p):
+        for l, semiring in enumerate(self.semirings):
             u = v[:, :, :, 0 if v.shape[3] == 1 else l]
             if l > 0:
+                before = self.semirings[l - 1]
                 prev = self._contract(
-                    shift(state, self.semiring), self._pair(query, l - 1),
+                    shift(state, before), self._pair(query, l - 1), before,
                 )
-                u = multiply(prev, u, self.semiring, self.matrix)
-            state = self._expand(u, self._pair(key, l))
+                u = multiply(self._couple(prev, l), u, semiring, self.matrix)
+            state = self._expand(u, self._pair(key, l), semiring)
             state = scan(
-                state, self.semiring,
+                state, semiring,
                 None if rate is None else rate[:, l], self.max_rate,
             )
             state = self._normalize(state, l)
@@ -394,10 +468,11 @@ class LISSLevel(HookedModule):
         the dynamic-programming read-out of the arctic (and bayesian) level:
         the argmax of each scan, traced back like a Viterbi path.
         """
-        if self.semiring not in ("arctic", "bayesian") or self.matrix:
+        if (self.mixed or self.semiring not in ("arctic", "bayesian")
+                or self.matrix):
             raise ValueError(
                 "decode needs vector values in the arctic or bayesian"
-                " semiring."
+                " semiring (not mixed)."
             )
         v = self._values(x)
         rate, query, key = self.factors(x)
@@ -450,35 +525,39 @@ class LISSLevel(HookedModule):
         x: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Every pair kernel evaluated densely, ``kappa_l(t, s)`` as
-        ``(B, N, p, T, T)`` in the semiring's product domain (a factor in the
-        reals, a log-factor in the arctic/log semirings), and the boolean
-        ``(p, T, T)`` support: ``s < t`` for inner pairs, ``s <= t`` for the
-        last one. For analysis; this is ``O(T^2)``.
+        ``(B, N, p, T, T)`` in its pair's semiring's product domain (a factor
+        in the reals, a log-factor in the arctic/log semirings), and the
+        boolean ``(p, T, T)`` support: ``s < t`` for inner pairs, ``s <= t``
+        for the last one. For analysis; this is ``O(T^2)``.
         """
         rate, query, key = self.factors(x)
         B, T = x.shape[:2]
-        log = self.semiring in LOG_DOMAIN
-        kernel = torch.full(
-            (B, self.n_is, self.p, T, T), 0.0 if log else 1.0,
-            device=x.device, dtype=x.dtype,
-        )
-        if query is not None and key is not None:
-            shape = (B, T, self.n_is, self.p, query.shape[-1])
-            q = query.expand(shape).permute(0, 2, 3, 1, 4)   # (B, N, p, T, R)
-            k = key.expand(shape).permute(0, 2, 3, 1, 4)
-            kernel = add(
-                multiply(q.unsqueeze(-2), k.unsqueeze(-3), self.semiring,
-                         False),
-                self.semiring, -1,
-            )
         t = torch.arange(T, device=x.device, dtype=x.dtype)
         delta = torch.ones(self.p, device=x.device, dtype=x.dtype)
         delta[-1] = 0
         gap = t.view(1, -1, 1) - t.view(1, 1, -1) - delta.view(-1, 1, 1)
-        if rate is not None:
-            decay = -rate.view(1, self.n_is, self.p, 1, 1) * gap
-            kernel = kernel + decay if log else kernel * torch.exp(decay)
-        return kernel, gap >= 0
+        pairs = []
+        for l, semiring in enumerate(self.semirings):
+            log = semiring in LOG_DOMAIN
+            kernel = torch.full(
+                (B, self.n_is, T, T), 0.0 if log else 1.0,
+                device=x.device, dtype=x.dtype,
+            )
+            if query is not None and key is not None:
+                shape = (B, T, self.n_is, query.shape[-1])
+                # (B, N, T, R)
+                q = query[:, :, :, l].expand(shape).permute(0, 2, 1, 3)
+                k = key[:, :, :, l].expand(shape).permute(0, 2, 1, 3)
+                kernel = add(
+                    multiply(q.unsqueeze(-2), k.unsqueeze(-3), semiring,
+                             False),
+                    semiring, -1,
+                )
+            if rate is not None:
+                decay = -rate[:, l].view(1, self.n_is, 1, 1) * gap[l]
+                kernel = kernel + decay if log else kernel * torch.exp(decay)
+            pairs.append(kernel)
+        return torch.stack(pairs, 2), gap >= 0
 
 
 class LISS(HookedModule):

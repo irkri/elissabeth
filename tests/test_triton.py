@@ -110,12 +110,26 @@ CASES = [
                  {"type": "exponential", "d_qk": 2, "restrict": True}]),
     ("complex", [{"type": "decay", "alpha_0": 2}]),
     ("complex", []),
+    # mixed levels, a semiring per pair: one op per pair. A pair reads the
+    # previous output as the same number, so an unbounded reals sum (~T^l)
+    # becomes a log-domain score whose rounding the two paths do not share:
+    # these keep the magnitudes moderate.
+    (["reals", "reals", "arctic"], [{"type": "decay", "alpha_0": 0.5},
+                                    {"type": "exponential", "d_qk": 2,
+                                     "restrict": True}]),
+    (["arctic", "log", "reals"], [{"type": "decay", "alpha_0": 2},
+                                  {"type": "exponential", "restrict": True}]),
+    (["log", "reals", "log"], [{"type": "exponential", "d_qk": 2,
+                                "restrict": True},
+                               {"type": "exponential", "restrict": True,
+                                "share_queries": True}]),
 ]
 
 
 @pytest.mark.parametrize("semiring,kernels", CASES)
 @pytest.mark.parametrize("T", [1, 2, 7, 64, 65, 150])
-def test_matches_pytorch(semiring: str, kernels: list[dict], T: int) -> None:
+def test_matches_pytorch(semiring: str | list[str], kernels: list[dict],
+                         T: int) -> None:
     ref, fused = make_pair(semiring, kernels)
     compare(ref, fused, B=2, T=T)
 
@@ -166,6 +180,19 @@ def test_wide_values_split_over_programs(semiring: str) -> None:
 def test_normalize(semiring: str, normalize: str) -> None:
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
                                       {"type": "exponential"}],
+                           normalize=normalize)
+    compare(ref, fused, B=2, T=90)
+
+
+@pytest.mark.parametrize("semiring,normalize", [
+    (["reals", "log", "reals"], "mean"), (["log", "reals", "log"], "learnable"),
+])
+def test_normalize_mixed(semiring: list[str], normalize: str) -> None:
+    """Each pair's partial sums divided (or offset in the log domain) in
+    its own semiring."""
+    ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 0.5},
+                                      {"type": "exponential",
+                                       "restrict": True}],
                            normalize=normalize)
     compare(ref, fused, B=2, T=90)
 
@@ -255,4 +282,31 @@ def test_compiles_with_a_dynamic_batch(semiring: str,
                 p.grad for p in layer.parameters()])
         for a, b in zip(got, want):
             # float32 sums with cancellation: compare whole tensors
+            assert (a - b).norm() <= 1e-5 * b.norm()
+
+
+def test_mixed_level_compiles_with_a_dynamic_batch() -> None:
+    """A mixed level (one op per pair) under ``fullgraph`` compile, one
+    graph for two batch sizes, equal to eager."""
+    torch._dynamo.reset()
+    config = LISSConfig(d_values=8, n_is=4, lengths=[3],
+                        semiring=["reals", "log", "arctic"],
+                        kernels=[{"type": "decay"},
+                                 {"type": "exponential", "d_qk": 2}],
+                        scan="triton")
+    torch.manual_seed(0)
+    layer = build_liss(config, 16, context_length=300).cuda()
+    compiled = torch.compile(layer, fullgraph=True)
+    for B in (3, 5):
+        x = torch.randn(B, 300, 16, device="cuda")
+        torch._dynamo.mark_dynamic(x, 0)
+        want, got = [], []
+        for run, store in ((layer, want), (compiled, got)):
+            layer.zero_grad(set_to_none=True)
+            xi = x.clone().requires_grad_()
+            out = run(xi)
+            out.square().sum().backward()
+            store.extend([out.detach(), xi.grad] + [
+                p.grad for p in layer.parameters()])
+        for a, b in zip(got, want):
             assert (a - b).norm() <= 1e-5 * b.norm()

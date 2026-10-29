@@ -17,7 +17,8 @@ Factors are returned in the semiring's product domain: multiplicative for
 level contracts the features with the semiring's own sum, which
 distributes over its scans in every semiring. The cosine kernels are
 restricted to the reals because their features are signed and only add up
-to ``cos`` under an ordinary sum.
+to ``cos`` under an ordinary sum. A kernel of a mixed level gets one
+semiring per pair and returns each pair's factors in that pair's domain.
 """
 import math
 from typing import Annotated, Literal
@@ -177,11 +178,17 @@ class Kernel(HookedModule):
     max_rate: float = 0.0
     """Static bound on the decay rate per step."""
 
-    def __init__(self, n_is: int, p: int, semiring: T_Semiring) -> None:
+    def __init__(
+        self,
+        n_is: int,
+        p: int,
+        semiring: T_Semiring | tuple[T_Semiring, ...],
+    ) -> None:
         super().__init__()
         self.n_is = n_is
         self.p = p
         self.semiring = semiring
+        """The level's semiring, or one per pair for a mixed level."""
 
     def rates(self) -> torch.Tensor | None:
         """Decay rate per step, ``(n_is, p)``, or ``None``."""
@@ -295,9 +302,7 @@ class Exponential(Kernel):
             q, k = torch.tanh(q), torch.tanh(k)
         q = self.hook("query", self._pairs(q, 3))
         k = self.hook("key", self._pairs(k, 3))
-        if self.semiring in LOG_DOMAIN:
-            return q, -k
-        return torch.exp(q), torch.exp(-k)
+        return _exponential_domain(q, k, self.semiring)
 
 
 class Cosine(Kernel):
@@ -383,15 +388,35 @@ class CosineDecay(Kernel):
         )
 
 
+def _exponential_domain(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    semiring: T_Semiring | tuple[T_Semiring, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``exp(q), exp(-k)`` as factors in the semiring's product domain
+    (``q, -k`` in the log domain), per pair (axis 3) for a mixed level."""
+    if not isinstance(semiring, str):
+        pairs = [
+            _exponential_domain(q[:, :, :, l:l + 1], k[:, :, :, l:l + 1], s)
+            for l, s in enumerate(semiring)
+        ]
+        return (torch.cat([a for a, _ in pairs], 3),
+                torch.cat([b for _, b in pairs], 3))
+    if semiring in LOG_DOMAIN:
+        return q, -k
+    return torch.exp(q), torch.exp(-k)
+
+
 def build_kernel(
     config: T_KernelConfig,
     n_is: int,
     p: int,
     d_in: int,
-    semiring: T_Semiring,
+    semiring: T_Semiring | tuple[T_Semiring, ...],
     context_length: int | None,
 ) -> Kernel:
-    check_kernel(config.type, semiring)
+    for s in ((semiring,) if isinstance(semiring, str) else semiring):
+        check_kernel(config.type, s)
     if (config.type in ("decay", "cosine_decay", "rotation")
             and context_length is None):
         raise ValueError(f"The {config.type!r} kernel needs context_length.")

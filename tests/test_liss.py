@@ -592,3 +592,107 @@ def test_complex_level_scan_matches_the_pytorch_scan() -> None:
         # float32 sums over 300 x 24 terms: the rate gradient differs by
         # its accumulation order (2e-4 relative)
         torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-3 * b.abs().max())
+
+
+# -- mixed semirings: one per pair --------------------------------------------
+
+def nested_brute_force(level: LISSLevel, x: torch.Tensor) -> torch.Tensor:
+    """``(T, N, d_v, w)`` for a batch of one: the nested sum a level with a
+    semiring per pair computes, pair by pair from the innermost, each over
+    its own index in its own semiring (pair ``l`` reads pair ``l-1``'s
+    output as the same number). For a pure level it is :func:`brute_force`.
+    """
+    v = level._values(x)[0]                     # (T, N|1, p|1, d_v, w)
+    T = x.shape[1]
+    kernel, _ = level.pair_matrices(x)
+    prev = None
+    for l, semiring in enumerate(level.semirings):
+        add, mul = SEMIRINGS[semiring]
+        last = l == level.p - 1
+        out = torch.zeros(T, level.n_is, *v.shape[-2:], dtype=v.dtype)
+        for s in range(T):
+            for n in range(level.n_is):
+                total = None
+                # t_l < s (t_l <= s for the last pair), after l indices
+                for t_l in range(l, s + 1 if last else s):
+                    value = v[
+                        t_l,
+                        n if v.shape[1] > 1 else 0,
+                        l if v.shape[2] > 1 else 0,
+                    ]
+                    if prev is not None:
+                        value = (matmul(prev[t_l, n], value, semiring)
+                                 if level.matrix else mul(prev[t_l, n], value))
+                    term = mul(value, kernel[0, n, l, s, t_l])
+                    total = term if total is None else add(total, term)
+                if total is not None:
+                    out[s, n] = total
+        prev = out
+    assert prev is not None
+    return prev
+
+
+MIXED = [
+    (["reals", "reals", "arctic"], [{"type": "decay", "alpha_0": 3},
+                                    {"type": "exponential", "d_qk": 2}]),
+    (["arctic", "reals", "log"], [{"type": "decay", "alpha_0": 3},
+                                  {"type": "exponential", "restrict": True}]),
+    (["log", "arctic", "reals"], [{"type": "exponential", "d_qk": 2},
+                                  {"type": "exponential",
+                                   "share_queries": True}]),
+    (["bayesian", "reals", "arctic"], [{"type": "decay", "alpha_0": 2}]),
+    (["reals", "log"], [{"type": "decay", "alpha_0": 2}]),
+]
+
+
+@pytest.mark.parametrize("semirings,kernels", MIXED)
+@pytest.mark.parametrize("matrix", [False, True])
+@pytest.mark.parametrize("T", [2, 6])
+def test_mixed_recursion(semirings: list[str], kernels: list[dict],
+                         matrix: bool, T: int) -> None:
+    level = make_level(semirings, kernels, p=len(semirings), values_2D=matrix)
+    assert level.mixed and level.semiring == semirings[-1]
+    x = torch.randn(1, T, 4)
+    torch.testing.assert_close(level(x)[0], nested_brute_force(level, x))
+
+
+def test_nested_brute_force_is_the_sum_over_tuples() -> None:
+    level = make_level("arctic", [{"type": "decay", "alpha_0": 4},
+                                  {"type": "exponential"}])
+    x = torch.randn(1, 6, 4)
+    torch.testing.assert_close(nested_brute_force(level, x),
+                               brute_force(level, x))
+
+
+def test_mixed_pairs_take_their_semirings_kernels() -> None:
+    """Pair ``l`` of a mixed level has the kernel factors of a level in
+    its semiring, with the same weights."""
+    kernels = [{"type": "decay", "alpha_0": 3},
+               {"type": "exponential", "d_qk": 2},
+               {"type": "exponential", "share_keys": True}]
+    mixed = make_level(["reals", "arctic", "log"], kernels)
+    x = torch.randn(1, 5, 4)
+    got = mixed.pair_matrices(x)[0]
+    for l, semiring in enumerate(mixed.semirings):
+        pure = make_level(semiring, kernels)
+        pure.load_state_dict(mixed.state_dict())
+        torch.testing.assert_close(got[:, :, l],
+                                   pure.pair_matrices(x)[0][:, :, l])
+
+
+def test_mixed_semiring_config() -> None:
+    with pytest.raises(ValueError, match="depth of every level"):
+        LISSConfig(d_values=2, lengths=[2, 3],
+                   semiring=["reals", "arctic", "log"])
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        LISSConfig(d_values=2, semiring=["complex", "reals"])
+    with pytest.raises(ValueError, match="cosine"):
+        LISSConfig(d_values=2, semiring=["reals", "arctic"],
+                   kernels=[{"type": "cosine"}])
+    with pytest.raises(ValueError, match="normalize"):
+        LISSConfig(d_values=2, semiring=["reals", "arctic"], normalize="mean")
+    # one semiring named per pair is a pure level
+    level = make_level(["log", "log", "log"], [])
+    assert not level.mixed and level.semiring == "log"
+    with pytest.raises(ValueError, match="not mixed"):
+        make_level(["reals", "arctic"], [], p=2).decode(torch.randn(1, 4, 4))

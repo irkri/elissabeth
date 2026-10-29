@@ -228,6 +228,29 @@ def test_registered_tasks(tmp_path: Path) -> None:
         register_task(type("Other", (_ConstantTask,), {}))
 
 
+def test_layer_semirings(tmp_path: Path) -> None:
+    """``model.layer_semirings`` sets each layer's ``liss.semiring`` (one
+    semiring or one per pair); every layer's config is validated."""
+    liss = {"d_values": 2, "lengths": [2], "bidirectional": False,
+            "kernels": [{"type": "decay"}, {"type": "exponential"}]}
+    config = ElissabethConfig(
+        d_hidden=8, n_layers=3, context_length=6, liss=liss,
+        layer_semirings=["log", ["reals", "arctic"], "reals"],
+    )
+    model = Elissabeth(config, 5)
+    assert [mixer.levels[0].semirings for mixer in model.mixers] == [
+        ("log", "log"), ("reals", "arctic"), ("reals", "reals"),
+    ]
+    assert model(torch.randint(5, (2, 6))).shape == (2, 6, 5)
+    with pytest.raises(ValueError, match="2 entries for 3 layers"):
+        ElissabethConfig(d_hidden=8, n_layers=3, liss=liss,
+                         layer_semirings=["log", "reals"])
+    with pytest.raises(ValueError, match="cosine"):
+        ElissabethConfig(d_hidden=8, liss={**liss,
+                                           "kernels": [{"type": "cosine"}]},
+                         layer_semirings=["arctic"])
+
+
 def test_old_run_configs_stay_causal(tmp_path: Path) -> None:
     """A run saved before ``bidirectional`` existed trained a causal LISS;
     loading its config.yaml must rebuild that model, not the new default."""

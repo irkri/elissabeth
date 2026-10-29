@@ -9,7 +9,7 @@ from torch import nn
 from .attention import AttentionConfig, SelfAttention
 from .config import ModelConfig
 from .hooks import HookedModule
-from .liss import LISSConfig, LISSLevel, build_liss
+from .liss import LISSConfig, LISSLevel, T_Semiring, build_liss
 
 
 class FFNConfig(ModelConfig):
@@ -76,6 +76,10 @@ class ElissabethConfig(ModelConfig):
     attention: AttentionConfig | None = None
     """The sequence mixer of every layer: exactly one of ``liss`` (the
     model) and ``attention`` (the transformer baseline)."""
+    layer_semirings: list[T_Semiring | list[T_Semiring]] | None = None
+    """``liss.semiring`` per layer, one entry for each of the ``n_layers``
+    (a semiring, or a list per pair as in ``liss.semiring``); without it
+    every layer has ``liss.semiring``."""
     ffn: FFNConfig | None = None
     """A SwiGLU after every mixer, or none."""
     pooling: Literal["last", "mean"] = "last"
@@ -90,7 +94,28 @@ class ElissabethConfig(ModelConfig):
     def _one_mixer(self) -> "ElissabethConfig":
         if (self.liss is None) == (self.attention is None):
             raise ValueError("Give exactly one of model.liss, model.attention.")
+        if self.layer_semirings is not None:
+            if self.liss is None:
+                raise ValueError("model.layer_semirings needs model.liss.")
+            if len(self.layer_semirings) != self.n_layers:
+                raise ValueError(
+                    f"model.layer_semirings has {len(self.layer_semirings)}"
+                    f" entries for {self.n_layers} layers."
+                )
+            for layer in range(self.n_layers):
+                self.layer_liss(layer)
         return self
+
+    def layer_liss(self, layer: int) -> LISSConfig:
+        """The LISS config of one layer: ``liss`` with that layer's entry
+        of ``layer_semirings``, validated as a whole."""
+        assert self.liss is not None
+        if self.layer_semirings is None:
+            return self.liss
+        return LISSConfig.model_validate({
+            **self.liss.model_dump(),
+            "semiring": self.layer_semirings[layer],
+        })
 
     @property
     def bidirectional(self) -> bool:
@@ -129,10 +154,10 @@ class Elissabeth(HookedModule):
             return nn.LayerNorm(d) if config.layer_norm else nn.Identity()
 
         self.mixers = nn.ModuleList([
-            build_liss(config.liss, d, config.context_length)
+            build_liss(config.layer_liss(i), d, config.context_length)
             if config.liss is not None
             else SelfAttention(config.attention, d)  # type: ignore
-            for _ in range(config.n_layers)
+            for i in range(config.n_layers)
         ])
         self.mixer_norms = nn.ModuleList([norm() for _ in self.mixers])
         self.ffns = nn.ModuleList(
