@@ -8,10 +8,16 @@ and a decay rate per head, and returns the contraction
     y_t = <q_t, S_t>       (the last pair, ``inclusive=True``)
     S_t = lambda (x) S_{t-1} (+) k_t (x) u_t       (an R x D state)
 
-in the reals (``+``, ``*``), the log semiring (logsumexp, ``+``) or the
-arctic semiring (``max``, ``+``). The ``R x D`` state lives in registers
-only, so a level keeps ``(B, T, N, D)`` tensors where the PyTorch path
-keeps ``(B, T, N, R, D)`` ones.
+in the reals (``+``, ``*``), the log semiring (logsumexp, ``+``), the
+arctic semiring (``max``, ``+``) or the complex numbers. The ``R x D``
+state lives in registers only, so a level keeps ``(B, T, N, D)`` tensors
+where the PyTorch path keeps ``(B, T, N, R, D)`` ones.
+
+The complex semiring has kernels of its own, the reals' on ``(re, im)``
+pairs: the state, the inputs, the outputs and the rate are complex, the
+features stay real. Complex tensors enter as their real views
+(``torch.view_as_real``), so every stride is in real units and the
+imaginary part follows the real one; chunk states are two planes.
 
 The input of an inner pair is the previous contraction times the values,
 ``u = y_{l-1} (x) v_l``. A kernel can take the two factors instead of
@@ -51,6 +57,11 @@ Backward passes (all with the same three phases):
   value" and one for "the contraction took this feature" (two ``int64``
   per entry and chunk), and the backward pass is a reverse scan gated by
   them.
+- **complex**: the reals' adjoint with ``conj(lambda)``, in PyTorch's
+  convention for the gradient of a complex tensor (``dL/d re + i dL/d
+  im``): ``du = <k, H>``, ``dk = sum_d Re(H conj(u))``, ``dq = sum_d
+  Re(S conj(dy))``, and for the product with the previous pair ``dv = du
+  conj(prev)``, ``dprev = du conj(v)``.
 
 The decay rate's gradient is a sum over pairs of index distances, which
 ``rate_gradient`` writes in terms of the per-position gradients the
@@ -62,7 +73,7 @@ import torch
 import triton
 import triton.language as tl
 
-SEMIRINGS = {"reals": 0, "log": 1, "arctic": 2}
+SEMIRINGS = {"reals": 0, "log": 1, "arctic": 2, "complex": 3}
 """The semirings the kernels implement, and their code in the kernels."""
 
 ARCTIC_CHUNK = 64
@@ -581,6 +592,281 @@ def _arctic_reverse_prefix_kernel(
 
 
 # --------------------------------------------------------------------------
+# the complex semiring: the reals' kernels on (re, im) pairs
+# --------------------------------------------------------------------------
+@triton.jit
+def _cmul(ar, ai, br, bi):
+    """``(ar + i ai) (br + i bi)``."""
+    return ar * br - ai * bi, ar * bi + ai * br
+
+
+@triton.jit
+def _load2(ptr, off, mask, ACC: tl.constexpr):
+    """A complex tile from its real view: ``(re, im)`` at ``off`` and
+    ``off + 1``."""
+    return (tl.load(ptr + off, mask=mask, other=0.0).to(ACC),
+            tl.load(ptr + off + 1, mask=mask, other=0.0).to(ACC))
+
+
+@triton.jit
+def _store2(ptr, off, re, im, mask):
+    tl.store(ptr + off, re, mask=mask)
+    tl.store(ptr + off + 1, im, mask=mask)
+
+
+@triton.jit
+def _complex_rate(rate_ptr, n, s_rate, n_mask, HAS_RATE: tl.constexpr,
+                  ACC: tl.constexpr):
+    """The complex rate per head as ``(re, im)``, ``(BN, 1, 1)``; zero
+    without a rate."""
+    if HAS_RATE:
+        rr = tl.load(rate_ptr + n * s_rate, mask=n_mask, other=0.0).to(ACC)
+        ri = tl.load(rate_ptr + n * s_rate + 1, mask=n_mask,
+                     other=0.0).to(ACC)
+    else:
+        rr = (n * 0).to(ACC)
+        ri = (n * 0).to(ACC)
+    return rr[:, None, None], ri[:, None, None]
+
+
+@triton.jit
+def _complex_decay(rr, ri, steps, CONJ: tl.constexpr):
+    """``lambda^steps = exp(-rate * steps)`` as ``(re, im)``, conjugated for
+    the adjoint."""
+    mod = tl.exp(-rr * steps)
+    if CONJ:
+        return mod * tl.cos(ri * steps), mod * tl.sin(ri * steps)
+    return mod * tl.cos(ri * steps), -mod * tl.sin(ri * steps)
+
+
+@triton.jit
+def _complex_forward_kernel(
+    prev_ptr, v_ptr, k_ptr, q_ptr, rate_ptr, y_ptr, dy_ptr, dq_ptr,
+    start_ptr, end_ptr,
+    B, T, N, D, R, C, s_rate,
+    sv_b, sv_t, sv_n, sv_d,
+    sk_b, sk_t, sk_n, sk_r,
+    sq_b, sq_t, sq_n, sq_r,
+    sy_b, sy_t, sy_n, sy_d,
+    so_j, so_b, so_t, so_n, so_r,
+    MODE: tl.constexpr, CHUNK: tl.constexpr, BN: tl.constexpr,
+    BR: tl.constexpr, BD: tl.constexpr,
+    INCLUSIVE: tl.constexpr, HAS_PREV: tl.constexpr, HAS_K: tl.constexpr,
+    HAS_Q: tl.constexpr, HAS_RATE: tl.constexpr, ACC: tl.constexpr,
+):
+    """:func:`_forward_kernel` in the complex semiring (the same modes).
+    ``prev``, ``v``, ``y`` and ``dy`` are real views; the contiguous
+    buffers (``prev``, ``y``) are indexed at ``2 out``."""
+    pid = tl.program_id(0).to(tl.int64)
+    c = tl.program_id(1)
+    j = tl.program_id(2)
+    NB = tl.cdiv(N, BN)
+    b = pid // NB
+    n = (pid % NB) * BN + tl.arange(0, BN)
+    r = tl.arange(0, BR)
+    d = j * BD + tl.arange(0, BD)
+    n_mask = n < N
+    nr = n_mask[:, None] & (r < R)[None, :]
+    nd = n_mask[:, None] & (d < D)[None, :]
+    nrd = nr[:, :, None] & (d < D)[None, None, :]
+    state = (((b * N + n[:, None, None]) * C + c) * R
+             + r[None, :, None]) * D + d[None, None, :]
+    plane = _plane(b, B, N, C, R, D)
+    rr, ri = _complex_rate(rate_ptr, n, s_rate, n_mask, HAS_RATE, ACC)
+    lr, li = _complex_decay(rr, ri, 1.0, False)
+    if MODE == 0:
+        Sr = tl.zeros((BN, BR, BD), ACC)
+        Si = tl.zeros((BN, BR, BD), ACC)
+    else:
+        Sr = tl.load(start_ptr + state, mask=nrd, other=0.0).to(ACC)
+        Si = tl.load(start_ptr + plane + state, mask=nrd, other=0.0).to(ACC)
+    v_base = b * sv_b + n[:, None] * sv_n + d[None, :] * sv_d
+    k_base = b * sk_b + n[:, None] * sk_n + r[None, :] * sk_r
+    q_base = b * sq_b + n[:, None] * sq_n + r[None, :] * sq_r
+    y_base = b * sy_b + n[:, None] * sy_n + d[None, :] * sy_d
+    t0 = c * CHUNK
+    length = tl.minimum(CHUNK, T - t0)
+    for tau in range(0, length):
+        t = (t0 + tau).to(tl.int64)
+        out = 2 * (((b * T + t) * N + n[:, None]) * D + d[None, :])
+        ur, ui = _load2(v_ptr, v_base + t * sv_t, nd, ACC)
+        if HAS_PREV:
+            pr, pi = _load2(prev_ptr, out, nd, ACC)
+            ur, ui = _cmul(pr, pi, ur, ui)
+        k = _factor(k_ptr, k_base, t, sk_t, nr, HAS_K, 1.0, 0.0, ACC)
+        if MODE != 0:
+            q = _factor(q_ptr, q_base, t, sq_t, nr, HAS_Q, 1.0, 0.0, ACC)
+        if MODE != 0 and not INCLUSIVE:
+            Rr = Sr
+            Ri = Si
+        Sr, Si = _cmul(lr, li, Sr, Si)
+        Sr = Sr + k[:, :, None] * ur[:, None, :]
+        Si = Si + k[:, :, None] * ui[:, None, :]
+        if MODE != 0 and INCLUSIVE:
+            Rr = Sr
+            Ri = Si
+        if MODE == 1:
+            _store2(y_ptr, out, _contract(Rr, q, 0), _contract(Ri, q, 0), nd)
+        if MODE == 2:
+            dyr, dyi = _load2(dy_ptr, y_base + t * sy_t, nd, ACC)
+            dq = tl.sum(Rr * dyr[:, None, :] + Ri * dyi[:, None, :], axis=2)
+            dq_off = j * so_j + b * so_b + t * so_t + n[:, None] * so_n \
+                + r[None, :] * so_r
+            tl.store(dq_ptr + dq_off, dq, mask=nr)
+    if MODE == 0:
+        tl.store(end_ptr + state, Sr, mask=nrd)
+        tl.store(end_ptr + plane + state, Si, mask=nrd)
+
+
+@triton.jit
+def _complex_prefix_kernel(
+    end_ptr, start_ptr, rate_ptr,
+    B, T, N, D, R, C, s_rate,
+    CHUNK: tl.constexpr, BN: tl.constexpr, BR: tl.constexpr,
+    BD: tl.constexpr, HAS_RATE: tl.constexpr, REVERSE: tl.constexpr,
+    ACC: tl.constexpr, U: tl.constexpr,
+):
+    """Phase 2 in the complex semiring, forwards (``P_c = lambda^CHUNK
+    P_{c-1} + E_c``) or backwards for the adjoint (``P_{c-1} =
+    conj(lambda)^{len(c)} P_c + E_c``), ``U`` chunks' loads at once."""
+    pid = tl.program_id(0).to(tl.int64)
+    j = tl.program_id(1)
+    NB = tl.cdiv(N, BN)
+    b = pid // NB
+    n = (pid % NB) * BN + tl.arange(0, BN)
+    r = tl.arange(0, BR)
+    d = j * BD + tl.arange(0, BD)
+    n_mask = n < N
+    nrd = n_mask[:, None, None] & (r < R)[None, :, None] \
+        & (d < D)[None, None, :]
+    plane = _plane(b, B, N, C, R, D)
+    rr, ri = _complex_rate(rate_ptr, n, s_rate, n_mask, HAS_RATE, ACC)
+    Pr = tl.zeros((BN, BR, BD), ACC)
+    Pi = tl.zeros((BN, BR, BD), ACC)
+    base = (((b * N + n[:, None, None]) * C) * R + r[None, :, None]) * D \
+        + d[None, None, :]
+    for i0 in range(0, C, U):
+        Er = ()
+        Ei = ()
+        for i in tl.static_range(U):
+            live = nrd & (i0 + i < C)
+            if REVERSE:
+                state = base + (C - 1 - i0 - i) * R * D
+            else:
+                state = base + (i0 + i) * R * D
+            Er = Er + (tl.load(end_ptr + state, mask=live,
+                               other=0.0).to(ACC),)
+            Ei = Ei + (tl.load(end_ptr + plane + state, mask=live,
+                               other=0.0).to(ACC),)
+        for i in tl.static_range(U):
+            live = nrd & (i0 + i < C)
+            if REVERSE:
+                c = C - 1 - i0 - i
+                steps = tl.minimum(CHUNK, T - c * CHUNK)
+            else:
+                c = i0 + i
+                steps = CHUNK
+            state = base + c * R * D
+            tl.store(start_ptr + state, Pr, mask=live)
+            tl.store(start_ptr + plane + state, Pi, mask=live)
+            lr, li = _complex_decay(rr, ri, steps, REVERSE)
+            Pr, Pi = _cmul(lr, li, Pr, Pi)
+            Pr = Pr + Er[i]
+            Pi = Pi + Ei[i]
+
+
+@triton.jit
+def _complex_reverse_kernel(
+    dy_ptr, prev_ptr, v_ptr, k_ptr, q_ptr, rate_ptr,
+    dv_ptr, dprev_ptr, dk_ptr, start_ptr, end_ptr,
+    B, T, N, D, R, C, s_rate,
+    sv_b, sv_t, sv_n, sv_d,
+    sk_b, sk_t, sk_n, sk_r,
+    sq_b, sq_t, sq_n, sq_r,
+    sy_b, sy_t, sy_n, sy_d,
+    sg_b, sg_t, sg_n, sg_d,
+    so_j, so_b, so_t, so_n, so_r,
+    MODE: tl.constexpr, CHUNK: tl.constexpr, BN: tl.constexpr,
+    BR: tl.constexpr, BD: tl.constexpr,
+    INCLUSIVE: tl.constexpr, HAS_PREV: tl.constexpr, HAS_K: tl.constexpr,
+    HAS_Q: tl.constexpr, HAS_RATE: tl.constexpr, ACC: tl.constexpr,
+):
+    """:func:`_reverse_kernel` in the complex semiring: the adjoint
+    ``H_s = conj(lambda) H_{s+1} + q_s dy_s^T`` on ``(re, im)`` pairs (the
+    same modes), and ``du = <k, H>``, ``dk = sum_d Re(H conj(u))``,
+    ``dv = du conj(prev)``, ``dprev = du conj(v)``."""
+    pid = tl.program_id(0).to(tl.int64)
+    c = tl.program_id(1)
+    j = tl.program_id(2)
+    NB = tl.cdiv(N, BN)
+    b = pid // NB
+    n = (pid % NB) * BN + tl.arange(0, BN)
+    r = tl.arange(0, BR)
+    d = j * BD + tl.arange(0, BD)
+    n_mask = n < N
+    nr = n_mask[:, None] & (r < R)[None, :]
+    nd = n_mask[:, None] & (d < D)[None, :]
+    nrd = nr[:, :, None] & (d < D)[None, None, :]
+    state = (((b * N + n[:, None, None]) * C + c) * R
+             + r[None, :, None]) * D + d[None, None, :]
+    plane = _plane(b, B, N, C, R, D)
+    rr, ri = _complex_rate(rate_ptr, n, s_rate, n_mask, HAS_RATE, ACC)
+    lr, li = _complex_decay(rr, ri, 1.0, True)
+    if MODE == 1:
+        Hr = tl.load(start_ptr + state, mask=nrd, other=0.0).to(ACC)
+        Hi = tl.load(start_ptr + plane + state, mask=nrd, other=0.0).to(ACC)
+    else:
+        Hr = tl.zeros((BN, BR, BD), ACC)
+        Hi = tl.zeros((BN, BR, BD), ACC)
+    v_base = b * sv_b + n[:, None] * sv_n + d[None, :] * sv_d
+    k_base = b * sk_b + n[:, None] * sk_n + r[None, :] * sk_r
+    q_base = b * sq_b + n[:, None] * sq_n + r[None, :] * sq_r
+    y_base = b * sy_b + n[:, None] * sy_n + d[None, :] * sy_d
+    g_base = b * sg_b + n[:, None] * sg_n + d[None, :] * sg_d
+    t0 = c * CHUNK
+    length = tl.minimum(CHUNK, T - t0)
+    for i in range(0, length):
+        t = (t0 + length - 1 - i).to(tl.int64)
+        out = 2 * (((b * T + t) * N + n[:, None]) * D + d[None, :])
+        dyr, dyi = _load2(dy_ptr, y_base + t * sy_t, nd, ACC)
+        q = _factor(q_ptr, q_base, t, sq_t, nr, HAS_Q, 1.0, 0.0, ACC)
+        if MODE == 1 and not INCLUSIVE:
+            Gr = Hr
+            Gi = Hi
+        Hr, Hi = _cmul(lr, li, Hr, Hi)
+        Hr = Hr + q[:, :, None] * dyr[:, None, :]
+        Hi = Hi + q[:, :, None] * dyi[:, None, :]
+        if MODE == 1:
+            if INCLUSIVE:
+                Gr = Hr
+                Gi = Hi
+            vr, vi = _load2(v_ptr, v_base + t * sv_t, nd, ACC)
+            ur = vr
+            ui = vi
+            if HAS_PREV:
+                pr, pi = _load2(prev_ptr, out, nd, ACC)
+                ur, ui = _cmul(pr, pi, vr, vi)
+            k = _factor(k_ptr, k_base, t, sk_t, nr, HAS_K, 1.0, 0.0, ACC)
+            dur = tl.sum(k[:, :, None] * Gr, axis=1)
+            dui = tl.sum(k[:, :, None] * Gi, axis=1)
+            dk = tl.sum(Gr * ur[:, None, :] + Gi * ui[:, None, :], axis=2)
+            dvr = dur
+            dvi = dui
+            if HAS_PREV:
+                dvr, dvi = _cmul(dur, dui, pr, -pi)
+                dpr, dpi = _cmul(dur, dui, vr, -vi)
+                _store2(dprev_ptr, out, dpr, dpi, nd)
+            _store2(dv_ptr, g_base + t * sg_t, dvr, dvi, nd)
+            if HAS_K:
+                dk_off = j * so_j + b * so_b + t * so_t + n[:, None] * so_n \
+                    + r[None, :] * so_r
+                tl.store(dk_ptr + dk_off, dk, mask=nr)
+    if MODE == 0:
+        tl.store(end_ptr + state, Hr, mask=nrd)
+        tl.store(end_ptr + plane + state, Hi, mask=nrd)
+
+
+# --------------------------------------------------------------------------
 # launching
 # --------------------------------------------------------------------------
 def _chunk(T: int, semiring: str) -> int:
@@ -617,8 +903,10 @@ def _blocks(
     BR = triton.next_power_of_2(R)
     BD = min(triton.next_power_of_2(D), max(1, 2048 // BR))
     padded = D < 0.6 * BD
-    lanes = BD if padded and semiring != "reals" else 128
-    tile = 2048
+    real = semiring in ("reals", "complex")
+    lanes = BD if padded and not real else 128
+    # a complex entry is two registers
+    tile = 1024 if semiring == "complex" else 2048
     if semiring == "arctic":
         tile = 128 if backward else 256
     elif padded:
@@ -628,7 +916,7 @@ def _blocks(
            and 2 * BN * BR * BD <= tile):
         BN *= 2
     size = BN * BR * BD
-    small = {"log": 128, "reals": 256}.get(semiring, 512)
+    small = {"log": 128, "reals": 256, "complex": 128}.get(semiring, 512)
     warps = 1 if size <= small else 2 if size <= 4 * small else 4
     return BN, BR, BD, warps
 
@@ -648,19 +936,39 @@ def _pads(SR: int, zero: float) -> tuple[float, float, float]:
     """The empty state, the semiring's one, and the query of a padded
     feature: ``(0, 1, 0)`` in the reals, ``(zero, 0, -inf)`` in the log
     domain."""
-    return (0.0, 1.0, 0.0) if SR == 0 else (zero, 0.0, -math.inf)
+    return (0.0, 1.0, 0.0) if SR in (0, 3) else (zero, 0.0, -math.inf)
+
+
+def _real_dtype(dtype: torch.dtype) -> torch.dtype:
+    """The real dtype of a complex one; a real dtype itself."""
+    if dtype.is_complex:
+        return torch.float64 if dtype == torch.complex128 else torch.float32
+    return dtype
+
+
+def _complex_dtype(dtype: torch.dtype) -> torch.dtype:
+    return torch.complex128 if dtype == torch.float64 else torch.complex64
 
 
 def _acc(*tensors: torch.Tensor | None) -> tuple[torch.dtype, object]:
+    """The (real) accumulation dtype: float64 if any input is, else
+    float32."""
     dtype = torch.float32
     for tensor in tensors:
-        if tensor is not None and tensor.dtype == torch.float64:
+        if tensor is not None and _real_dtype(tensor.dtype) == torch.float64:
             dtype = torch.float64
     return dtype, (tl.float64 if dtype == torch.float64 else tl.float32)
 
 
+def _real(a: torch.Tensor | None) -> torch.Tensor | None:
+    """A complex tensor as its real view, ``(..., 2)``; a real one as
+    is."""
+    return torch.view_as_real(a) if a is not None and a.is_complex() else a
+
+
 def _strides(a: torch.Tensor | None, k: int = 4) -> tuple[int, ...]:
-    return (0,) * k if a is None else tuple(a.stride())  # type: ignore
+    """The first ``k`` strides; a real view's are in real units."""
+    return (0,) * k if a is None else tuple(a.stride())[:k]  # type: ignore
 
 
 class _Pair:
@@ -682,8 +990,12 @@ class _Pair:
         self.R = rank if rank is not None else _rank(key, query)
         if dtype is None:
             dtype = _acc(v, key, query)[0]
-        self.dtype = dtype
-        self.ACC = tl.float64 if dtype == torch.float64 else tl.float32
+        # the accumulation dtype, and the dtype of the values and outputs
+        # (complex in the complex semiring)
+        self.dtype = _real_dtype(dtype)
+        self.value_dtype = (_complex_dtype(self.dtype)
+                            if semiring == "complex" else self.dtype)
+        self.ACC = tl.float64 if self.dtype == torch.float64 else tl.float32
         self.semiring = semiring
         self.SR = SEMIRINGS[semiring]
         self.CHUNK = _chunk(self.T, semiring)
@@ -695,13 +1007,13 @@ class _Pair:
         self.NDB = triton.cdiv(self.D, self.BD)
         # chunks per load batch of phase 2: ~64 registers of end states
         threads = 32 * self.warps
-        tile = self.BN * self.BR * self.BD
+        tile = self.BN * self.BR * self.BD * (2 if self.SR == 3 else 1)
         self.unroll = max(1, min(8, 64 * threads // tile))
-        self.zero = _zero(dtype)
+        self.zero = _zero(self.dtype)
         self.empty, self.one, self.qpad = _pads(self.SR, self.zero)
         self.inclusive = inclusive
         self.has_rate = rate is not None
-        self.s_rate = 0 if rate is None else rate.stride(0)
+        self.s_rate = 0 if rate is None else _real(rate).stride(0)
 
     @property
     def grid(self) -> tuple[int, int, int]:
@@ -732,9 +1044,12 @@ def _forward(
     saved: torch.Tensor,
 ) -> None:
     """Phases 1-3 of one pair into ``y`` (contiguous ``(B, T, N, D)``) and
-    ``saved``: the chunk start states ``states()``, or in the arctic
-    semiring the bits ``states(2)``, ``int64``."""
+    ``saved``: the chunk start states ``states()`` (two planes,
+    ``states(2)``, in the complex semiring), or in the arctic semiring the
+    bits ``states(2)``, ``int64``."""
     SR = pair.SR
+    if SR == 3:
+        return _complex_forward(pair, prev, v, key, query, rate, y, saved)
     arctic = SR == 2
     start = (torch.empty(pair.states(), device=v.device, dtype=pair.dtype)
              if arctic else saved)
@@ -772,6 +1087,113 @@ def _forward(
     )
 
 
+def _complex_forward(
+    pair: _Pair,
+    prev: torch.Tensor | None,
+    v: torch.Tensor,
+    key: torch.Tensor | None,
+    query: torch.Tensor | None,
+    rate: torch.Tensor | None,
+    y: torch.Tensor,
+    saved: torch.Tensor,
+) -> None:
+    """:func:`_forward` in the complex semiring: the complex tensors go in
+    as real views, ``saved`` is ``states(2)``."""
+    common = dict(
+        INCLUSIVE=pair.inclusive, HAS_PREV=prev is not None,
+        HAS_K=key is not None, HAS_Q=query is not None,
+        HAS_RATE=rate is not None, ACC=pair.ACC, **pair.tiles(),
+    )
+    vr = _real(v)
+    args = (
+        pair.B, pair.T, pair.N, pair.D, pair.R, pair.C, pair.s_rate,
+        *_strides(vr), *_strides(key), *_strides(query), *(0,) * 9,
+    )
+    k = vr if key is None else key
+    q = vr if query is None else query
+    rt = vr if rate is None else _real(rate)
+    pv = vr if prev is None else _real(prev)
+    yr = _real(y)
+    if pair.C > 1:
+        end = torch.empty(pair.states(2), device=v.device, dtype=pair.dtype)
+        _complex_forward_kernel[pair.grid](
+            pv, vr, k, q, rt, yr, vr, vr, saved, end, *args,
+            MODE=0, **common,
+        )
+        _complex_prefix_kernel[pair.prefix_grid](
+            end, saved, rt, pair.B, pair.T, pair.N, pair.D, pair.R, pair.C,
+            pair.s_rate, HAS_RATE=rate is not None, REVERSE=False,
+            ACC=pair.ACC, U=pair.unroll, **pair.tiles(),
+        )
+    else:
+        saved.zero_()
+    _complex_forward_kernel[pair.grid](
+        pv, vr, k, q, rt, yr, vr, vr, saved, vr, *args,
+        MODE=1, **common,
+    )
+
+
+def _complex_backward(
+    pair: _Pair,
+    dy: torch.Tensor,
+    saved: torch.Tensor,
+    prev: torch.Tensor | None,
+    v: torch.Tensor,
+    key: torch.Tensor | None,
+    query: torch.Tensor | None,
+    rate: torch.Tensor | None,
+    dv: torch.Tensor,
+    dprev: torch.Tensor | None,
+    dk: torch.Tensor | None,
+    dq: torch.Tensor | None,
+    has_key: bool,
+    has_query: bool,
+) -> None:
+    """:func:`_backward` in the complex semiring: ``dy``, ``dv`` and
+    ``dprev`` are complex, ``dk`` and ``dq`` real."""
+    device = dy.device
+    grid = pair.grid
+    common = dict(
+        INCLUSIVE=pair.inclusive, HAS_PREV=prev is not None,
+        HAS_K=has_key, HAS_Q=has_query, HAS_RATE=rate is not None,
+        ACC=pair.ACC, **pair.tiles(),
+    )
+    vr, dyr, dvr = _real(v), _real(dy), _real(dv)
+    k = dvr if key is None else key
+    q = dvr if query is None else query
+    rt = dvr if rate is None else _real(rate)
+    pv = dvr if prev is None else _real(prev)
+    if dq is not None:
+        _complex_forward_kernel[grid](
+            pv, vr, k, q, rt, dvr, dyr, dq, saved, dvr,
+            pair.B, pair.T, pair.N, pair.D, pair.R, pair.C, pair.s_rate,
+            *_strides(vr), *_strides(key), *_strides(query), *_strides(dyr),
+            *_strides(dq, 5), MODE=2, **common,
+        )
+    start = torch.zeros(pair.states(2), device=device, dtype=pair.dtype)
+    args = (
+        pair.B, pair.T, pair.N, pair.D, pair.R, pair.C, pair.s_rate,
+        *_strides(vr), *_strides(key), *_strides(query), *_strides(dyr),
+        *_strides(dvr), *_strides(dk if dk is not None else dq, 5),
+    )
+    if pair.C > 1:
+        end = torch.empty_like(start)
+        _complex_reverse_kernel[grid](
+            dyr, pv, vr, k, q, rt, dvr, dvr, dvr, dvr, end, *args,
+            MODE=0, **common,
+        )
+        _complex_prefix_kernel[pair.prefix_grid](
+            end, start, rt, pair.B, pair.T, pair.N, pair.D, pair.R, pair.C,
+            pair.s_rate, HAS_RATE=rate is not None, REVERSE=True,
+            ACC=pair.ACC, U=pair.unroll, **pair.tiles(),
+        )
+    _complex_reverse_kernel[grid](
+        dyr, pv, vr, k, q, rt, dvr, dvr if dprev is None else _real(dprev),
+        dvr if dk is None else dk, start, dvr, *args,
+        MODE=1, **common,
+    )
+
+
 def _backward(
     pair: _Pair,
     dy: torch.Tensor,
@@ -797,6 +1219,10 @@ def _backward(
     backward reads only ``dy`` and the bits, and writes the rate gradient
     per head and chunk into ``drate`` (``(NDB, B, N, C)``) if given."""
     SR = pair.SR
+    if SR == 3:
+        assert v is not None
+        return _complex_backward(pair, dy, saved, prev, v, key, query, rate,
+                                 dv, dprev, dk, dq, has_key, has_query)
     device = dy.device
     grid = pair.grid
     out_strides = _strides(dk if dk is not None else dq, 5)
@@ -876,15 +1302,17 @@ def _rate_sums(
     delta: torch.Tensor | float,
 ) -> torch.Tensor:
     """``sum_s s incoming_s - sum_t (t - delta)^+ outgoing_t`` over batch
-    and time, in float64: ``(B, T, ...) -> (...)``."""
+    and time, in float64 (complex128 for complex sums): ``(B, T, ...) ->
+    (...)``."""
     T = incoming.shape[1]
     t = torch.arange(T, device=incoming.device, dtype=torch.float64)
     t = t.view((1, T) + (1,) * (incoming.ndim - 2))
     # t = 0 of an inner pair reads the empty state: no pair ends there.
     end = (t - delta).clamp_min(0.0)
+    wide = torch.complex128 if incoming.is_complex() else torch.float64
     return (
-        (t * incoming.double()).sum((0, 1))
-        - (end * outgoing.double()).sum((0, 1))
+        (t * incoming.to(wide)).sum((0, 1))
+        - (end * outgoing.to(wide)).sum((0, 1))
     )
 
 
@@ -896,26 +1324,50 @@ def rate_gradient(
     dy: torch.Tensor,
     query: torch.Tensor | None,
     dq: torch.Tensor | None,
+    y: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """``dL/d rate`` per head, ``(N,)``, in the reals and the log semiring.
+    """``dL/d rate`` per head, ``(N,)``, in the reals, the log semiring and
+    the complex numbers.
 
     The decay weighs a pair ``(t, s)`` by ``exp(-rate (t - delta - s))``, so
     ``dL/d rate = -sum_{t,s} (t - delta - s) c(t, s)`` over the pair
     contributions ``c``. Summed over ``s`` they are ``dy_t . y_t`` (reals)
     or ``dy_t`` (log domain), over ``t`` they are ``du_s . u_s`` or
-    ``du_s``, and in the reals ``dy_t . y_t = q_t . dq_t``. The sums over
-    time run in float64. Accurate to the error of the ``O(T)`` terms, the
-    same as autograd through the PyTorch path's ``exp(rate * t)``. (The
-    arctic kernels sum the carried gradient instead, which is exact.)
+    ``du_s``, and in the reals ``dy_t . y_t = q_t . dq_t``. With a complex
+    rate the contributions are ``conj(y_t) . dy_t`` and ``conj(u_s) .
+    du_s`` (the holomorphic chain rule in PyTorch's convention), which
+    needs ``y``. The sums over time run in float64. Accurate to the error
+    of the ``O(T)`` terms, the same as autograd through the PyTorch path's
+    ``exp(rate * t)``. (The arctic kernels sum the carried gradient
+    instead, which is exact.)
     """
     if semiring == "reals":
         assert dq is not None
         outgoing = (dq * query).sum(-1) if query is not None else dq[..., 0]
         incoming = (du * u).sum(-1)
+    elif semiring == "complex":
+        assert y is not None
+        outgoing = (y.conj() * dy).sum(-1)
+        incoming = (u.conj() * du).sum(-1)
     else:
         outgoing = dy.sum(-1)
         incoming = du.sum(-1)
     return _rate_sums(incoming, outgoing, 0.0 if inclusive else 1.0)
+
+
+def _saved_states(pair: _Pair, device: torch.device) -> torch.Tensor:
+    """What one pair's forward leaves for its backward: the chunk start
+    states (two planes in the complex semiring), or the arctic bits."""
+    if pair.SR == 2:
+        return torch.empty(pair.states(2), device=device, dtype=torch.int64)
+    return torch.empty(pair.states(2 if pair.SR == 3 else 0), device=device,
+                       dtype=pair.dtype)
+
+
+def _saved_shape(semiring: str, B: int, N: int, C: int, R: int, D: int,
+                 ) -> tuple[int, ...]:
+    planes = (2,) if semiring in ("arctic", "complex") else ()
+    return planes + (B * N, C, R, D)
 
 
 def _empty(like: torch.Tensor) -> torch.Tensor:
@@ -944,11 +1396,8 @@ def _level_scan_op(
     with torch.cuda.device(u.device):
         pair = _Pair(u, key, query, rate, semiring, inclusive)
         y = torch.empty((pair.B, pair.T, pair.N, pair.D), device=u.device,
-                        dtype=pair.dtype)
-        saved = (torch.empty(pair.states(2), device=u.device,
-                             dtype=torch.int64) if pair.SR == 2
-                 else torch.empty(pair.states(), device=u.device,
-                                  dtype=pair.dtype))
+                        dtype=pair.value_dtype)
+        saved = _saved_states(pair, u.device)
         _forward(pair, None, u, key, query, rate, y, saved)
         return y, saved
 
@@ -959,10 +1408,11 @@ def _(u, key, query, rate, semiring, inclusive):
     dtype, _ = _acc(u, key, query)
     R = _rank(key, query)
     C = -(-T // _chunk(T, semiring))
-    y = u.new_empty((B, T, N, D), dtype=dtype)
-    if semiring == "arctic":
-        return y, u.new_empty((2, B * N, C, R, D), dtype=torch.int64)
-    return y, u.new_empty((B * N, C, R, D), dtype=dtype)
+    y = u.new_empty((B, T, N, D), dtype=(
+        _complex_dtype(dtype) if semiring == "complex" else dtype))
+    saved_dtype = torch.int64 if semiring == "arctic" else dtype
+    return y, u.new_empty(_saved_shape(semiring, B, N, C, R, D),
+                          dtype=saved_dtype)
 
 
 @torch.library.custom_op("elissabeth::level_scan_backward", mutates_args=())
@@ -985,10 +1435,10 @@ def _level_scan_backward_op(
     with torch.cuda.device(u.device):
         pair = _Pair(u, key, query, rate, semiring, inclusive,
                      backward=True)
-        dy = dy.to(pair.dtype)
+        dy = dy.to(pair.value_dtype)
         shape = (pair.NDB, pair.B, pair.T, pair.N, pair.R)
         du = torch.empty((pair.B, pair.T, pair.N, pair.D), device=u.device,
-                         dtype=pair.dtype)
+                         dtype=pair.value_dtype)
         dk = (torch.empty(shape, device=u.device, dtype=pair.dtype)
               if key is not None else None)
         dq = (torch.empty(shape, device=u.device, dtype=pair.dtype)
@@ -1019,10 +1469,14 @@ def _(dy, y, saved, u, key, query, rate, semiring, inclusive, need_dq,
     dq = (_empty(u) if not need_dq
           else u.new_empty((B, T, N, R),
                            dtype=query.dtype if query is not None
-                           else u.dtype))
+                           else _real_dtype(u.dtype)))
     drate = (u.new_empty((N,), dtype=torch.float64)
              if need_rate and semiring == "arctic" else _empty(u))
     return du, dk, dq, drate
+
+
+SAVES_OUTPUT = ("log", "complex")
+"""Semirings whose backward reads the forward's output."""
 
 
 def _setup(ctx, inputs, output) -> None:
@@ -1031,7 +1485,7 @@ def _setup(ctx, inputs, output) -> None:
     ctx.semiring = semiring
     ctx.inclusive = inclusive
     ctx.save_for_backward(
-        u, key, query, rate, y if semiring == "log" else None, saved,
+        u, key, query, rate, y if semiring in SAVES_OUTPUT else None, saved,
     )
 
 
@@ -1045,7 +1499,7 @@ def _scan_backward(ctx, dy: torch.Tensor, _: torch.Tensor):
     )
     if need_rate and ctx.semiring != "arctic":
         drate = rate_gradient(
-            ctx.semiring, ctx.inclusive, u, du, dy, query, dq,
+            ctx.semiring, ctx.inclusive, u, du, dy, query, dq, y,
         )
     return (
         du,
@@ -1073,9 +1527,12 @@ def level_scan(
     ``u`` is ``(B|1, T, N|1, d_v, w)``, ``key`` and ``query`` are
     ``(B|1, T|1, N|1, R)`` or ``None`` (rank 1, factor one), ``rate`` is
     ``(N,)`` or ``None``. Broadcast axes are expanded as views, and the
-    gradients are summed back over them by autograd.
+    gradients are summed back over them by autograd. In the complex
+    semiring ``u`` and ``rate`` are complex (a real one is cast), the
+    factors real.
     """
     d_v, w = u.shape[-2:]
+    u, rate = _as_complex(semiring, u, rate)
     B, T, N = torch.broadcast_shapes(
         u.shape[:3],
         *(a.shape[:3] for a in (key, query) if a is not None),
@@ -1091,6 +1548,22 @@ def level_scan(
         rate = rate.contiguous()
     y, _ = _level_scan_op(flat, key, query, rate, semiring, inclusive)
     return y.unflatten(-1, (d_v, w))
+
+
+def _as_complex(
+    semiring: str,
+    values: torch.Tensor,
+    rate: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """The values and the rate as complex tensors in the complex semiring
+    (a decay without a rotation gives a real rate); unchanged elsewhere."""
+    if semiring != "complex":
+        return values, rate
+    if not values.is_complex():
+        values = values.to(_complex_dtype(values.dtype))
+    if rate is not None and not rate.is_complex():
+        rate = rate.to(_complex_dtype(rate.dtype))
+    return values, rate
 
 
 # --------------------------------------------------------------------------
@@ -1117,16 +1590,18 @@ def _level_chain_op(
         first = _Pair(v[:, :, :, 0], _pair_of(key, 0), _pair_of(query, 0),
                       None, semiring, False, rank=_rank(key, query))
         arctic = first.SR == 2
-        y = torch.empty((B, T, N, D), device=v.device, dtype=first.dtype)
-        saved = (torch.empty((P,) + first.states(2), device=v.device,
-                             dtype=torch.int64) if arctic
-                 else torch.empty((P,) + first.states(), device=v.device,
-                                  dtype=first.dtype))
+        y = torch.empty((B, T, N, D), device=v.device,
+                        dtype=first.value_dtype)
+        saved = torch.empty(
+            (P,) + _saved_shape(semiring, B, N, first.C, first.R, D),
+            device=v.device,
+            dtype=torch.int64 if arctic else first.dtype,
+        )
         inner = 0 if arctic else P - 1
         ys = torch.empty((inner, B, T, N, D), device=v.device,
-                         dtype=first.dtype)
+                         dtype=first.value_dtype)
         scratch = (torch.empty((min(P - 1, 2), B, T, N, D), device=v.device,
-                               dtype=first.dtype) if arctic else ys)
+                               dtype=first.value_dtype) if arctic else ys)
         prev = None
         for l in range(P):
             rate_l = None if rate is None else rate[:, l]
@@ -1146,12 +1621,13 @@ def _(v, key, query, rate, semiring):
     dtype, _ = _acc(v, key, query)
     R = _rank(key, query)
     C = -(-T // _chunk(T, semiring))
-    y = v.new_empty((B, T, N, D), dtype=dtype)
-    if semiring == "arctic":
-        return (y, v.new_empty((P, 2, B * N, C, R, D), dtype=torch.int64),
-                v.new_empty((0, B, T, N, D), dtype=dtype))
-    return (y, v.new_empty((P, B * N, C, R, D), dtype=dtype),
-            v.new_empty((P - 1, B, T, N, D), dtype=dtype))
+    value_dtype = _complex_dtype(dtype) if semiring == "complex" else dtype
+    y = v.new_empty((B, T, N, D), dtype=value_dtype)
+    arctic = semiring == "arctic"
+    saved = v.new_empty((P,) + _saved_shape(semiring, B, N, C, R, D),
+                        dtype=torch.int64 if arctic else dtype)
+    return y, saved, v.new_empty((0 if arctic else P - 1, B, T, N, D),
+                                 dtype=value_dtype)
 
 
 def _pairs_last(a: torch.Tensor) -> torch.Tensor:
@@ -1186,19 +1662,21 @@ def _level_chain_backward_op(
     P = saved.shape[0]
     SR = SEMIRINGS[semiring]
     device = dy.device
+    # the values' dtype (complex in the complex semiring), the factors'
     dtype = dy.dtype
+    real = _real_dtype(dtype)
     with torch.cuda.device(device):
         dv = torch.empty((P, B, T, N, D), device=device, dtype=dtype)
         probe = _Pair(dy, None, None, None, semiring, False, dtype=dtype,
                       rank=rank, backward=True)
         out = (P, probe.NDB, B, T, N, rank)
-        dk = torch.empty(out, device=device, dtype=dtype) if has_key else None
+        dk = torch.empty(out, device=device, dtype=real) if has_key else None
         need_dq = has_query or (SR == 0 and need_rate)
-        dq = torch.empty(out, device=device, dtype=dtype) if need_dq else None
+        dq = torch.empty(out, device=device, dtype=real) if need_dq else None
         dprev = (torch.empty((min(P - 1, 2), B, T, N, D), device=device,
-                             dtype=dtype) if SR == 0 and P > 1 else None)
+                             dtype=dtype) if SR in (0, 3) and P > 1 else None)
         drate = (torch.empty((P, probe.NDB, B, N, probe.C), device=device,
-                             dtype=dtype) if need_rate and SR == 2 else None)
+                             dtype=real) if need_rate and SR == 2 else None)
         grad = dy
         for l in reversed(range(P)):
             rate_l = None if rate is None else rate[:, l]
@@ -1214,7 +1692,7 @@ def _level_chain_backward_op(
                 None if dk is None else dk[l], None if dq is None else dq[l],
                 has_key, has_query, None if drate is None else drate[l],
             )
-            grad = dprev_l if SR == 0 else dv[l]
+            grad = dprev_l if SR in (0, 3) else dv[l]
     return (
         _pairs_last(dv),
         _empty(dy) if dk is None else _pairs_last(dk.sum(1)),
@@ -1230,11 +1708,12 @@ def _(dy, y, saved, ys, v, key, query, rate, semiring, rank, has_key,
     B, T, N, D = dy.shape
     P = saved.shape[0]
     out = (P, B, T, N, rank)
+    real = _real_dtype(dy.dtype)
     need_dq = has_query or (semiring == "reals" and need_rate)
     return (
         _pairs_last(dy.new_empty((P, B, T, N, D))),
-        _pairs_last(dy.new_empty(out)) if has_key else _empty(dy),
-        _pairs_last(dy.new_empty(out)) if need_dq else _empty(dy),
+        _pairs_last(dy.new_empty(out, dtype=real)) if has_key else _empty(dy),
+        _pairs_last(dy.new_empty(out, dtype=real)) if need_dq else _empty(dy),
         dy.new_empty((N, P), dtype=torch.float64)
         if need_rate and semiring == "arctic" else _empty(dy),
     )
@@ -1246,20 +1725,28 @@ def _chain_rate_gradient(
     dv: torch.Tensor,
     dy: torch.Tensor,
     query: torch.Tensor | None,
-    dq: torch.Tensor,
+    dq: torch.Tensor | None,
+    y: torch.Tensor | None,
 ) -> torch.Tensor:
     """:func:`rate_gradient` for every pair of a level at once, ``(N, p)``.
     In the reals ``du . u = dv . v`` (``u = y_prev v``, ``dv = du y_prev``);
-    in the log semiring the gradient reaching pair ``l``'s output is the
-    gradient of pair ``l + 1``'s values."""
+    in the log semiring and the complex numbers the gradient reaching pair
+    ``l``'s output is the gradient of pair ``l + 1``'s values (complex:
+    ``conj(y_l) . dprev = conj(u_{l+1}) . du_{l+1}``)."""
     P = dv.shape[3]
     if semiring == "reals":
+        assert dq is not None
         incoming = (dv * v).sum(-1)
         outgoing = (dq * query).sum(-1) if query is not None else dq[..., 0]
     else:
-        incoming = dv.sum(-1)
-        outgoing = torch.cat((incoming[..., 1:], dy.sum(-1, keepdim=True)),
-                             -1)
+        if semiring == "complex":
+            assert y is not None
+            incoming = (v.conj() * dv).sum(-1)
+            last = (y.conj() * dy).sum(-1, keepdim=True)
+        else:
+            incoming = dv.sum(-1)
+            last = dy.sum(-1, keepdim=True)
+        outgoing = torch.cat((incoming[..., 1:], last), -1)
     delta = torch.ones(P, device=dv.device, dtype=torch.float64)
     delta[-1] = 0.0
     return _rate_sums(incoming, outgoing, delta)
@@ -1278,20 +1765,22 @@ def _chain_setup(ctx, inputs, output) -> None:
         ctx.save_for_backward(None, None, None, rate, None, saved, ys)
     else:
         ctx.save_for_backward(v, key, query, rate,
-                              y if semiring == "log" else None, saved, ys)
+                              y if semiring in SAVES_OUTPUT else None,
+                              saved, ys)
 
 
 def _chain_backward(ctx, dy: torch.Tensor, *_):
     v, key, query, rate, y, saved, ys = ctx.saved_tensors
     need_rate = rate is not None and ctx.needs_input_grad[3]
-    dtype = dy.dtype if ctx.semiring == "arctic" else saved.dtype
+    # the values' dtype: the arctic backward reads no values and takes dy's
+    dtype = dy.dtype if ctx.semiring == "arctic" else ys.dtype
     dy = dy.contiguous().to(dtype)
     dv, dk, dq, drate = _level_chain_backward_op(
         dy, y, saved, ys, v, key, query, rate, ctx.semiring, ctx.rank,
         ctx.has_key, ctx.has_query, need_rate,
     )
     if need_rate and ctx.semiring != "arctic":
-        drate = _chain_rate_gradient(ctx.semiring, v, dv, dy, query, dq)
+        drate = _chain_rate_gradient(ctx.semiring, v, dv, dy, query, dq, y)
     v_dtype, k_dtype, q_dtype = ctx.dtypes
     return (
         dv.to(v_dtype),
@@ -1319,12 +1808,14 @@ def level_chain(
     ``v`` is ``(B|1, T, N|1, p|1, d_v, 1)``, ``key`` and ``query`` are
     ``(B|1, T|1, N|1, p, R)`` or ``None``, ``rate`` is ``(N, p)`` or
     ``None``. Broadcast axes are expanded as views, and the gradients are
-    summed back over them by autograd.
+    summed back over them by autograd. In the complex semiring ``v`` and
+    ``rate`` are complex (a real one is cast), the factors real.
     """
     p = max(a.shape[3] for a in (v, key, query) if a is not None)
     if rate is not None:
         p = max(p, rate.shape[1])
     d_v = v.shape[-2]
+    v, rate = _as_complex(semiring, v, rate)
     B, T, N = torch.broadcast_shapes(
         v.shape[:3],
         *(a.shape[:3] for a in (key, query) if a is not None),

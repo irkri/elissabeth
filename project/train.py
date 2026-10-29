@@ -10,9 +10,9 @@ import torch
 from elissabeth.config import (load_runconfig, load_saved_runconfig,
                                parse_overrides, read_mapping, save_runconfig)
 from elissabeth.data import ElissabethDataModule
-from elissabeth.lightning import (CONFIG_NAME, ElissabethLightningModule,
-                                  find_run_dir, latest_checkpoint,
-                                  new_run_dir)
+from elissabeth.lightning import (CONFIG_NAME, FINISHED_NAME,
+                                  ElissabethLightningModule, find_run_dir,
+                                  latest_checkpoint, new_run_dir)
 
 CHECKPOINTS_ENV = "ELISSABETH_CHECKPOINTS"
 # Where run directories are written; $ELISSABETH_CHECKPOINTS overrides the
@@ -108,6 +108,8 @@ def run(args: argparse.Namespace) -> None:
         datamodule=ElissabethDataModule(config.dataset),
         ckpt_path=None if ckpt_path is None else str(ckpt_path),
     )
+    if trainer.state.status == "finished" and trainer.is_global_zero:
+        (run_dir / FINISHED_NAME).write_text(f"{trainer.current_epoch}\n")
 
 
 def main() -> None:

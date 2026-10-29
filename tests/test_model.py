@@ -2,6 +2,7 @@
 baseline, the thesis tasks, compiling, and a short training run."""
 import itertools
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -12,7 +13,8 @@ from elissabeth import (BidirectionalLISS, Elissabeth, ElissabethConfig,
                         ElissabethDataModule, ElissabethLightningModule,
                         LISSConfig, load_runconfig, load_saved_runconfig,
                         parse_overrides, save_runconfig)
-from elissabeth.data import CopyingTask, CyclicTask, LookupTask
+from elissabeth.data import (CopyingTask, CyclicTask, DatasetConfig,
+                             LookupTask, Task, register_task)
 
 CONFIGS = Path(__file__).parents[1] / "project" / "configs"
 
@@ -180,6 +182,52 @@ def test_input_type_follows_the_task() -> None:
                        overrides={"model": {"input_type": "vector"}})
 
 
+@register_task
+class _ConstantTask(Task):
+    """A task defined outside the package, registered by its module."""
+
+    name: Literal["constant"] = "constant"
+    length: int = 6
+    needs_seed: bool = False
+
+    @property
+    def input_dim(self) -> int:
+        return 3
+
+    @property
+    def output_dim(self) -> int:
+        return 3
+
+    def generate(self, n: int, rng: np.random.Generator):
+        x = np.ones((n, self.length), dtype=np.int64)
+        return x, x.copy()
+
+    def check_dataset(self, dataset: DatasetConfig) -> None:
+        if self.needs_seed and dataset.seed is None:
+            raise ValueError("this task needs dataset.seed")
+
+
+def test_registered_tasks(tmp_path: Path) -> None:
+    """A registered task is read by name, saved with every field, and may
+    refuse dataset settings; an unknown name lists the known ones."""
+    task = {"name": "constant", "length": 7}
+    data = yaml.safe_load((CONFIGS / "copying.yaml").read_text())
+    data["dataset"]["task"] = task
+    data["model"]["context_length"] = 7
+    (tmp_path / "constant.yaml").write_text(yaml.safe_dump(data))
+    config = load_runconfig(tmp_path / "constant.yaml")
+    assert isinstance(config.dataset.task, _ConstantTask)
+    assert config.dataset.task.length == 7
+    save_runconfig(config, tmp_path / "config.yaml")
+    assert load_runconfig(tmp_path / "config.yaml") == config
+    with pytest.raises(ValueError, match="dataset.seed"):
+        DatasetConfig(task={**task, "needs_seed": True})
+    with pytest.raises(ValueError, match="'copying'"):
+        DatasetConfig(task={"name": "nothing"})
+    with pytest.raises(ValueError, match="registered already"):
+        register_task(type("Other", (_ConstantTask,), {}))
+
+
 def test_old_run_configs_stay_causal(tmp_path: Path) -> None:
     """A run saved before ``bidirectional`` existed trained a causal LISS;
     loading its config.yaml must rebuild that model, not the new default."""
@@ -203,8 +251,7 @@ def test_longer_than_context_length() -> None:
 def test_compile_fullgraph_dynamic_batch(mixer: str) -> None:
     torch._dynamo.reset()
     if mixer == "bidirectional":
-        # the Tropical Attention setup: vectors in, a bidirectional arctic
-        # layer with a rank-R kernel
+        # vectors in, a bidirectional arctic layer with a rank-R kernel
         config = ElissabethConfig(
             d_hidden=8, context_length=12, input_type="vector",
             liss={"d_values": 4, "n_is": 2, "lengths": [2, 3],

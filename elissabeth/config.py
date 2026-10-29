@@ -67,8 +67,9 @@ class RunConfig(ModelConfig):
     @model_validator(mode="after")
     def _match_task(self) -> "RunConfig":
         """The model reads what the task produces (``model.input_type`` is
-        filled in unless given), and a task whose targets are later inputs
-        gets a causal model."""
+        filled in unless given), a task whose targets are later inputs gets
+        a causal model, and one whose targets are its inputs an
+        autoencoder."""
         if "input_type" not in self.model.model_fields_set:
             self.model.input_type = self.dataset.input_type
         elif self.model.input_type != self.dataset.input_type:
@@ -83,6 +84,13 @@ class RunConfig(ModelConfig):
                 " a bidirectional model sees its targets: set"
                 " model.liss.bidirectional (or model.attention.bidirectional)"
                 " to false."
+            )
+        if self.dataset.task.autoencoder != (self.model.decoder is not None):
+            raise ValueError(
+                f"model.decoder is for tasks whose targets are their inputs"
+                f" (autoencoders): the {self.dataset.task.name} task"
+                f" {'needs' if self.dataset.task.autoencoder else 'takes no'}"
+                " decoder."
             )
         return self
 

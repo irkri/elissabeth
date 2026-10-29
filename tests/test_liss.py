@@ -569,25 +569,23 @@ def test_rotation_is_complex_only(semiring: str) -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
-def test_complex_scan_on_lrutorch_matches_the_fallback() -> None:
-    """In float32 on CUDA the complex scan is lrutorch's Triton kernel;
-    against the rescaled-cumsum fallback, forward and gradients."""
-    pytest.importorskip("lrutorch")
+def test_complex_level_scan_matches_the_pytorch_scan() -> None:
+    """The fused complex scan of one pair (``scan: triton``) against the
+    PyTorch path's rescaled cumsum, in float32: forward and gradients.
+    ``test_triton.py`` covers whole levels in float64."""
     from elissabeth.liss import semiring as sr
+    from elissabeth.liss.scan_triton import level_scan
     torch.manual_seed(0)
-    u = torch.randn(2, 300, 3, 2, 4, 1, dtype=torch.complex64, device="cuda")
+    u = torch.randn(2, 300, 3, 8, 1, dtype=torch.complex64, device="cuda")
     rate = torch.complex(torch.rand(3) * 0.05, torch.randn(3)).cuda()
     results = []
-    for use in (True, False):
+    for fused in (True, False):
         ui = u.clone().requires_grad_()
         ri = rate.clone().requires_grad_()
-        lru = sr._lru_scan
-        if not use:
-            sr._lru_scan = lambda: None
-        try:
+        if fused:
+            h = level_scan(ui, None, None, ri, "complex", inclusive=True)
+        else:
             h = sr.scan(ui, "complex", ri, max_rate=0.05)
-        finally:
-            sr._lru_scan = lru
         (h.real.sum() + 2 * h.imag.sum()).backward()
         results.append((h.detach(), ui.grad, ri.grad))
     for a, b in zip(*results):

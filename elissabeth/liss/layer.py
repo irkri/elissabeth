@@ -47,7 +47,7 @@ from .projection import Projection, ValuesConfig
 from .semiring import (LOG_DOMAIN, T_Semiring, add, multiply, scan,
                        scan_indices, shift)
 
-TRITON_SEMIRINGS = ("reals", "log", "arctic")
+TRITON_SEMIRINGS = ("reals", "log", "arctic", "complex")
 """The semirings ``scan: triton`` has kernels for."""
 
 
@@ -73,8 +73,8 @@ class LISSConfig(ModelConfig):
     scan: Literal["torch", "triton"] = "torch"
     """How a level evaluates its scans: the PyTorch path, or one fused
     Triton kernel per pair that never stores the ``R``-wide state (CUDA;
-    reals, log and arctic, the others fall back to PyTorch). Same function,
-    same parameters, so a run can switch between them."""
+    reals, log, arctic and complex, bayesian falls back to PyTorch). Same
+    function, same parameters, so a run can switch between them."""
     bidirectional: bool = True
     """A second LISS of its own reads the sequence backwards and the two
     outputs are added (:class:`BidirectionalLISS`). Turn it off for a
@@ -172,6 +172,13 @@ class LISSLevel(HookedModule):
         for kernel in self.kernels:
             rank *= kernel.rank
         return rank
+
+    @property
+    def state_size(self) -> int:
+        """Numbers the recursion carries from one position to the next:
+        ``p`` prefix states ``S_l`` of ``N R d_v w`` entries each, real and
+        imaginary parts counted separately."""
+        return self.p * self.n_is * self.rank * math.prod(self.value_shape)
 
     def projections(self) -> list[Projection]:
         """The level's projections of ``x``: the values, then each kernel's

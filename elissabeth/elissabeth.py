@@ -1,3 +1,4 @@
+import math
 from typing import Literal
 
 import torch
@@ -8,7 +9,7 @@ from torch import nn
 from .attention import AttentionConfig, SelfAttention
 from .config import ModelConfig
 from .hooks import HookedModule
-from .liss import LISSConfig, build_liss
+from .liss import LISSConfig, LISSLevel, build_liss
 
 
 class FFNConfig(ModelConfig):
@@ -28,6 +29,31 @@ class SwiGLU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.Z(F.silu(self.W(x)) * self.V(x))
+
+
+class DecoderConfig(ModelConfig):
+    """The read-out of an autoencoder (for compression tasks): the stream
+    is pooled to one vector (``pooling``), a
+    sinusoidal position embedding is added for every output position, and
+    ``layers`` x [norm, Linear, GELU] decode each of them."""
+
+    layers: int = 2
+
+
+def sinusoidal(T: int, d: int, device: torch.device) -> torch.Tensor:
+    """``(T, d)``: ``sin`` of ``t w_i`` in the first half, ``cos`` in the
+    second, ``w_i = 10000^{-i/(d/2-1)}``."""
+    half = d // 2
+    frequency = torch.exp(
+        torch.arange(half, device=device, dtype=torch.float32)
+        * -(math.log(10000) / (half - 1))
+    )
+    angle = torch.arange(T, device=device, dtype=torch.float32)[:, None] \
+        * frequency
+    embedding = torch.cat((torch.sin(angle), torch.cos(angle)), dim=1)
+    if d % 2:
+        embedding = F.pad(embedding, (0, 1))
+    return embedding
 
 
 class ElissabethConfig(ModelConfig):
@@ -56,6 +82,9 @@ class ElissabethConfig(ModelConfig):
     """How a per-sequence target reads the output (:meth:`Elissabeth.pool`):
     at the last position, where a causal model has seen the whole sequence,
     or averaged over positions, for a bidirectional one."""
+    decoder: DecoderConfig | None = None
+    """An autoencoder: every output position is decoded from the pooled
+    stream (for tasks whose targets are their inputs)."""
 
     @model_validator(mode="after")
     def _one_mixer(self) -> "ElissabethConfig":
@@ -111,6 +140,12 @@ class Elissabeth(HookedModule):
             if config.ffn is not None else []
         )
         self.ffn_norms = nn.ModuleList([norm() for _ in self.ffns])
+        self.decoder: nn.Module | None = None
+        if config.decoder is not None:
+            self.decoder = nn.Sequential(*(
+                module for _ in range(config.decoder.layers)
+                for module in (norm(), nn.Linear(d, d), nn.GELU())
+            ))
         self.final_norm = norm()
         self.unembedding = nn.Linear(d, output_dim, bias=False)
         nn.init.xavier_normal_(self.unembedding.weight)
@@ -131,11 +166,27 @@ class Elissabeth(HookedModule):
             if self.ffns:
                 x = self._block(x, self.ffns[i], self.ffn_norms[i])
             x = self.hook(f"layer_{i}", x)
+        if self.decoder is not None:
+            T, d = x.shape[1], x.shape[2]
+            x = self.pool(x)[:, None] \
+                + sinusoidal(T, d, x.device).to(x.dtype)
+            x = self.decoder(x)
         return self.unembedding(self.final_norm(x))
 
-    def pool(self, logits: torch.Tensor) -> torch.Tensor:
-        """The per-sequence output ``(B, C)`` of the logits ``(B, T, C)``,
-        by ``config.pooling``."""
+    def state_size(self) -> int | None:
+        """The recurrent state of all mixers (:attr:`LISSLevel.state_size`,
+        both directions); ``None`` for attention, whose cache grows with
+        the sequence."""
+        if self.config.liss is None:
+            return None
+        return sum(
+            level.state_size for level in self.modules()
+            if isinstance(level, LISSLevel)
+        )
+
+    def pool(self, x: torch.Tensor) -> torch.Tensor:
+        """``(B, T, C) -> (B, C)`` by ``config.pooling``: the per-sequence
+        output of the logits, or the decoder's input from the stream."""
         if self.config.pooling == "mean":
-            return logits.mean(1)
-        return logits[:, -1]
+            return x.mean(1)
+        return x[:, -1]

@@ -206,42 +206,17 @@ def _cumulate_complex(x: torch.Tensor) -> torch.Tensor:
     )
 
 
-def _lru_scan():
-    """lrutorch's Triton scan of ``h_t = lambda h_{t-1} + u_t`` with a
-    complex ``lambda`` per channel, if lrutorch is installed."""
-    try:
-        from lrutorch.scan_triton import lru_scan_triton
-    except ImportError:
-        return None
-    return lru_scan_triton
-
-
 def _scan_complex(
     u: torch.Tensor,
     rate: torch.Tensor | None,
     max_rate: float,
 ) -> torch.Tensor:
     """:func:`scan` in the complex semiring, ``lambda = exp(-rate)`` with
-    ``rate`` complex (a decay that rotates) or real. On CUDA in float32 it
-    runs lrutorch's Triton scan (one channel per head and entry), which
-    neither stores nor overflows ``exp(rate * t)``; otherwise the rescaled
-    cumsum or, past :data:`EXP_TRICK_LIMIT`, Hillis-Steele."""
+    ``rate`` complex (a decay that rotates) or real: the rescaled cumsum
+    or, past :data:`EXP_TRICK_LIMIT`, Hillis-Steele. (``scan: triton``
+    runs the fused complex kernels instead.)"""
     if rate is None:
         return _cumulate_complex(u)
-    lru_scan = _lru_scan() if u.is_cuda and u.dtype == torch.complex64 \
-        else None
-    if lru_scan is not None:
-        B, T, N = u.shape[0], u.shape[1], rate.shape[0]
-        u = u.expand(B, T, N, *u.shape[3:])
-        lam = torch.exp(-rate.to(u.dtype)).view(N, 1).expand(
-            N, u[0, 0].numel() // N,
-        ).reshape(-1)
-        x = u.reshape(B, T, -1)
-        hr, hi = lru_scan(
-            lam.real.contiguous(), lam.imag.contiguous(),
-            x.real.contiguous(), x.imag.contiguous(),
-        )
-        return torch.complex(hr, hi).reshape(u.shape)
     t = _time(u)
     rate = _per_head(rate.to(u.dtype), u)
     if max_rate * (u.shape[1] - 1) <= EXP_TRICK_LIMIT:

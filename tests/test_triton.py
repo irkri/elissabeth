@@ -41,12 +41,22 @@ def make_pair(semiring: str, kernels: list[dict], p: int = 3,
     return ref.cuda(), fused.cuda()
 
 
+def _weights(out: torch.Tensor, g: torch.Generator) -> torch.Tensor:
+    """A random linear functional on the output; complex for a complex
+    output, so both parts of every gradient are checked."""
+    r = torch.randn(out.shape, generator=g)
+    if out.is_complex():
+        r = torch.complex(r, torch.randn(out.shape, generator=g))
+    return r.to(out.device, out.dtype)
+
+
 def gradients(level: LISSLevel, x: torch.Tensor, r: torch.Tensor,
               ) -> dict[str, torch.Tensor]:
     level.zero_grad(set_to_none=True)
     x = x.detach().requires_grad_()
     out = level(x)
-    (out * r).sum().backward()
+    loss = (out * r).sum()
+    (loss.real if loss.is_complex() else loss).backward()
     grads = {"out": out.detach(), "x": x.grad}
     for name, param in level.named_parameters():
         if param.grad is not None:
@@ -61,7 +71,7 @@ def compare(ref: LISSLevel, fused: LISSLevel, B: int, T: int,
     fused.to(dtype)
     g = torch.Generator().manual_seed(1)
     x = torch.randn(B, T, 4, generator=g).to("cuda", dtype)
-    r = torch.randn(ref(x).shape, generator=g).to("cuda", dtype)
+    r = _weights(ref(x), g)
     assert fused.fused(x) and not ref.fused(x)
     want = gradients(ref, x, r)
     got = gradients(fused, x, r)
@@ -91,6 +101,15 @@ CASES = [
              {"type": "exponential", "d_qk": 3, "share_queries": True}]),
     ("log", [{"type": "decay", "alpha_0": -2}]),
     ("log", []),
+    # the complex numbers: a decay that rotates, alone, next to a feature
+    # kernel, a rotation on its own and a real decay (no rotation)
+    ("complex", [{"type": "decay", "alpha_0": 3}, {"type": "rotation"}]),
+    ("complex", [{"type": "decay", "alpha_0": 1}, {"type": "rotation"},
+                 {"type": "cosine", "d_qk": 2}]),
+    ("complex", [{"type": "rotation", "shared": True},
+                 {"type": "exponential", "d_qk": 2, "restrict": True}]),
+    ("complex", [{"type": "decay", "alpha_0": 2}]),
+    ("complex", []),
 ]
 
 
@@ -101,7 +120,7 @@ def test_matches_pytorch(semiring: str, kernels: list[dict], T: int) -> None:
     compare(ref, fused, B=2, T=T)
 
 
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 @pytest.mark.parametrize("p", [1, 2, 4])
 def test_depths(semiring: str, p: int) -> None:
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
@@ -110,7 +129,7 @@ def test_depths(semiring: str, p: int) -> None:
     compare(ref, fused, B=3, T=130)
 
 
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 def test_heads_not_filling_the_last_program(semiring: str) -> None:
     """A program scans several heads; 11 heads leave the last block of 8
     (or 16) partly empty."""
@@ -120,7 +139,7 @@ def test_heads_not_filling_the_last_program(semiring: str) -> None:
     compare(ref, fused, B=2, T=150)
 
 
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 def test_matrix_values(semiring: str) -> None:
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
                                       {"type": "exponential"}],
@@ -128,7 +147,7 @@ def test_matrix_values(semiring: str) -> None:
     compare(ref, fused, B=2, T=70)
 
 
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 def test_wide_values_split_over_programs(semiring: str) -> None:
     """``d_v * w`` beyond one tile: the value axis is split over programs
     and ``dk``, ``dq`` are summed over them."""
@@ -142,6 +161,7 @@ def test_wide_values_split_over_programs(semiring: str) -> None:
 @pytest.mark.parametrize("semiring,normalize", [
     ("reals", "mean"), ("reals", "sqrt"), ("reals", "learnable"),
     ("log", "mean"), ("log", "learnable"),
+    ("complex", "mean"), ("complex", "learnable"),
 ])
 def test_normalize(semiring: str, normalize: str) -> None:
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 2},
@@ -151,7 +171,7 @@ def test_normalize(semiring: str, normalize: str) -> None:
 
 
 @pytest.mark.parametrize("shared", ["share_values", "values_shared"])
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 def test_shared_values(semiring: str, shared: str) -> None:
     ref, fused = make_pair(
         semiring, [{"type": "exponential"}],
@@ -161,27 +181,37 @@ def test_shared_values(semiring: str, shared: str) -> None:
     compare(ref, fused, B=2, T=70)
 
 
-@pytest.mark.parametrize("semiring", ["reals", "log", "arctic"])
+@pytest.mark.parametrize("semiring", ["reals", "log", "arctic", "complex"])
 def test_long_sequences_use_longer_chunks(semiring: str) -> None:
-    """Past 8192 positions the reals and log scans take 128-step chunks
-    (arctic stays at 64); the float32 result stays within float32 rounding
-    of the float64 one."""
+    """Past 8192 positions the reals, log and complex scans take 128-step
+    chunks (arctic stays at 64); the float32 result stays within float32
+    rounding of the float64 one."""
     ref, fused = make_pair(semiring, [{"type": "decay", "alpha_0": 40},
                                       {"type": "exponential", "d_qk": 2}],
                            p=2, context_length=10_000)
     compare(ref, fused, B=1, T=10_000, rtol=1e-7, atol=1e-8)
     ref64 = gradients(ref.double(), *_inputs(ref, 1, 10_000))
-    got32 = gradients(fused.float(), *[a.float() for a in _inputs(ref, 1,
-                                                                10_000)])
+    got32 = gradients(fused.float(), *[_narrow(a) for a in _inputs(ref, 1,
+                                                                 10_000)])
     for name, want in ref64.items():
-        error = (got32[name].double() - want).norm() / want.norm()
+        error = (_wide(got32[name]) - want).norm() / want.norm()
         assert error < 1e-4, (name, error.item())
+
+
+def _narrow(a: torch.Tensor) -> torch.Tensor:
+    """To single precision, complex or real (``.float()`` would drop the
+    imaginary part)."""
+    return a.to(torch.complex64 if a.is_complex() else torch.float32)
+
+
+def _wide(a: torch.Tensor) -> torch.Tensor:
+    return a.to(torch.complex128 if a.is_complex() else torch.float64)
 
 
 def _inputs(level: LISSLevel, B: int, T: int) -> tuple[torch.Tensor, ...]:
     g = torch.Generator().manual_seed(2)
     x = torch.randn(B, T, 4, generator=g).cuda().double()
-    r = torch.randn(level(x).shape, generator=g).cuda().double()
+    r = _weights(level(x), g)
     return x, r
 
 
@@ -199,6 +229,8 @@ def test_bayesian_and_cpu_take_the_pytorch_path() -> None:
     ("reals", [{"type": "decay"}, {"type": "cosine", "d_qk": 3}]),
     ("arctic", [{"type": "decay"}, {"type": "exponential", "d_qk": 2}]),
     ("log", [{"type": "decay"}, {"type": "exponential", "d_qk": 2}]),
+    ("complex", [{"type": "decay"}, {"type": "rotation"},
+                 {"type": "cosine", "d_qk": 2}]),
 ])
 def test_compiles_with_a_dynamic_batch(semiring: str,
                                        kernels: list[dict]) -> None:

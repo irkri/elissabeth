@@ -1,6 +1,6 @@
-"""The synthetic tasks from the thesis, a character-level text task and the
-Tropical Attention benchmark (:mod:`.tropical`), generated in memory and
-served by one Lightning data module.
+"""The synthetic tasks from the thesis and a character-level text task,
+generated in memory and served by one Lightning data module. Other tasks
+join through :func:`register_task`.
 
 Every task returns inputs ``x`` of shape ``(n, T)`` (int64 tokens) or
 ``(n, T, F)`` (float vectors) and targets ``y`` of shape ``(n, T)`` (one per
@@ -11,12 +11,12 @@ or a real number for ``regression`` (``NaN`` = ignored in both).
 """
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Any, Literal
 
 import lightning.pytorch as L
 import numpy as np
 import torch
-from pydantic import Field, model_validator
+from pydantic import SerializeAsAny, field_validator, model_validator
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
 from .config import ConfigPath, ModelConfig
@@ -45,14 +45,55 @@ class Task(ModelConfig):
         that sees the future sees the answer."""
         return False
 
+    @property
+    def autoencoder(self) -> bool:
+        """The targets are the inputs themselves, so the model has to pass
+        the sequence through one vector (``model.decoder``)."""
+        return False
+
     def generate(self, n: int, rng: np.random.Generator) -> T_Data:
         raise NotImplementedError
+
+    def benchmark_split(
+        self,
+        seed: int | None,
+    ) -> tuple[T_Data, T_Data] | None:
+        """A benchmark's own ``(train, test)`` data, which replace
+        ``n_samples`` and the random split; ``None`` for a task that has
+        none (the default)."""
+        return None
 
     def data(self, n: int, seed: int | None) -> T_Data:
         """``n`` samples, the same ones for the same ``seed``."""
         return self.generate(n, np.random.default_rng(seed))
 
+    def check_dataset(self, dataset: "DatasetConfig") -> None:
+        """Raise a ``ValueError`` for dataset settings the task cannot work
+        with (called when the dataset config is validated)."""
 
+
+TASKS: dict[str, type[Task]] = {}
+"""The tasks a config can name as ``dataset.task.name``."""
+
+
+def register_task[T: type[Task]](task: T) -> T:
+    """Make a task available to configs under its ``name`` (a ``Literal``
+    field with a default); usable as a class decorator. A task defined
+    outside the package is registered by importing its module before the
+    config is read."""
+    name = task.model_fields["name"].default
+    if not isinstance(name, str):
+        raise TypeError(f"{task.__name__} has no default name.")
+    if TASKS.get(name, task) is not task:
+        raise ValueError(
+            f"A task named {name!r} is registered already"
+            f" ({TASKS[name].__name__})."
+        )
+    TASKS[name] = task
+    return task
+
+
+@register_task
 class CopyingTask(Task):
     """Copy the ``to_copy`` data tokens, scattered over the first
     ``to_copy * (1 + max_dilute)`` positions, after a marker token. Tokens
@@ -106,6 +147,7 @@ def _is_rotation(marks: np.ndarray) -> np.ndarray:
     return ((np.roll(marks, -1, axis=1) - marks) % m == 1).all(axis=1)
 
 
+@register_task
 class CyclicTask(Task):
     """Does the sequence contain ``1, 2, ..., m`` in some cyclic rotation
     (e.g. ``3, 4, ..., m, 1, 2``) as a subsequence? The ``m = characters-1``
@@ -154,6 +196,7 @@ class CyclicTask(Task):
         return x, y.astype(np.int64)
 
 
+@register_task
 class LookupTask(Task):
     """Find the first occurrence of the last token and answer the token
     right before it (an induction-head task). Without ``multiple_keys`` the
@@ -220,6 +263,7 @@ def _read_corpus(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return tuple(lines), tuple(sorted(set("".join(lines))))
 
 
+@register_task
 class TextTask(Task):
     """Character-level language modelling on the lines of a text file
     (the makemore replicate). Token 0 starts and ends a line; positions
@@ -267,19 +311,10 @@ class TextTask(Task):
         return x, y
 
 
-# The Tropical Attention bridge subclasses Task, so it is imported once Task
-# exists (the same trick as in config.py).
-from .tropical import TropicalTask  # noqa: E402
-
-T_Task = Annotated[
-    CopyingTask | CyclicTask | LookupTask | TextTask | TropicalTask,
-    Field(discriminator="name"),
-]
-
-
 class DatasetConfig(ModelConfig):
 
-    task: T_Task
+    task: SerializeAsAny[Task]
+    """One of :data:`TASKS`, chosen by its ``name``."""
     n_samples: int = 1000
     """Sequences generated (the text task uses every line instead)."""
     val_size: float = 0.2
@@ -289,14 +324,21 @@ class DatasetConfig(ModelConfig):
     seed: int | None = None
     """Seeds generation and the train/validation split."""
 
+    @field_validator("task", mode="before")
+    @classmethod
+    def _task(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        name = value.get("name")
+        if name not in TASKS:
+            raise ValueError(
+                f"Unknown task {name!r}; registered are {sorted(TASKS)}."
+            )
+        return TASKS[name].model_validate(value)
+
     @model_validator(mode="after")
     def _check(self) -> "DatasetConfig":
-        if isinstance(self.task, TropicalTask) and self.seed is None:
-            raise ValueError(
-                "The tropical task needs dataset.seed: it seeds the"
-                " reference generator and the split (the reference uses"
-                " 999 for training, 0 for evaluation)."
-            )
+        self.task.check_dataset(self)
         return self
 
     @property
@@ -323,9 +365,15 @@ class DatasetConfig(ModelConfig):
 def make_datasets(
     config: DatasetConfig,
 ) -> tuple[TensorDataset | torch.utils.data.Subset, ...]:
-    """The task's ``(train, validation)`` split. With a seed and a whole
-    number of validation samples this is the Tropical Attention driver's
-    split (``torch.manual_seed(seed)``, then ``random_split``)."""
+    """The task's ``(train, validation)`` split: the task's own
+    (:meth:`Task.benchmark_split`), or a random split of ``n_samples``,
+    seeded by ``torch.Generator().manual_seed(seed)``."""
+    own = config.task.benchmark_split(config.seed)
+    if own is not None:
+        return tuple(
+            TensorDataset(torch.as_tensor(x), torch.as_tensor(y))
+            for x, y in own
+        )
     x, y = config.task.data(config.n_samples, config.seed)
     data = TensorDataset(torch.as_tensor(x), torch.as_tensor(y))
     n_val = int(round(config.val_size * len(data)))

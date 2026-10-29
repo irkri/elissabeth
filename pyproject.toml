@@ -25,8 +25,8 @@ dependencies = [
 [project.optional-dependencies]
 analysis = ["matplotlib"]
 online = ["wandb"]
-tropical = ["scipy", "schedulefree"]
-test = ["pytest", "scikit-learn"]
+schedulefree = ["schedulefree"]
+test = ["pytest", "scikit-learn", "torchmetrics"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["elissabeth"]
